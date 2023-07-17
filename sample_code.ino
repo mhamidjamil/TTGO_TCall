@@ -85,7 +85,7 @@ void setup() {
   }
 
   // To send an SMS, call modem.sendSMS(SMS_TARGET, smsMessage)
-  String smsMessage = "Hello bro!";
+  String smsMessage = "System booted";
   if (modem.sendSMS(SMS_TARGET, smsMessage)) {
     SerialMon.println(smsMessage);
   } else {
@@ -93,4 +93,14 @@ void setup() {
   }
 }
 
-void loop() { delay(1); }
+void loop() {
+  if (SerialMon.available()) {
+    char c = SerialMon.read();
+    SerialAT.write(c);
+  }
+
+  if (SerialAT.available()) {
+    char c = SerialAT.read();
+    SerialMon.write(c);
+  }
+}

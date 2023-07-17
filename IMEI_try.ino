@@ -82,8 +82,4 @@ void setup() {
 void loop() {
   SerialAT.println("AT+CGSN");
   delay(1000);
-  SerialAT.println("AT+SIMEI=86671003966900");
-  delay(1000);
-  SerialAT.println("ATS0=1");
-  delay(1000);
 }
