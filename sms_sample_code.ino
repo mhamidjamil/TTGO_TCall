@@ -4,7 +4,7 @@ const char simPIN[] = "";
 // Your phone number to send SMS: + (plus sign) and country code,
 // next digit should be your cell number
 // SMS_TARGET Example for UK +44XXXXXXXXX
-#define SMS_TARGET "+923354888420"
+#define TARGETED_NUMBER "+923354888420"
 
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
@@ -77,6 +77,20 @@ void setup() {
   // To skip it, call init() instead of restart()
   SerialMon.println("Initializing modem...");
   modem.restart();
+  // use modem.init() if you don't need the complete restart
+
+  // Unlock your SIM card with a PIN if needed
+  if (strlen(simPIN) && modem.getSimStatus() != 3) {
+    modem.simUnlock(simPIN);
+  }
+
+  // To send an SMS, call modem.sendSMS(SMS_TARGET, smsMessage)
+  String smsMessage = "System booted";
+  if (modem.sendSMS(SMS_TARGET, smsMessage)) {
+    SerialMon.println(smsMessage);
+  } else {
+    SerialMon.println("SMS failed to send");
+  }
 }
 
 void loop() {
