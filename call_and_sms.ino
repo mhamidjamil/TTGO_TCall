@@ -69,15 +69,15 @@ bool setPowerBoostKeepOn(int en) {
 
 String receivedMessage = ""; // Global variable to store received SMS message
 
+void checkBattery();
+
 void setup() {
   // Set console baud rate
   SerialMon.begin(115200);
-
   // Keep power when running from battery
   Wire.begin(I2C_SDA, I2C_SCL);
   bool isOk = setPowerBoostKeepOn(1);
   SerialMon.println(String("IP5306 KeepOn ") + (isOk ? "OK" : "FAIL"));
-
   // Set modem reset, enable, power pins
   pinMode(MODEM_PWKEY, OUTPUT);
   pinMode(MODEM_RST, OUTPUT);
@@ -85,32 +85,26 @@ void setup() {
   digitalWrite(MODEM_PWKEY, LOW);
   digitalWrite(MODEM_RST, HIGH);
   digitalWrite(MODEM_POWER_ON, HIGH);
-
   // Set GSM module baud rate and UART pins
   SerialAT.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX);
   delay(3000);
-
   // Restart SIM800 module, it takes quite some time
   // To skip it, call init() instead of restart()
   SerialMon.println("Initializing modem...");
   modem.restart();
   // use modem.init() if you don't need the complete restart
-
   // Unlock your SIM card with a PIN if needed
   if (strlen(simPIN) && modem.getSimStatus() != 3) {
     modem.simUnlock(simPIN);
   }
-
   // String smsMessage = "System booted";
   // if (modem.sendSMS(MOBILE_No, smsMessage)) {
   //   SerialMon.println(smsMessage);
   // } else {
   //   SerialMon.println("SMS failed to send");
   // }
-
   // Enable missed call notification
   modem.sendAT(GF("+CLIP=1"));
-
   // Enable SMS text mode
   modem.sendAT(GF("+CMGF=1"));
   delay(500);
@@ -129,6 +123,11 @@ void loop() {
       String sms = command.substring(command.indexOf("sms") + 6);
       SerialMon.println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
       sendSMS(sms);
+    } else if (command.indexOf("module") != -1) {
+      SerialMon.println("Checking messages");
+      moduleManager();
+    } else if (command.indexOf("battery") != -1) {
+      checkBattery();
     } else if (command.indexOf("check") != -1) {
       SerialMon.println("Checking received message");
       checkReceivedMessage();
@@ -143,28 +142,6 @@ void loop() {
   if (SerialAT.available()) {
     char c = SerialAT.read();
     SerialMon.write(c);
-    handleIncomingSMS(c);
-  }
-}
-
-void handleIncomingSMS(char c) {
-  static enum { IDLE, RECEIVING, RECEIVED } state = IDLE;
-  static String buffer;
-
-  if (state == IDLE) {
-    if (c == '+') {
-      buffer = "";
-      buffer += c;
-      state = RECEIVING;
-    }
-  } else if (state == RECEIVING) {
-    buffer += c;
-    if (c == '\n') {
-      state = RECEIVED;
-      receivedMessage = buffer;
-      SerialMon.println("Received SMS:");
-      SerialMon.println(receivedMessage);
-    }
   }
 }
 
@@ -175,6 +152,7 @@ void giveMissedCall() {
   // SerialAT.println("ATH"); // hang up
   // updateSerial();
 }
+
 void sendSMS(String sms) {
   if (modem.sendSMS(MOBILE_No, sms)) {
     SerialMon.println(sms);
@@ -184,6 +162,7 @@ void sendSMS(String sms) {
 }
 
 void checkReceivedMessage() { receivedMessage = ""; }
+
 void updateSerial() {
   delay(500);
   while (SerialMon.available()) {
@@ -192,4 +171,49 @@ void updateSerial() {
   while (SerialAT.available()) {
     SerialMon.write(SerialAT.read());
   }
+}
+
+void moduleManager() {
+  // this function will check if there is any unread message or not
+  // store response of AT+CMGL="ALL" in a string 1st
+  SerialAT.println("AT+CMGL=\"ALL\"");
+  String response = "";
+  delay(2000);
+  while (SerialAT.available()) {
+    response += SerialAT.readString();
+  }
+  SerialMon.println("\n*****************************************\n" + response +
+                    "\n*****************************************");
+  String lastMessage;
+  int cmglNumber;
+  getLastMessage(response, lastMessage, cmglNumber);
+
+  SerialMon.println("Last CMGL number: " + String(cmglNumber));
+  SerialMon.println("Last message: " + lastMessage);
+}
+
+void getLastMessage(String response, String &lastMessage, int &cmglNumber) {
+  // Find the last occurrence of "+CMGL:" in the response
+  int lastCmglIndex = response.lastIndexOf("CMGL:");
+
+  // Find the next occurrence of "+CMGL:" after the last occurrence
+  int nextCmglIndex = response.indexOf("+CMGL:", lastCmglIndex + 1);
+  // Extract the last message and its CMGL number
+  String lastCmgl = response.substring(lastCmglIndex, nextCmglIndex);
+  int commaIndex = response.indexOf(",", lastCmglIndex);
+
+  cmglNumber = response.substring(lastCmglIndex + 6, commaIndex).toInt();
+
+  // Extract the message content
+  int messageStartIndex = lastCmgl.lastIndexOf("\"") + 3;
+  lastMessage = lastCmgl.substring(messageStartIndex);
+}
+void checkBattery() {
+  SerialAT.println("AT+CBC");
+  String response;
+  while (SerialAT.available()) {
+    response += SerialAT.readString();
+  }
+  SerialMon.println("\n*****************************************\n" + response +
+                    "\n*****************************************");
 }
