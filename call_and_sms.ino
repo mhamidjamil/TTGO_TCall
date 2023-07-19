@@ -126,16 +126,13 @@ void loop() {
       String sms = command.substring(command.indexOf("sms") + 6);
       SerialMon.println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
       sendSMS(sms);
-    } else if (command.indexOf("read") != -1) {
+    } else if (command.indexOf("all") != -1) {
       SerialMon.println("Reading all messages");
       moduleManager();
     } else if (command.indexOf("battery") != -1) {
       checkBattery();
     } else if (command.indexOf("test") != -1) {
       Serial.println(getMessage(6));
-    } else if (command.indexOf("check") != -1) {
-      SerialMon.println("Checking received message");
-      checkReceivedMessage();
     } else {
       SerialMon.println("Executing: " + command);
       SerialAT.println(command);
@@ -161,8 +158,6 @@ void sendSMS(String sms) {
   }
 }
 
-void checkReceivedMessage() { receivedMessage = ""; }
-
 void updateSerial() {
   delay(500);
   while (SerialMon.available()) {
@@ -177,18 +172,20 @@ void moduleManager() {
   // this function will check if there is any unread message or not
   // store response of AT+CMGL="ALL" in a string 1st
   SerialAT.println("AT+CMGL=\"ALL\"");
-  delay(2000);
+  delay(3000);
   String response = getResponse();
-  SerialMon.println("\n" + response + "\n");
+  SerialMon.println("********************\n" + response +
+                    "\n********************");
   String lastMessage;
-  int cmglNumber;
-  getLastMessage(response, lastMessage, cmglNumber);
+  int messageNumber;
+  getLastMessageAndIndex(response, lastMessage, messageNumber);
 
-  SerialMon.println("Last CMGL number: " + String(cmglNumber));
+  SerialMon.println("Last CMGL number: " + String(messageNumber));
   SerialMon.println("Last message: " + lastMessage);
 }
 
-void getLastMessage(String response, String &lastMessage, int &cmglNumber) {
+void getLastMessageAndIndex(String response, String &lastMessage,
+                            int &messageNumber) {
   // Find the last occurrence of "+CMGL:" in the response
   int lastCmglIndex = response.lastIndexOf("CMGL:");
 
@@ -198,7 +195,10 @@ void getLastMessage(String response, String &lastMessage, int &cmglNumber) {
   String lastCmgl = response.substring(lastCmglIndex, nextCmglIndex);
   int commaIndex = response.indexOf(",", lastCmglIndex);
 
-  cmglNumber = response.substring(lastCmglIndex + 6, commaIndex).toInt();
+  messageNumber =
+      response
+          .substring(lastCmglIndex + 6, response.indexOf(",", lastCmglIndex))
+          .toInt();
 
   // Extract the message content
   int messageStartIndex = lastCmgl.lastIndexOf("\"") + 3;
@@ -214,8 +214,8 @@ String getResponse() {
     response += SerialAT.readString();
   }
   if (response.indexOf("+CMTI:") != -1) {
-    SerialMon.println("New message received (with index :" +
-                      String(getNewMessageNumber(response)) + ")");
+    SerialMon.println("New message [ " +
+                      getMessage(getNewMessageNumber(response)) + " ]");
   }
   return response;
 }
@@ -229,9 +229,9 @@ String getResponse() {
 //   return response.substring(from);
 // }
 int getNewMessageNumber(String response) {
-  return response.substring(response.lastIndexOf(",") + 1, -1).toInt();
+  return response.substring(response.lastIndexOf(",") + 2, -1).toInt();
 }
-String getMessage(int index) {
+String getMessage(int index) { // read the message of given index
   // AT+CMGR=1
   SerialAT.println("AT+CMGR=" + String(index));
   delay(3000);
