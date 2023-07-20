@@ -1,5 +1,6 @@
 // SIM card PIN (leave empty, if not defined)
 const char simPIN[] = "";
+// Stable till now 17/July/23
 /*
 Usefull AT commands:
 AT+CMGF=1 - Set SMS text mode
