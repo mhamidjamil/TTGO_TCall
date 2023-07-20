@@ -1,4 +1,7 @@
 // SIM card PIN (leave empty, if not defined)
+//% remove delay before calling getResponse() by setting up timeout and look if
+//% recived OK/ERROR then quit loop.
+
 const char simPIN[] = "";
 // Stable till now 17/July/23
 /*
@@ -124,26 +127,20 @@ void loop() {
       String sms = command.substring(command.indexOf("sms") + 6);
       SerialMon.println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
       sendSMS(sms);
-    } else if (command.indexOf("module") != -1) {
-      SerialMon.println("Checking messages");
+    } else if (command.indexOf("all") != -1) {
+      SerialMon.println("Reading all messages");
       moduleManager();
     } else if (command.indexOf("battery") != -1) {
       checkBattery();
-    } else if (command.indexOf("check") != -1) {
-      SerialMon.println("Checking received message");
-      checkReceivedMessage();
+    } else if (command.indexOf("test") != -1) {
+      Serial.println(getMessage(6));
     } else {
-      SerialMon.println(
-          "____________________________________________________\n" + command +
-          "____________________________________________________");
+      SerialMon.println("Executing: " + command);
       SerialAT.println(command);
     }
   }
-
-  if (SerialAT.available()) {
-    char c = SerialAT.read();
-    SerialMon.write(c);
-  }
+  if (SerialAT.available())
+    Serial.println(getResponse());
 }
 
 void giveMissedCall() {
@@ -162,8 +159,6 @@ void sendSMS(String sms) {
   }
 }
 
-void checkReceivedMessage() { receivedMessage = ""; }
-
 void updateSerial() {
   delay(500);
   while (SerialMon.available()) {
@@ -178,22 +173,20 @@ void moduleManager() {
   // this function will check if there is any unread message or not
   // store response of AT+CMGL="ALL" in a string 1st
   SerialAT.println("AT+CMGL=\"ALL\"");
-  String response = "";
-  delay(2000);
-  while (SerialAT.available()) {
-    response += SerialAT.readString();
-  }
-  SerialMon.println("\n*****************************************\n" + response +
-                    "\n*****************************************");
+  delay(3000);
+  String response = getResponse();
+  SerialMon.println("********************\n" + response +
+                    "\n********************");
   String lastMessage;
-  int cmglNumber;
-  getLastMessage(response, lastMessage, cmglNumber);
+  int messageNumber;
+  getLastMessageAndIndex(response, lastMessage, messageNumber);
 
-  SerialMon.println("Last CMGL number: " + String(cmglNumber));
+  SerialMon.println("Last CMGL number: " + String(messageNumber));
   SerialMon.println("Last message: " + lastMessage);
 }
 
-void getLastMessage(String response, String &lastMessage, int &cmglNumber) {
+void getLastMessageAndIndex(String response, String &lastMessage,
+                            int &messageNumber) {
   // Find the last occurrence of "+CMGL:" in the response
   int lastCmglIndex = response.lastIndexOf("CMGL:");
 
@@ -203,7 +196,10 @@ void getLastMessage(String response, String &lastMessage, int &cmglNumber) {
   String lastCmgl = response.substring(lastCmglIndex, nextCmglIndex);
   int commaIndex = response.indexOf(",", lastCmglIndex);
 
-  cmglNumber = response.substring(lastCmglIndex + 6, commaIndex).toInt();
+  messageNumber =
+      response
+          .substring(lastCmglIndex + 6, response.indexOf(",", lastCmglIndex))
+          .toInt();
 
   // Extract the message content
   int messageStartIndex = lastCmgl.lastIndexOf("\"") + 3;
@@ -211,10 +207,35 @@ void getLastMessage(String response, String &lastMessage, int &cmglNumber) {
 }
 void checkBattery() {
   SerialAT.println("AT+CBC");
-  String response;
+  SerialMon.println(getResponse());
+}
+String getResponse() {
+  String response = "";
   while (SerialAT.available()) {
     response += SerialAT.readString();
   }
-  SerialMon.println("\n*****************************************\n" + response +
-                    "\n*****************************************");
+  if (response.indexOf("+CMTI:") != -1) {
+    SerialMon.println("New message [ " +
+                      getMessage(getNewMessageNumber(response)) + " ]");
+  }
+  return response;
+}
+// String fetchInfo(String response, int from,
+//                  int to) { // read data _from_ to _to_
+//   // +CMTI: "SM",6
+//   return response.substring(from, to);
+// }
+// String fetchInfo(String response, int from) { // read data _from_ to end
+//   // +CMTI: "SM",6
+//   return response.substring(from);
+// }
+int getNewMessageNumber(String response) {
+  return response.substring(response.lastIndexOf(",") + 2, -1).toInt();
+}
+String getMessage(int index) { // read the message of given index
+  // AT+CMGR=1
+  SerialAT.println("AT+CMGR=" + String(index));
+  delay(3000);
+  String tempStr = getResponse();
+  return tempStr.substring(tempStr.lastIndexOf("\"") + 2);
 }
