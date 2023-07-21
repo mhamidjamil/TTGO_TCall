@@ -1,6 +1,6 @@
 # TTgo T-Call ESP32 Module Project
 
-![TTgo T-Call](link_to_image)
+![TTgo T-Call]([link_to_image](https://www.cnx-software.com/wp-content/uploads/2019/07/TTGO-T-call-Pinout-Diagram-Large.jpg))
 
 This project utilizes the TTgo T-Call ESP32 module to perform various tasks such as making calls, sending and receiving SMS messages, checking battery status, and more. The project is implemented using Arduino and the TinyGSM library, allowing communication with the SIM800 modem on the TTgo T-Call module.
 
