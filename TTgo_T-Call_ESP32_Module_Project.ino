@@ -1,5 +1,5 @@
 //$ last work 22/July/23 [01:23 AM]
-// # version 1.0.0
+// # version 1.4.0
 //! Not fully tested so not merging in main branch
 //% remove delay before calling getResponse() by setting up timeout and look if
 //% recived OK/ERROR then quit loop.
@@ -180,7 +180,6 @@ void moduleManager() {
   // this function will check if there is any unread message or not
   // store response of AT+CMGL="ALL" in a string 1st
   SerialAT.println("AT+CMGL=\"ALL\"");
-  delay(3000);
   String response = getResponse();
   SerialMon.println("********************\n" + response +
                     "\n********************");
@@ -213,23 +212,26 @@ void getLastMessageAndIndex(String response, String &lastMessage,
   lastMessage = lastCmgl.substring(messageStartIndex);
 }
 
-String updateBatteryStatus() {
-  SerialAT.println("AT+CBC");
-  delay(2000);
-  return getResponse();
-}
-
 String getResponse() {
   String response = "";
-  while (SerialAT.available()) {
+  unsigned int entrySec = millis() / 1000;
+  while (SerialAT.available() || (!((response.indexOf("OK") != -1) ||
+                                    (response.indexOf("ERROR") != -1)))) {
     response += SerialAT.readString();
+    if (timeOut(3, entrySec)) {
+      SerialMon.println(F("******\tTimeout\t******"));
+      break;
+    }
   }
   if (response.indexOf("+CMTI:") != -1) {
     int newMessageNumber = getNewMessageNumber(response);
     String temp_str = executeCommand(removeOk(readMessage(newMessageNumber)));
     SerialMon.println("New message [ " + temp_str + "]");
-    if (temp_str.indexOf("<not executed>") != -1)
+    if (temp_str.indexOf("<executed>") != -1) {
+      SerialMon.println("Deleting message number : " +
+                        String(newMessageNumber));
       deleteMessage(newMessageNumber);
+    }
   }
   return response;
 }
@@ -240,18 +242,20 @@ int getNewMessageNumber(String response) {
 
 String readMessage(int index) { // read the message of given index
   SerialAT.println("AT+CMGR=" + String(index));
-  delay(3000);
   String tempStr = getResponse();
   return tempStr.substring(tempStr.lastIndexOf("\"") + 2);
 }
+
 void deleteMessage(int index) {
   SerialAT.println("AT+CMGD=" + String(index));
-  delay(2000);
   SerialMon.println(getResponse());
 }
 
 String removeOk(String str) {
-  return str.substring(0, str.lastIndexOf("OK") - 2);
+  if (str.lastIndexOf("OK") != -1)
+    return str.substring(0, str.lastIndexOf("OK") - 2);
+  else
+    return str;
 }
 
 String executeCommand(String str) {
@@ -271,6 +275,11 @@ String executeCommand(String str) {
   return str;
 }
 
+String updateBatteryStatus() {
+  SerialAT.println("AT+CBC");
+  return getResponse();
+}
+
 void updateBatteryParameters(String response) {
   // get +CBC: 0,81,4049 in response
   batteryPercentage =
@@ -280,4 +289,11 @@ void updateBatteryParameters(String response) {
       response.substring(response.lastIndexOf(",") + 1, -1).toInt();
   batteryVoltage =
       milliBatteryVoltage / pow(10, (String(milliBatteryVoltage).length() - 1));
+}
+
+bool timeOut(int sec, unsigned int entrySec) {
+  if ((millis() / 1000) - entrySec > sec)
+    return true;
+  else
+    return false;
 }
