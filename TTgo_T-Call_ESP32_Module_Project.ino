@@ -1,8 +1,5 @@
-//$ last work 22/July/23 [01:23 AM]
-// # version 1.4.0
-//! Not fully tested so not merging in main branch
-//% remove delay before calling getResponse() by setting up timeout and look if
-//% recived OK/ERROR then quit loop.
+//$ last work 22/July/23 [12:38 PM]
+// # version 1.5.0 stable
 
 const char simPIN[] = "";
 // Stable till now 17/July/23
@@ -85,7 +82,7 @@ void setup() {
   // Keep power when running from battery
   Wire.begin(I2C_SDA, I2C_SCL);
   bool isOk = setPowerBoostKeepOn(1);
-  SerialMon.println(String("IP5306 KeepOn ") + (isOk ? "OK" : "FAIL"));
+  println(String("IP5306 KeepOn ") + (isOk ? "OK" : "FAIL"));
   // Set modem reset, enable, power pins
   pinMode(MODEM_PWKEY, OUTPUT);
   pinMode(MODEM_RST, OUTPUT);
@@ -98,7 +95,7 @@ void setup() {
   delay(3000);
   // Restart SIM800 module, it takes quite some time
   // To skip it, call init() instead of restart()
-  SerialMon.println("Initializing modem...");
+  println("Initializing modem...");
   modem.restart();
   // use modem.init() if you don't need the complete restart
   // Unlock your SIM card with a PIN if needed
@@ -117,51 +114,50 @@ void loop() {
   if (SerialMon.available()) {
     String command = SerialMon.readString();
     if (command.indexOf("call") != -1) {
-      SerialMon.println("Calling " + String(MOBILE_No));
+      println("Calling " + String(MOBILE_No));
       giveMissedCall();
     } else if (command.indexOf("sms") != -1) {
       // fetch sms from input string, sample-> sms : msg here
       String sms = command.substring(command.indexOf("sms") + 6);
-      SerialMon.println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
+      println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
       sendSMS(sms);
     } else if (command.indexOf("all") != -1) {
-      SerialMon.println("Reading all messages");
+      println("Reading all messages");
       moduleManager();
     } else if (command.indexOf("battery") != -1) {
-      SerialMon.println(updateBatteryStatus());
+      println(updateBatteryStatus());
     } else if (command.indexOf("t1") != -1) {
-      Serial.println("Msg number : " +
-                     String(getNewMessageNumber("+CMTI: \"SM\",2")));
+      println("Msg number : " + String(getNewMessageNumber("+CMTI: \"SM\",2")));
     } else if (command.indexOf("read") != -1) {
       // say i recived read 2, so it will read message of index 2
-      Serial.println(
+      println(
           readMessage(command.substring(command.indexOf("read") + 5).toInt()));
     } else if (command.indexOf("delete") != -1) { // to delete message
-      Serial.println("Deleting message number : " +
-                     String(command.substring(command.indexOf("delete") + 7)));
+      println("Deleting message number : " +
+              String(command.substring(command.indexOf("delete") + 7)));
       deleteMessage(command.substring(command.indexOf("delete") + 7).toInt());
     } else {
-      SerialMon.println("Executing: " + command);
-      SerialAT.println(command);
+      println("Executing: " + command);
+      say(command);
     }
   }
   if (SerialAT.available())
-    Serial.println(getResponse());
+    println(getResponse());
 }
 
 void giveMissedCall() {
-  SerialAT.println("ATD+ " + MOBILE_No + ";");
+  say("ATD+ " + MOBILE_No + ";");
   updateSerial();
   // delay(20000);            // wait for 20 seconds...
-  // SerialAT.println("ATH"); // hang up
+  // say("ATH"); // hang up
   // updateSerial();
 }
 
 void sendSMS(String sms) {
   if (modem.sendSMS(MOBILE_No, sms)) {
-    SerialMon.println(sms);
+    println(sms);
   } else {
-    SerialMon.println("SMS failed to send");
+    println("SMS failed to send");
   }
   delay(500);
 }
@@ -179,16 +175,15 @@ void updateSerial() {
 void moduleManager() {
   // this function will check if there is any unread message or not
   // store response of AT+CMGL="ALL" in a string 1st
-  SerialAT.println("AT+CMGL=\"ALL\"");
+  say("AT+CMGL=\"ALL\"");
   String response = getResponse();
-  SerialMon.println("********************\n" + response +
-                    "\n********************");
+  println("********************\n" + response + "\n********************");
   String lastMessage;
   int messageNumber;
   getLastMessageAndIndex(response, lastMessage, messageNumber);
 
-  SerialMon.println("Last CMGL number: " + String(messageNumber));
-  SerialMon.println("Last message: " + lastMessage);
+  println("Last CMGL number: " + String(messageNumber));
+  println("Last message: " + lastMessage);
 }
 
 void getLastMessageAndIndex(String response, String &lastMessage,
@@ -219,19 +214,16 @@ String getResponse() {
                                     (response.indexOf("ERROR") != -1)))) {
     response += SerialAT.readString();
     if (timeOut(3, entrySec)) {
-      SerialMon.println(F("******\tTimeout\t******"));
+      println("******\tTimeout\t******");
       break;
     }
   }
   if (response.indexOf("+CMTI:") != -1) {
     int newMessageNumber = getNewMessageNumber(response);
     String temp_str = executeCommand(removeOk(readMessage(newMessageNumber)));
-    SerialMon.println("New message [ " + temp_str + "]");
-    if (temp_str.indexOf("<executed>") != -1) {
-      SerialMon.println("Deleting message number : " +
-                        String(newMessageNumber));
+    println("New message [ " + temp_str + "]");
+    if (temp_str.indexOf("<executed>") != -1)
       deleteMessage(newMessageNumber);
-    }
   }
   return response;
 }
@@ -241,14 +233,14 @@ int getNewMessageNumber(String response) {
 }
 
 String readMessage(int index) { // read the message of given index
-  SerialAT.println("AT+CMGR=" + String(index));
+  say("AT+CMGR=" + String(index));
   String tempStr = getResponse();
   return tempStr.substring(tempStr.lastIndexOf("\"") + 2);
 }
 
 void deleteMessage(int index) {
-  SerialAT.println("AT+CMGD=" + String(index));
-  SerialMon.println(getResponse());
+  say("AT+CMGD=" + String(index));
+  println(getResponse());
 }
 
 String removeOk(String str) {
@@ -269,14 +261,14 @@ String executeCommand(String str) {
             "\nBattery voltage : " + String(batteryVoltage));
     str += " <executed>";
   } else {
-    SerialMon.println("-> Module is not trained to execute this command ! <-");
+    println("-> Module is not trained to execute this command ! <-");
     str += " <not executed>";
   }
   return str;
 }
 
 String updateBatteryStatus() {
-  SerialAT.println("AT+CBC");
+  say("AT+CBC");
   return getResponse();
 }
 
@@ -297,3 +289,7 @@ bool timeOut(int sec, unsigned int entrySec) {
   else
     return false;
 }
+
+void println(String str) { SerialMon.println(str); }
+void print(String str) { SerialMon.print(str); }
+void say(String str) { SerialAT.println(str); }
