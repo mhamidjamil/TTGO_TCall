@@ -1,5 +1,5 @@
-//$ last work 22/July/23 [12:38 PM]
-// # version 1.5.0 stable
+//$ last work 23/July/23 [2:16 AM]
+// # version 2.9.0
 
 const char simPIN[] = "";
 // Stable till now 17/July/23
@@ -70,12 +70,15 @@ bool setPowerBoostKeepOn(int en) {
   return Wire.endTransmission() == 0;
 }
 
+//`...............................
 String receivedMessage = ""; // Global variable to store received SMS message
 
 String updateBatteryStatus();
 double batteryVoltage = 0;
 int batteryPercentage = 0;
-
+// another variable to store time in millis
+unsigned long time_ = 0;
+//`...............................
 void setup() {
   // Set console baud rate
   SerialMon.begin(115200);
@@ -127,7 +130,7 @@ void loop() {
     } else if (command.indexOf("battery") != -1) {
       println(updateBatteryStatus());
     } else if (command.indexOf("t1") != -1) {
-      println("Msg number : " + String(getNewMessageNumber("+CMTI: \"SM\",2")));
+      println("Number : <" + String(getNumberOfMessage(6)) + ">");
     } else if (command.indexOf("read") != -1) {
       // say i recived read 2, so it will read message of index 2
       println(
@@ -143,7 +146,14 @@ void loop() {
   }
   if (SerialAT.available())
     println(getResponse());
+  if (millis() - time_ > 10000) {
+    time_ = millis();
+    // get all messages index number and execute them
+  }
 }
+void println(String str) { SerialMon.println(str); }
+void print(String str) { SerialMon.print(str); }
+void say(String str) { SerialAT.println(str); }
 
 void giveMissedCall() {
   say("ATD+ " + MOBILE_No + ";");
@@ -211,7 +221,9 @@ String getResponse() {
   String response = "";
   unsigned int entrySec = millis() / 1000;
   while (SerialAT.available() || (!((response.indexOf("OK") != -1) ||
-                                    (response.indexOf("ERROR") != -1)))) {
+                                    (response.indexOf("ERROR") != -1) ||
+                                    (response.indexOf("+CLIP:") != -1) ||
+                                    (response.indexOf("+CMTI:") != -1)))) {
     response += SerialAT.readString();
     if (timeOut(3, entrySec)) {
       println("******\tTimeout\t******");
@@ -224,6 +236,18 @@ String getResponse() {
     println("New message [ " + temp_str + "]");
     if (temp_str.indexOf("<executed>") != -1)
       deleteMessage(newMessageNumber);
+    else {
+      sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
+              "} message : > [ " +
+              temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+              " ] from : " + getNumberOfMessage(newMessageNumber));
+      //! store in struct PM <pending work>.
+    }
+  } else if (response.indexOf("+CLIP:") != -1) {
+    //+CLIP: "03354888420",161,"",0,"",0
+    String temp_str = "Missed call from : " + fetchDetails(response, "\"", 1);
+    sendSMS(temp_str);
+    // println(temp_str);
   }
   return response;
 }
@@ -260,6 +284,17 @@ String executeCommand(String str) {
     sendSMS("Battery percentage : " + String(batteryPercentage) +
             "\nBattery voltage : " + String(batteryVoltage));
     str += " <executed>";
+  } else if (str.indexOf("#delete") != -1) {
+    // user will send #delete 2, so it will delete message of index 2
+    println("Deleting message of index : " +
+            str.substring(str.indexOf("#delete") + 8).toInt());
+    deleteMessage(str.substring(str.indexOf("#delete") + 8).toInt());
+    str += " <executed>";
+  } else if (str.indexOf("#forward") != -1) {
+    str += " <executed>";
+    println("Forwarding message of index : " +
+            str.substring(str.indexOf("#forward") + 9).toInt());
+    forwardMessage(str.substring(str.indexOf("#forward") + 9).toInt());
   } else {
     println("-> Module is not trained to execute this command ! <-");
     str += " <not executed>";
@@ -290,6 +325,21 @@ bool timeOut(int sec, unsigned int entrySec) {
     return false;
 }
 
-void println(String str) { SerialMon.println(str); }
-void print(String str) { SerialMon.print(str); }
-void say(String str) { SerialAT.println(str); }
+void forwardMessage(int index) {
+  String message = removeOk(readMessage(index));
+  if (message.length() > 2)
+    sendSMS(message);
+  else
+    sendSMS("No message found at index : " + String(index));
+}
+String getNumberOfMessage(int index) {
+  say("AT+CMGR=" + String(index));
+  String tempStr = getResponse();
+  //+CMGR: "REC READ","+923354888420","","23/07/22,01:02:28+20"
+  return fetchDetails(tempStr, ",", 2);
+}
+String fetchDetails(String str, String begin_end, int padding) {
+  String beginOfTarget = str.substring(str.indexOf(begin_end) + 1, -1);
+  return beginOfTarget.substring(padding - 1, beginOfTarget.indexOf(begin_end) -
+                                                  (padding - 1));
+}
