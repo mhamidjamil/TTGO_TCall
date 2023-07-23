@@ -1,5 +1,5 @@
 //$ last work 24/July/23 [01:35 AM]
-// # version 4.5.4
+// # version 4.5.3
 
 //`===================================
 #include <DHT.h>
@@ -355,6 +355,17 @@ String executeCommand(String str) {
     println("Forwarding message of index : " +
             str.substring(str.indexOf("#forward") + 9).toInt());
     forwardMessage(str.substring(str.indexOf("#forward") + 9).toInt());
+  } else if (str.indexOf("#display") != -1) {
+    str += " <executed>";
+    (str.indexOf("on") != -1 ? Oled(1) : Oled(0));
+  } else if (str.indexOf("#on") != -1) {
+    str += " <executed>";
+    int switchNumber = str.substring(str.indexOf("#on") + 3).toInt();
+    digitalWrite(switchNumber, HIGH);
+  } else if (str.indexOf("#off") != -1) {
+    str += " <executed>";
+    int switchNumber = str.substring(str.indexOf("#off") + 4).toInt();
+    digitalWrite(switchNumber, LOW);
   } else {
     println("-> Module is not trained to execute this command ! <-");
     str += " <not executed>";
@@ -404,6 +415,17 @@ String fetchDetails(String str, String begin_end, int padding) {
   String beginOfTarget = str.substring(str.indexOf(begin_end) + 1, -1);
   return beginOfTarget.substring(padding - 1, beginOfTarget.indexOf(begin_end) -
                                                   (padding - 1));
+}
+
+int totalUnreadMessages() {
+  say("AT+CMGL=\"ALL\"");
+  String response = getResponse();
+  int count = 0;
+  for (int i = 0; i < response.length(); i++) {
+    if (response.substring(i, i + 5) == "+CMGL")
+      count++;
+  }
+  return count;
 }
 //`..................................
 
@@ -458,6 +480,7 @@ void connect_wifi() {
   } else {
     END_VALUES.setCharAt(0, '!');
     lcd_print();
+    digitalWrite(LED, LOW);
   }
 }
 
@@ -473,10 +496,18 @@ void lcd_print() {
   display.clearDisplay();
 
   display.setTextSize(1);
-  display.setTextColor(WHITE);
   display.setCursor(0, 0);
   // Display static text
-  display.println("Hello, world!" + String(random(99)));
+  drawWifiSymbol(wifi_connected());
+  display.print("   ");
+  display.print(String(messages_in_inbox));
+
+  display.setCursor(0, 20);
+  display.print(line_1);
+
+  display.setCursor(0, 40);
+  display.print(line_2);
+
   display.display();
   delay(1000);
 }
@@ -493,5 +524,30 @@ String get_time() {
     return String(-1);
   }
   return "X";
+}
+
+void Oled(int status) {
+  if (status == 1) {
+    digitalWrite(DISPLAY_POWER_PIN, HIGH);
+  } else if (status == 0) {
+    digitalWrite(DISPLAY_POWER_PIN, LOW);
+  }
+}
+
+const unsigned char wifiSymbol[] PROGMEM = {B00000000, B01111110, B10000001,
+                                            B01111100, B10000010, B00111000,
+                                            B01000100, B00010000};
+
+const unsigned char questionMark[] PROGMEM = {B00111000, B01000100, B10000010,
+                                              B00000100, B00001000, B00010000,
+                                              B00010000, B0001000};
+
+void drawWifiSymbol(bool isConnected) {
+
+  if (!isConnected) {
+    display.setCursor(0, 0);
+    display.print("X");
+  } else
+    display.drawBitmap(0, 0, wifiSymbol, 8, 8, WHITE);
 }
 //`..................................
