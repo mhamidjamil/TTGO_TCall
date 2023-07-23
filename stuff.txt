@@ -22,3 +22,21 @@ FreeSansBold12pt7b.h		FreeSerifItalic12pt7b.h
 FreeSansBold18pt7b.h		FreeSerifItalic18pt7b.h
 FreeSansBold24pt7b.h		FreeSerifItalic24pt7b.h
 FreeSansBold9pt7b.h		FreeSerifItalic9pt7b.h
+
+Usefull AT commands:
+AT+CMGF=1 - Set SMS text mode
+AT+CMGL="ALL" - List all SMS messages
+AT+CMGR=1 - Read SMS message at index 1
+AT+CMGD=1 - Delete SMS message at index 1
+AT+CLIP=1 - Enable missed call notification
+AT+DDET=1 - Enable DTMF detection
+AT+CLCC - List current calls
+ATD+923354888420; - Make a call to +923354888420
+AT+CHUP - Hang up current call
+AT+CREG? - Check if registered to the network
+AT+CSQ - Check signal quality
+AT+CBC - Check battery voltage
+AT+CMEE=2 - Enable verbose error messages
+AT+CMEE=0 - Disable verbose error messages
+AT+CMEE? - Check if verbose error messages are enabled
+AT+CPIN? - Check if SIM card is inserted
