@@ -1,22 +1,18 @@
-//$ last work 23/July/23 [12:02 PM]
-// # version 3.0.2
+//$ last work 23/July/23 [11:44 PM]
+// # version 4.2.2
 
 //`===================================
 #include <DHT.h>
-#include <LiquidCrystal_I2C.h>
 #include <ThingSpeak.h>
 #include <WiFi.h>
 #include <Wire.h>
 #include <random>
 
-#define LCD_ADDRESS 0x27
-#define LCD_COLUMNS 16
-#define LCD_ROWS 2
-LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-#define DISPLAY_SDA_PIN 34
-#define DISPLAY_SCL_PIN 35
-#define DISPLAY_POWER_PIN 32
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
 // Initialize the DHT11 sensor
 #define DHTPIN 33 // Change the pin if necessary
@@ -61,6 +57,12 @@ String MOBILE_No = "+923354888420";
 #define MODEM_RX 26
 #define I2C_SDA 21
 #define I2C_SCL 22
+#define DISPLAY_POWER_PIN 32
+
+#define IP5306_ADDR 0x75
+#define IP5306_REG_SYS_CTL0 0x00
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 #define SerialMon Serial
 #define SerialAT Serial1
@@ -95,7 +97,6 @@ int batteryPercentage = 0;
 // another variable to store time in millis
 unsigned long time_ = 0;
 //`...............................
-
 //! * # # # # # # # # # # # # * !
 void setup() {
   SerialMon.begin(115200);
@@ -114,18 +115,31 @@ void setup() {
   delay(3000);
   println("Initializing modem...");
   modem.restart();
-  if (strlen(simPIN) && modem.getSimStatus() != 3) {
-    modem.simUnlock(simPIN);
-  }
   modem.sendAT(GF("+CLIP=1"));
   modem.sendAT(GF("+CMGF=1"));
 
   //`...............................
   pinMode(DISPLAY_POWER_PIN, OUTPUT);
   digitalWrite(DISPLAY_POWER_PIN, HIGH);
-  Wire.begin(DISPLAY_SDA_PIN, DISPLAY_SCL_PIN);
-  lcd.begin(LCD_COLUMNS, LCD_ROWS);
-  lcd.setBacklight(HIGH);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;)
+      ;
+  }
+  delay(2000);
+
+  pinMode(DISPLAY_POWER_PIN, OUTPUT);
+  digitalWrite(DISPLAY_POWER_PIN, HIGH);
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, 10);
+  // Display static text
+  display.println("Hello, world!" + String(random(99)));
+  display.display();
+
   dht.begin(); // Initialize the DHT11 sensor
   connect_wifi();
   pinMode(LED, OUTPUT);
@@ -449,10 +463,15 @@ bool wifi_connected() {
 }
 
 void lcd_print() {
-  lcd.clear();
-  lcd.print(line_1);
-  lcd.setCursor(0, 1);
-  lcd.print(line_2);
+  display.clearDisplay();
+
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, 0);
+  // Display static text
+  display.println("Hello, world!" + String(random(99)));
+  display.display();
+  delay(1000);
 }
 
 String get_time() {
