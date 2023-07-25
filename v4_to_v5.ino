@@ -1,5 +1,5 @@
 //$ last work 26/July/23 [01:12 AM]
-// # version 5.0.0
+// # version 5.0.1
 // this release will use two additional modules for monitoring
 // MPU 6050 and Ultra Sound sensor
 
@@ -203,9 +203,12 @@ void loop() {
   line_1 =
       line_1.substring(0, 6) + String(temperatureStr) + " C  " + END_VALUES;
 
-  line_2 = "Hu: " + String(humidity) + " % /" + get_time();
+  line_2 = "Hu: " + String(humidity) + " % / " + get_time();
   lcd_print();
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
+    // terminateLastMessage();
+    //! FIXME: this will stuck the loop so implement
+    // struct
     previousUpdateTime = (millis() / 1000);
     updateThingSpeak(temperature, humidity);
     messages_in_inbox = totalUnreadMessages();
@@ -344,7 +347,11 @@ String removeOk(String str) {
 
 String executeCommand(String str) {
   //~ additional commands will be executed here so define new sms commands here
-  if (str.indexOf("#call") != -1) {
+  if (str.indexOf("<executed>") != -1 || str.indexOf("<not executed>") != -1) {
+    println("-> Already executed <-");
+    return str;
+
+  } else if (str.indexOf("#call") != -1) {
     giveMissedCall();
     str += " <executed>";
   } else if (str.indexOf("#battery") != -1) {
@@ -374,6 +381,9 @@ String executeCommand(String str) {
     str += " <executed>";
     int switchNumber = str.substring(str.indexOf("#off") + 4).toInt();
     digitalWrite(switchNumber, LOW);
+  } else if (str.indexOf("#reboot") != -1) {
+    println("Rebooting...");
+    modem.restart();
   } else {
     println("-> Module is not trained to execute this command ! <-");
     str += " <not executed>";
@@ -434,6 +444,28 @@ int totalUnreadMessages() {
       count++;
   }
   return count;
+}
+void terminateLastMessage()
+// this will fetch last message and execute the command in it
+{
+  say("AT+CMGL=\"ALL\"");
+  String response = getResponse();
+  String lastMessage;
+  int messageNumber;
+  getLastMessageAndIndex(response, lastMessage, messageNumber);
+  String temp_str = executeCommand(removeOk(readMessage(messageNumber)));
+  println("Last message [ " + temp_str + "]");
+  if (temp_str.indexOf("<executed>") != -1) {
+    deleteMessage(messageNumber);
+    println("Message deleted");
+  } else {
+    sendSMS("Unable to execute sms no. {" + String(messageNumber) +
+            "} message : [ " +
+            temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+            " ] from : " + getNumberOfMessage(messageNumber) +
+            ", what to do ?");
+    //! store in struct PM <pending work>. other wise loop will be stuck here
+  }
 }
 //`..................................
 
@@ -531,9 +563,10 @@ String get_time() {
   if (sec < 60) {
     return (String(sec) + " s");
   } else if ((sec >= 60) && (sec < 3600)) {
-    return (String(sec / 60) + "m" + String(sec % 60) + "s");
+    return (String(sec / 60) + " m " + String(sec % 60) + " s");
   } else {
     println("Issue spotted sec value: " + String(sec));
+    sendSMS("Got problem in time function time overflow");
     connect_wifi();
     return String(-1);
   }
