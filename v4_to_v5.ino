@@ -1,5 +1,7 @@
-//$ last work 26/July/23 [12:15 AM]
-// # version 4.5.4
+//$ last work 26/July/23 [01:12 AM]
+// # version 5.0.0
+// this release will use two additional modules for monitoring
+// MPU 6050 and Ultra Sound sensor
 
 //`===================================
 #include <DHT.h>
@@ -98,6 +100,7 @@ int batteryPercentage = 0;
 // another variable to store time in millis
 unsigned long time_ = 0;
 int messages_in_inbox = 0;
+byte batteryUpdateAfter = 0; // 1 mean 2 minutes
 //`...............................
 //! * # # # # # # # # # # # # * !
 void setup() {
@@ -149,6 +152,7 @@ void setup() {
   ThingSpeak.setField(4, random(10, 31));
   END_VALUES.setCharAt(1, '#');
   messages_in_inbox = totalUnreadMessages();
+  updateBatteryParameters(updateBatteryStatus());
   //`...............................
 }
 
@@ -205,6 +209,12 @@ void loop() {
     previousUpdateTime = (millis() / 1000);
     updateThingSpeak(temperature, humidity);
     messages_in_inbox = totalUnreadMessages();
+    if (batteryUpdateAfter >= 5) {
+      updateBatteryParameters(updateBatteryStatus());
+      batteryUpdateAfter = 0;
+    } else {
+      batteryUpdateAfter++;
+    }
   }
   //`..................................
 }
@@ -499,6 +509,12 @@ void lcd_print() {
   drawWifiSymbol(wifi_connected());
   display.print("   ");
   display.print(String(messages_in_inbox));
+  display.print("   ");
+  display.print(batteryPercentage);
+  display.print("%");
+  display.print("   ");
+  display.print(batteryVoltage);
+  display.print("V");
 
   display.setCursor(0, 20);
   display.print(line_1);
