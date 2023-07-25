@@ -1,5 +1,5 @@
-//$ last work 24/July/23 [01:35 AM]
-// # version 4.5.3
+//$ last work 26/July/23 [12:15 AM]
+// # version 4.5.4
 
 //`===================================
 #include <DHT.h>
@@ -279,9 +279,7 @@ String getResponse() {
   unsigned int entrySec = millis() / 1000;
   int timeoutSec = 3;
   while (SerialAT.available() || (!((response.indexOf("OK") != -1) ||
-                                    (response.indexOf("ERROR") != -1) ||
-                                    (response.indexOf("+CLIP:") != -1) ||
-                                    (response.indexOf("+CMTI:") != -1)))) {
+                                    (response.indexOf("ERROR") != -1)))) {
     response += SerialAT.readString();
     if (timeOut(timeoutSec, entrySec) && !(SerialAT.available() > 0)) {
       println("******\tTimeout\t******");
