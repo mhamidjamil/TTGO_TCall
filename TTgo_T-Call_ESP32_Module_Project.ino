@@ -201,7 +201,7 @@ void loop() {
   line_1 =
       line_1.substring(0, 6) + String(temperatureStr) + " C  " + END_VALUES;
 
-  line_2 = "Hu: " + String(humidity) + " % /" + get_time();
+  line_2 = "Hu: " + String(humidity) + " % / " + get_time();
   lcd_print();
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
     previousUpdateTime = (millis() / 1000);
@@ -231,6 +231,15 @@ void giveMissedCall() {
 void sendSMS(String sms) {
   if (modem.sendSMS(MOBILE_No, sms)) {
     println(sms);
+  } else {
+    println("SMS failed to send");
+  }
+  delay(500);
+}
+
+void sendSMS(String sms, String number) {
+  if (modem.sendSMS(number, sms)) {
+    println("sending : [" + sms + "] to : " + String(number));
   } else {
     println("SMS failed to send");
   }
@@ -368,6 +377,11 @@ String executeCommand(String str) {
     str += " <executed>";
     int switchNumber = str.substring(str.indexOf("#on") + 3).toInt();
     digitalWrite(switchNumber, HIGH);
+  } else if (str.indexOf("#smsto") != -1) {
+    // smsto [sms here] {number here}
+    String strSms = str.substring(str.indexOf("[") + 1, str.indexOf("]"));
+    String strNumber = str.substring(str.indexOf("{") + 1, str.indexOf("}"));
+    sendSMS(strSms, strNumber);
   } else if (str.indexOf("#off") != -1) {
     str += " <executed>";
     int switchNumber = str.substring(str.indexOf("#off") + 4).toInt();
@@ -529,7 +543,7 @@ String get_time() {
   if (sec < 60) {
     return (String(sec) + " s");
   } else if ((sec >= 60) && (sec < 3600)) {
-    return (String(sec / 60) + "m" + String(sec % 60) + "s");
+    return (String(sec / 60) + " m " + String(sec % 60) + " s");
   } else {
     println("Issue spotted sec value: " + String(sec));
     connect_wifi();

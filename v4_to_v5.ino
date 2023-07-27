@@ -1,5 +1,5 @@
-//$ last work 26/July/23 [01:12 AM]
-// # version 5.0.1
+//$ last work 27/July/23 [07:15 AM]
+// # version 5.0.2
 // this release will use two additional modules for monitoring
 // MPU 6050 and Ultra Sound sensor
 
@@ -101,6 +101,8 @@ int batteryPercentage = 0;
 unsigned long time_ = 0;
 int messages_in_inbox = 0;
 byte batteryUpdateAfter = 0; // 1 mean 2 minutes
+#define MAX_MESSAGES 15
+int messageStack[MAX_MESSAGES] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 //`...............................
 //! * # # # # # # # # # # # # * !
 void setup() {
@@ -207,7 +209,6 @@ void loop() {
   lcd_print();
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
     // terminateLastMessage();
-    //! FIXME: this will stuck the loop so implement
     // struct
     previousUpdateTime = (millis() / 1000);
     updateThingSpeak(temperature, humidity);
@@ -236,6 +237,15 @@ void giveMissedCall() {
 void sendSMS(String sms) {
   if (modem.sendSMS(MOBILE_No, sms)) {
     println(sms);
+  } else {
+    println("SMS failed to send");
+  }
+  delay(500);
+}
+
+void sendSMS(String sms, String number) {
+  if (modem.sendSMS(number, sms)) {
+    println("sending : [" + sms + "] to : " + String(number));
   } else {
     println("SMS failed to send");
   }
@@ -336,6 +346,7 @@ String readMessage(int index) { // read the message of given index
 void deleteMessage(int index) {
   say("AT+CMGD=" + String(index));
   println(getResponse());
+  arrangeStack();
 }
 
 String removeOk(String str) {
@@ -384,6 +395,11 @@ String executeCommand(String str) {
   } else if (str.indexOf("#reboot") != -1) {
     println("Rebooting...");
     modem.restart();
+  } else if (str.indexOf("#smsto") != -1) {
+    // smsto [sms here] {number here}
+    String strSms = str.substring(str.indexOf("[") + 1, str.indexOf("]"));
+    String strNumber = str.substring(str.indexOf("{") + 1, str.indexOf("}"));
+    sendSMS(strSms, strNumber);
   } else {
     println("-> Module is not trained to execute this command ! <-");
     str += " <not executed>";
@@ -448,25 +464,66 @@ int totalUnreadMessages() {
 void terminateLastMessage()
 // this will fetch last message and execute the command in it
 {
-  say("AT+CMGL=\"ALL\"");
-  String response = getResponse();
-  String lastMessage;
-  int messageNumber;
-  getLastMessageAndIndex(response, lastMessage, messageNumber);
+  int messageNumber = getLastIndexToTerminate();
   String temp_str = executeCommand(removeOk(readMessage(messageNumber)));
   println("Last message [ " + temp_str + "]");
   if (temp_str.indexOf("<executed>") != -1) {
     deleteMessage(messageNumber);
-    println("Message deleted");
+    println("Message {" + messageNumber + "} deleted");
   } else {
-    sendSMS("Unable to execute sms no. {" + String(messageNumber) +
-            "} message : [ " +
-            temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
-            " ] from : " + getNumberOfMessage(messageNumber) +
-            ", what to do ?");
-    //! store in struct PM <pending work>. other wise loop will be stuck here
+    if (!checkStack(messageNumber)) {
+      sendSMS("Unable to execute sms no. {" + String(messageNumber) +
+              "} message : [ " +
+              temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+              " ] from : " + getNumberOfMessage(messageNumber) +
+              ", what to do ?");
+      delay(2000);
+    }
   }
 }
+
+bool checkStack(int messageNumber) {
+  if (getIndex(messageNumber) == -1) {
+    for (int i = 0; i < MAX_MESSAGES; i++)
+      if (messageStack(i) != 0) {
+        messageNumber(i) = messageNumber;
+        return false;
+      }
+    println("\n#Error 495\n");
+    return false;
+  } else {
+    return true;
+  }
+}
+
+int getIndex(int messageNumber) {
+  for (int i = 0; i < MAX_MESSAGES; i++)
+    if (messageStack(i) == messageNumber)
+      return i;
+  return -1;
+}
+
+void arrangeStack() {
+  for (int i = 0; i < MAX_MESSAGES; i++)
+    if (messageStack(i) == 0)
+      for (int j = i + 1; j < MAX_MESSAGES; j++)
+        if (messageStack(j) != 0) {
+          messageStack(i) = messageStack(j);
+          messageStack(j) = 0;
+          break;
+        }
+}
+void deleteIndexFromStack(int messageNumber) {
+  messageStack[getIndex(messageNumber)] = 0;
+  arrangeStack();
+}
+
+int getLastIndexToTerminate() {
+  // this function will read the messageStack and return the message number
+  // which have to be executed
+  // TODO:
+}
+
 //`..................................
 
 void updateThingSpeak(float temperature, int humidity) {
