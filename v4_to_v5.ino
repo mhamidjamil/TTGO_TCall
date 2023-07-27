@@ -226,7 +226,7 @@ void loop() {
     } else {
       batteryUpdateAfter++;
     }
-    if ((millis() / 1000) / 60 > 60) // after 1 hours
+    if ((millis() / 1000) % 3600 == 0) // after 1 hours
       terminateLastMessage();
   }
   //`..................................
