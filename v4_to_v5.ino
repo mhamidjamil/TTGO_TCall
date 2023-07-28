@@ -197,7 +197,7 @@ void loop() {
       println("Deleting message number : " +
               String(command.substring(command.indexOf("delete") + 7)));
       deleteMessage(command.substring(command.indexOf("delete") + 7).toInt());
-    } else if (command.indexOf("terminateNext") != -1) {
+    } else if (command.indexOf("terminator") != -1) {
       terminateLastMessage();
     } else if (command.indexOf("hangUp") != -1) {
       say("AT+CHUP");
@@ -235,7 +235,7 @@ void loop() {
     } else {
       batteryUpdateAfter++;
     }
-    if ((millis() / 1000) % 3600 == 0) // after 1 hours
+    if ((millis() / 1000) % 300 == 0) // after every 5 minutes
       terminateLastMessage();
   }
   //`..................................
@@ -428,19 +428,11 @@ String executeCommand(String str) {
     String strNumber = str.substring(str.indexOf("{") + 1, str.indexOf("}"));
     sendSMS(strSms, strNumber);
     str += " <executed>";
-  } else if (str.indexOf("#terminateNext") != -1) {
+  } else if (str.indexOf("#terminator") != -1) {
     terminateLastMessage();
   } else if (str.indexOf("#allMsg") != -1) {
     println("Reading and forwarding all messages..");
-    int end_ = lastMessageIndex();
-    int start_ = firstMessageIndex();
-    for (int i = start_; i <= end_; i++) {
-      if (messageExists(i)) {
-        sendSMS((String(i) + " : " + removeOk(readMessage(i))));
-        delay(1000);
-        updateSerial();
-      }
-    }
+    sendAllMessagesWithIndex();
     str += " <executed>";
   } else if (str.indexOf("#help") != -1) {
     // send sms which includes all the trained commands of this module
@@ -513,6 +505,8 @@ int totalUnreadMessages() {
 
 void terminateLastMessage() {
   currentTargetIndex = getLastIndexToTerminate();
+  if (currentTargetIndex == firstMessageIndex())
+    return;
   println("work index : " + String(currentTargetIndex));
   String temp_str = executeCommand(removeOk(readMessage(currentTargetIndex)));
   println("Last message [ " + temp_str + "]");
@@ -621,13 +615,19 @@ int firstMessageIndex() {
   return targetValue;
 }
 
-String getAllMessagesWithIndex() {
+String sendAllMessagesWithIndex() {
   String tempStr = "";
   int end_ = lastMessageIndex();
   int start_ = firstMessageIndex();
   for (int i = start_; i <= end_; i++) {
-    if (messageExists(i))
-      tempStr += "@" + String(i) + " : " + readMessage(i) + "\n";
+    if (messageExists(i)) {
+      tempStr = String(i) + " : " + readMessage(i);
+      if (modem.sendSMS(MOBILE_No, tempStr)) {
+        println("!send{" + tempStr + "}");
+      } else {
+        println("SMS failed to send");
+      }
+    }
   }
   return tempStr;
 }
