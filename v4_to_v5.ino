@@ -175,7 +175,7 @@ void loop() {
       giveMissedCall();
     } else if (command.indexOf("sms") != -1) {
       // fetch sms from input string, sample-> sms : msg here
-      String sms = command.substring(command.indexOf("sms") + 6);
+      String sms = command.substring(command.indexOf("sms") + 4);
       println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
       sendSMS(sms);
     } else if (command.indexOf("all") != -1) {
@@ -183,19 +183,24 @@ void loop() {
       moduleManager();
     } else if (command.indexOf("battery") != -1) {
       println(updateBatteryStatus());
-    } else if (command.indexOf("lastFrom") != -1) {
-      println("Index before <" + command.substring(9, -1) + "> is : " +
-              String(getMessageNumberBefore(command.substring(9, -1).toInt())));
-    } else if (command.indexOf("read") != -1) {
-      // say i recived read 2, so it will read message of index 2
+    } else if (command.indexOf("lastBefore") != -1) {
       println(
-          readMessage(command.substring(command.indexOf("read") + 5).toInt()));
+          "Index before <" + command.substring(11, -1) + "> is : " +
+          String(getMessageNumberBefore(command.substring(11, -1).toInt())));
+    } else if (command.indexOf("read") != -1) {
+      if (messageExists(command.substring(command.indexOf("read") + 5).toInt()))
+        println(readMessage(
+            command.substring(command.indexOf("read") + 5).toInt()));
+      else
+        println("Message not Exists");
     } else if (command.indexOf("delete") != -1) { // to delete message
       println("Deleting message number : " +
               String(command.substring(command.indexOf("delete") + 7)));
       deleteMessage(command.substring(command.indexOf("delete") + 7).toInt());
-    } else if (command.indexOf("terminateNext")) {
+    } else if (command.indexOf("terminateNext") != -1) {
       terminateLastMessage();
+    } else if (command.indexOf("hangUp") != -1) {
+      say("AT+CHUP");
     } else {
       println("Executing: " + command);
       say(command);
@@ -254,7 +259,7 @@ void call(String number) {
 
 void sendSMS(String sms) {
   if (modem.sendSMS(MOBILE_No, sms)) {
-    println(sms);
+    println("$send{" + sms + "}");
   } else {
     println("SMS failed to send");
   }
@@ -358,7 +363,9 @@ int getNewMessageNumber(String response) {
 String readMessage(int index) { // read the message of given index
   say("AT+CMGR=" + String(index));
   String tempStr = getResponse();
-  return tempStr.substring(tempStr.lastIndexOf("\"") + 2);
+  tempStr = tempStr.substring(tempStr.lastIndexOf("\"") + 2);
+  // remove "\n" from start of string
+  return tempStr.substring(tempStr.indexOf("\n") + 1);
 }
 
 void deleteMessage(int index) {
@@ -423,6 +430,25 @@ String executeCommand(String str) {
     str += " <executed>";
   } else if (str.indexOf("#terminateNext") != -1) {
     terminateLastMessage();
+  } else if (str.indexOf("#allMsg") != -1) {
+    println("Reading and forwarding all messages..");
+    int end_ = lastMessageIndex();
+    int start_ = firstMessageIndex();
+    for (int i = start_; i <= end_; i++) {
+      if (messageExists(i)) {
+        sendSMS((String(i) + " : " + removeOk(readMessage(i))));
+        delay(1000);
+        updateSerial();
+      }
+    }
+    str += " <executed>";
+  } else if (str.indexOf("#help") != -1) {
+    // send sms which includes all the trained commands of this module
+    sendSMS("#call\n#callTo{number}\n#battery\n#delete index \n#forward index"
+            "\n#display on/"
+            "off \n#on pin\n#off pin\n#reboot\n#smsTo[sms]{number}\n#"
+            "terminateNext\n#allMsg\n#help");
+    str += " <executed>";
   } else {
     println("-> Module is not trained to execute this command ! <-");
     str += " <not executed>";
@@ -455,7 +481,7 @@ bool timeOut(int sec, unsigned int entrySec) {
 
 void forwardMessage(int index) {
   String message = removeOk(readMessage(index));
-  if (message.length() > 2)
+  if (messageExists(index))
     sendSMS(message);
   else
     sendSMS("No message found at index : " + String(index));
@@ -487,12 +513,13 @@ int totalUnreadMessages() {
 
 void terminateLastMessage() {
   currentTargetIndex = getLastIndexToTerminate();
+  println("work index : " + String(currentTargetIndex));
   String temp_str = executeCommand(removeOk(readMessage(currentTargetIndex)));
   println("Last message [ " + temp_str + "]");
   if (temp_str.indexOf("<executed>") != -1) {
     deleteMessage(currentTargetIndex);
     println("Message {" + String(currentTargetIndex) + "} deleted");
-  } else {
+  } else { // if the message don't execute
     if (!checkStack(currentTargetIndex)) {
       sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
               "} message : [ " +
@@ -509,12 +536,12 @@ bool checkStack(int messageNumber) {
     for (int i = 0; i < MAX_MESSAGES; i++)
       if (messageStack[i] != 0) {
         messageStack[i] = messageNumber;
-        return false;
+        return true;
       }
     println("\n#Error 495\n");
     return false;
   } else {
-    return true;
+    return false;
   }
 }
 
@@ -546,7 +573,7 @@ int getLastIndexToTerminate() {
   if (currentTargetIndex == 0) {
     // mean this function is runing first time lets read all messages and get
     // the last message number
-    messageStack[0] = getLastMessageNumber();
+    messageStack[0] = lastMessageIndex();
     return messageStack[0];
   } else {
     int targetedIndex = 0;
@@ -560,11 +587,14 @@ int getLastIndexToTerminate() {
   }
 }
 
-int getLastMessageNumber() {
+int lastMessageIndex() {
   say("AT+CMGL=\"ALL\"");
   String response = getResponse();
   String tempStr = response.substring(response.lastIndexOf("+CMGL:"), -1);
-  return tempStr.substring(8, tempStr.indexOf(",")).toInt();
+  int targetNumber =
+      tempStr.substring(tempStr.indexOf("CMGL:") + 6, tempStr.indexOf(","))
+          .toInt();
+  return targetNumber;
 }
 
 int getMessageNumberBefore(int messageNumber) {
@@ -572,14 +602,43 @@ int getMessageNumberBefore(int messageNumber) {
   String response = getResponse();
   String responseBeforeThatIndex = response.substring(
       0, response.indexOf("+CMGL: " + String(messageNumber)));
-  // here we got targeted index which have used before now we will fetch the
-  // index before this message
   String tempStr = responseBeforeThatIndex.substring(
-      responseBeforeThatIndex.lastIndexOf("+CMGL:"), -1);
-  println("we recived <" + String(messageNumber) +
-          ">index sending from manual fetcher : " +
-          tempStr.substring(8, tempStr.indexOf(",")).toInt());
-  return tempStr.substring(8, tempStr.indexOf(",")).toInt();
+      responseBeforeThatIndex.lastIndexOf("+CMGL:"),
+      responseBeforeThatIndex.lastIndexOf("\""));
+  int targetValue =
+      tempStr.substring(tempStr.indexOf("CMGL: ") + 6, tempStr.indexOf(","))
+          .toInt();
+  return targetValue;
+}
+
+int firstMessageIndex() {
+  say("AT+CMGL=\"ALL\"");
+  String response = getResponse();
+  int targetValue =
+      response
+          .substring(response.lastIndexOf("CMGL:") + 6, response.indexOf(","))
+          .toInt();
+  return targetValue;
+}
+
+String getAllMessagesWithIndex() {
+  String tempStr = "";
+  int end_ = lastMessageIndex();
+  int start_ = firstMessageIndex();
+  for (int i = start_; i <= end_; i++) {
+    if (messageExists(i))
+      tempStr += "@" + String(i) + " : " + readMessage(i) + "\n";
+  }
+  return tempStr;
+}
+
+bool messageExists(int index) {
+  say("AT+CMGL=\"ALL\"");
+  String response = getResponse();
+  if (response.indexOf("+CMGL: " + String(index)) != -1)
+    return true;
+  else
+    return false;
 }
 
 //`..................................
