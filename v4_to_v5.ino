@@ -357,7 +357,9 @@ String getResponse() {
 }
 
 int getNewMessageNumber(String response) {
-  return response.substring(response.lastIndexOf(",") + 1, -1).toInt();
+  int message_number =
+      response.substring(response.lastIndexOf(",") + 1, -1).toInt();
+  return message_number;
 }
 
 String readMessage(int index) { // read the message of given index
