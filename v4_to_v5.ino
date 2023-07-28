@@ -1,5 +1,5 @@
-//$ last work 27/July/23 [11:?? PM]
-// # version 5.0.3
+//$ last work 28/July/23 [03:06 PM]
+// # version 5.0.4
 // this include the auto execution of sms
 // TODO: Test its functionality before merging to main
 
@@ -162,7 +162,15 @@ void setup() {
 void loop() {
   if (SerialMon.available()) {
     String command = SerialMon.readString();
-    if (command.indexOf("call") != -1) {
+    if (command.indexOf("smsTo") != -1) {
+      String strSms =
+          command.substring(command.indexOf("[") + 1, command.indexOf("]"));
+      String strNumber =
+          command.substring(command.indexOf("{") + 1, command.indexOf("}"));
+      sendSMS(strSms, strNumber);
+    } else if (command.indexOf("callTo") != -1) {
+      call(command.substring(command.indexOf("{") + 1, command.indexOf("}")));
+    } else if (command.indexOf("call") != -1) {
       println("Calling " + String(MOBILE_No));
       giveMissedCall();
     } else if (command.indexOf("sms") != -1) {
@@ -186,12 +194,8 @@ void loop() {
       println("Deleting message number : " +
               String(command.substring(command.indexOf("delete") + 7)));
       deleteMessage(command.substring(command.indexOf("delete") + 7).toInt());
-    } else if (command.indexOf("smsTo") != -1) {
-      String strSms = str.substring(str.indexOf("[") + 1, str.indexOf("]"));
-      String strNumber = str.substring(str.indexOf("{") + 1, str.indexOf("}"));
-      sendSMS(strSms, strNumber);
-    } else if (command.indexOf("callTo") != -1) {
-      call(str.substring(str.indexOf("{") + 1, str.indexOf("}")));
+    } else if (command.indexOf("terminateNext")) {
+      terminateLastMessage();
     } else {
       println("Executing: " + command);
       say(command);
@@ -417,6 +421,8 @@ String executeCommand(String str) {
     String strNumber = str.substring(str.indexOf("{") + 1, str.indexOf("}"));
     sendSMS(strSms, strNumber);
     str += " <executed>";
+  } else if (str.indexOf("#terminateNext") != -1) {
+    terminateLastMessage();
   } else {
     println("-> Module is not trained to execute this command ! <-");
     str += " <not executed>";
@@ -485,7 +491,7 @@ void terminateLastMessage() {
   println("Last message [ " + temp_str + "]");
   if (temp_str.indexOf("<executed>") != -1) {
     deleteMessage(currentTargetIndex);
-    println("Message {" + currentTargetIndex + "} deleted");
+    println("Message {" + String(currentTargetIndex) + "} deleted");
   } else {
     if (!checkStack(currentTargetIndex)) {
       sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
@@ -501,8 +507,8 @@ void terminateLastMessage() {
 bool checkStack(int messageNumber) {
   if (getIndex(messageNumber) == -1) {
     for (int i = 0; i < MAX_MESSAGES; i++)
-      if (messageStack(i) != 0) {
-        messageNumber(i) = messageNumber;
+      if (messageStack[i] != 0) {
+        messageStack[i] = messageNumber;
         return false;
       }
     println("\n#Error 495\n");
@@ -514,18 +520,18 @@ bool checkStack(int messageNumber) {
 
 int getIndex(int messageNumber) {
   for (int i = 0; i < MAX_MESSAGES; i++)
-    if (messageStack(i) == messageNumber)
+    if (messageStack[i] == messageNumber)
       return i;
   return -1;
 }
 
 void arrangeStack() {
   for (int i = 0; i < MAX_MESSAGES; i++)
-    if (messageStack(i) == 0)
+    if (messageStack[i] == 0)
       for (int j = i + 1; j < MAX_MESSAGES; j++)
-        if (messageStack(j) != 0) {
-          messageStack(i) = messageStack(j);
-          messageStack(j) = 0;
+        if (messageStack[j] != 0) {
+          messageStack[i] = messageStack[j];
+          messageStack[j] = 0;
           break;
         }
 }
@@ -544,7 +550,7 @@ int getLastIndexToTerminate() {
     return messageStack[0];
   } else {
     int targetedIndex = 0;
-    for (; targetedIndex < MAX_MESSAGES; i++)
+    for (; targetedIndex < MAX_MESSAGES; targetedIndex++)
       if (messageStack[targetedIndex + 1] == 0)
         break;
     // here we got the index where we now have to store the message number
