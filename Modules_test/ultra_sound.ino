@@ -1,6 +1,6 @@
-//$ last work 28/July/23 [03:06 PM]
-// # version 5.0.4
-// this include the auto execution of sms
+//$ last work 29/July/23 [06:08 PM]
+// # version 5.0.5
+// this include ultra sound sensor working
 // TODO: Test its functionality before merging to main
 
 //`===================================
@@ -249,8 +249,15 @@ void loop() {
   //`..................................
 
   // #----------------------------------
+  int previousValue = distance;
   update_distance();
+  int newValue = distance;
   println("Distance  : " + String(distance) + " inches");
+
+  if (change_Detector(newValue, previousValue, 2))
+    sendSMS(("Motion detected by sensor new value : " + String(newValue) +
+             " previous value : " + String(previousValue))
+                .c_str());
 }
 void println(String str) { SerialMon.println(str); }
 void print(String str) { SerialMon.print(str); }
@@ -788,6 +795,7 @@ void drawWifiSymbol(bool isConnected) {
 //`..................................
 
 // #---------------------------------
+
 void update_distance() {
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
@@ -796,4 +804,13 @@ void update_distance() {
   digitalWrite(trigPin, LOW);
   duration = pulseIn(echoPin, HIGH);
   distance = duration * 0.034 / 2;
+}
+
+bool change_Detector(int newValue, int previousValue, int margin) {
+  if ((newValue >= previousValue - margin) &&
+      (newValue <= previousValue + margin)) {
+    return false;
+  } else {
+    return true;
+  }
 }
