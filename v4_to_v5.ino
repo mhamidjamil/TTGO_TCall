@@ -105,6 +105,7 @@ byte batteryUpdateAfter = 0; // 1 mean 2 minutes
 int messageStack[MAX_MESSAGES] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 int currentTargetIndex = 0;
 //`...............................
+
 //! * # # # # # # # # # # # # * !
 void setup() {
   SerialMon.begin(115200);
