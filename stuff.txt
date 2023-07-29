@@ -40,3 +40,30 @@ AT+CMEE=2 - Enable verbose error messages
 AT+CMEE=0 - Disable verbose error messages
 AT+CMEE? - Check if verbose error messages are enabled
 AT+CPIN? - Check if SIM card is inserted
+
+
++CMGL: 1,"REC READ","+923354888420","","23/07/23,00:50:53+20"
+#forword 8
+
++CMGL: 2,"REC READ","+923354888420","","23/07/22,12:37:13+20"
+T45
+
++CMGL: 3,"REC READ","Jazz","","23/07/23,01:39:50+20"
+Muaziz Sarif, Apko diye gaey MUFT 10 JAZZ MINS expire ho gaya hein. Abhi *5555#  milein aur apne balance k mutabik sasti tareen offers hasil kerain!
+
++CMGL: 4,"REC READ","Jazz","","23/07/24,01:39:51+20"
+Muaziz Sarif, Apko diye gaey MUFT 10 JAZZ MINS expire ho gaya hein. Abhi *5555#  milein aur apne balance k mutabik sasti tareen offers hasil kerain!
+
++CMGL: 5,"REC READ","Jazz","","23/07/25,01:39:50+20"
+Muaziz Sarif, Apko diye gaey MUFT 10 JAZZ MINS expire ho gaya hein. Abhi *5555#  milein aur apne balance k mutabik sasti tareen offers hasil kerain!
+
++CMGL: 6,"REC READ","+923354888420","","23/07/19,23:19:30+20"
+Testfive
+
++CMGL: 9,"REC READ","Jazz","","23/07/25,08:55:05+20"
+0020
+
++CMGL: 10,"REC READ","+923354888420","","23/07/25,23:17:15+20"
+#battery 
+
+OK
