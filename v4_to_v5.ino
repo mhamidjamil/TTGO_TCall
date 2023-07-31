@@ -1,8 +1,6 @@
-
-//$ last work 30/July/23 [05:13 PM]
-// # version 5.0.7
-// duplicate ultra sound sms issue resolved
-//! Unstable
+//$ last work 1/August/23 [01:15 AM]
+// # version 5.0.8
+// rebooting Issue fixed
 
 //`===================================
 #include <DHT.h>
@@ -23,10 +21,10 @@ DHT dht(DHTPIN, DHT11);
 
 // ThingSpeak parameters
 const char *ssid = "Archer 73";
-// const char *ssid = "skip";
 const char *password = "Archer@73_102#";
 const unsigned long channelID = 2201589;
-const char *apiKey = "M6GKK40AB3Q7YE42";
+const char *apiKey = "Q3TSTOM87EUBNOAE";
+#define ThingSpeakEnable true
 
 unsigned long updateInterval = 2 * 60;
 unsigned long previousUpdateTime = 0;
@@ -115,6 +113,8 @@ int currentTargetIndex = 0;
 long duration;    // variable for the duration of sound wave travel
 int distance = 0; // variable for the distance measurement
 bool DEBUGGING = true;
+// unsigned int debuggerTimeFlag = x;
+//` in seconds if user enable debugging then it will disable after x seconds
 
 //! * # # # # # # # # # # # # * !
 void setup() {
@@ -165,7 +165,9 @@ void setup() {
   connect_wifi();
   Println("after wifi connection");
   pinMode(LED, OUTPUT);
-  if (!String(ssid).indexOf("skip") == -1) {
+  delay(100);
+  if (ThingSpeakEnable) {
+    Println("\nThinkSpeak initializing...\n");
     ThingSpeak.begin(client); // Initialize ThingSpeak
     ThingSpeak.setField(4, random(10, 31));
   }
@@ -226,8 +228,8 @@ void loop() {
       say("AT+CHUP");
     } else if (command.indexOf("debug") != -1) {
       DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
-      println("Debugging : " + DEBUGGING ? "Enabled" : "Disabled");
-
+      delay(50);
+      println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
     } else {
       println("Executing: " + command);
       say(command);
@@ -259,8 +261,10 @@ void loop() {
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
     delay(100);
     previousUpdateTime = (millis() / 1000);
-    if (String(ssid).indexOf("skip") != -1) {
+    if (ThingSpeakEnable) {
+      Println("before thingspeak update");
       updateThingSpeak(temperature, humidity);
+      Println("After thingspeak update");
     }
     messages_in_inbox = totalUnreadMessages();
     delay(100);
@@ -301,7 +305,8 @@ void loop() {
   }
   delay(1000);
   Println("loop end");
-  if (((millis() / 1000) > 10) && ((millis() / 1000) < 20)) {
+  if ((millis() / 1000) > 130 && DEBUGGING) {
+    println("disabling DEBUGGING");
     DEBUGGING = false;
   }
 }
@@ -334,7 +339,6 @@ void sendSms(String sms) {
   } else {
     println("SMS failed to send");
     println("\n!send{" + sms + "}!\n");
-
   }
   delay(500);
 }
@@ -723,8 +727,10 @@ bool messageExists(int index) {
 //`..................................
 
 void updateThingSpeak(float temperature, int humidity) {
+  Println("entering thingspeak function");
   ThingSpeak.setField(1, temperature); // Set temperature value
   ThingSpeak.setField(2, humidity);    // Set humidity value
+  Println("After setting up fields");
 
   int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
   if (updateStatus == 200) {
@@ -735,6 +741,7 @@ void updateThingSpeak(float temperature, int humidity) {
     println(String(updateStatus));
     ERROR_MSG();
   }
+  Println("leaving thingspeak function");
 }
 
 void SUCCESS_MSG() {
@@ -885,4 +892,3 @@ bool change_Detector(int newValue, int previousValue, int margin) {
     return true;
   }
 }
-
