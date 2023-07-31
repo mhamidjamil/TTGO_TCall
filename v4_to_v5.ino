@@ -21,8 +21,8 @@
 DHT dht(DHTPIN, DHT11);
 
 // ThingSpeak parameters
-// const char *ssid = "Archer 73";
-const char *ssid = "skip";
+const char *ssid = "Archer 73";
+// const char *ssid = "skip";
 const char *password = "Archer@73_102#";
 const unsigned long channelID = 2201589;
 const char *apiKey = "M6GKK40AB3Q7YE42";
@@ -249,7 +249,7 @@ void loop() {
   line_2 = "Hu: " + String(humidity) + " % / " + get_time();
   Println("before lcd update");
   delay(100);
-  // lcd_print();
+  lcd_print();
   Println("after lcd update");
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
     delay(100);
