@@ -201,11 +201,11 @@ void loop() {
       // fetch sms from input string, sample-> sms : msg here
       String sms = command.substring(command.indexOf("sms") + 4);
       println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
+
       sendSms(sms);
     } else if (command.indexOf("all") != -1) {
       println("Reading all messages");
       moduleManager();
-
     } else if (command.indexOf("battery") != -1) {
       println(updateBatteryStatus());
     } else if (command.indexOf("lastBefore") != -1) {
@@ -235,7 +235,9 @@ void loop() {
       say(command);
     }
   }
+
   Println("after serial test");
+
   if (SerialAT.available())
     println(getResponse());
   if (millis() - time_ > 10000) {
@@ -247,6 +249,7 @@ void loop() {
   int humidity = dht.readHumidity();
   char temperatureStr[5];
   dtostrf(temperature, 4, 1, temperatureStr);
+
   line_1 =
       line_1.substring(0, 6) + String(temperatureStr) + " C  " + END_VALUES;
 
@@ -265,6 +268,7 @@ void loop() {
     }
     messages_in_inbox = totalUnreadMessages();
     delay(100);
+
     if (batteryUpdateAfter >= 5) {
       updateBatteryParameters(updateBatteryStatus());
       batteryUpdateAfter = 0;
@@ -312,6 +316,7 @@ void Println(String str) {
     Serial.println(str);
   }
 }
+
 void print(String str) { SerialMon.print(str); }
 void say(String str) { SerialAT.println(str); }
 
@@ -327,8 +332,8 @@ void call(String number) {
   say("ATD+ " + number + ";");
   updateSerial();
 }
-
 void sendSms(String sms) {
+
   if (modem.sendSMS(MOBILE_No, sms)) {
     println("$send{" + sms + "}");
   } else {
@@ -349,6 +354,7 @@ void sendSMS(String sms, String number) {
 
 void updateSerial() {
   delay(100);
+
   while (SerialMon.available()) {
     SerialAT.write(SerialMon.read());
   }
@@ -414,6 +420,7 @@ String getResponse() {
       deleteMessage(newMessageNumber);
     else {
       sendSms("<Unable to execute sms no. {" + String(newMessageNumber) +
+
               "} message : > [ " +
               temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
               " ] from : " + getNumberOfMessage(newMessageNumber));
@@ -469,6 +476,7 @@ String executeCommand(String str) {
   } else if (str.indexOf("#battery") != -1) {
     updateBatteryParameters(updateBatteryStatus());
     sendSms("Battery percentage : " + String(batteryPercentage) +
+
             "\nBattery voltage : " + String(batteryVoltage));
     str += " <executed>";
   } else if (str.indexOf("#delete") != -1) {
@@ -511,6 +519,7 @@ String executeCommand(String str) {
   } else if (str.indexOf("#help") != -1) {
     // send sms which includes all the trained commands of this module
     sendSms("#call\n#callTo{number}\n#battery\n#delete index \n#forward index"
+
             "\n#display on/"
             "off \n#on pin\n#off pin\n#reboot\n#smsTo[sms]{number}\n#"
             "terminateNext\n#allMsg\n#help");
@@ -791,7 +800,6 @@ void lcd_print() {
   Println("entering lcd function");
   display.clearDisplay();
   Println("second line of lcd function");
-
   display.setTextSize(1);
   display.setCursor(0, 0);
   // Display static text
