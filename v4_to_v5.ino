@@ -1,7 +1,6 @@
-//$ last work 28/July/23 [03:06 PM]
-// # version 5.0.4
-// this include the auto execution of sms
-// TODO: Test its functionality before merging to main
+//$ last work 1/August/23 [01:15 AM]
+// # version 5.0.8
+// rebooting Issue fixed
 
 //`===================================
 #include <DHT.h>
@@ -24,7 +23,8 @@ DHT dht(DHTPIN, DHT11);
 const char *ssid = "Archer 73";
 const char *password = "Archer@73_102#";
 const unsigned long channelID = 2201589;
-const char *apiKey = "M6GKK40AB3Q7YE42";
+const char *apiKey = "Q3TSTOM87EUBNOAE";
+#define ThingSpeakEnable true
 
 unsigned long updateInterval = 2 * 60;
 unsigned long previousUpdateTime = 0;
@@ -106,6 +106,16 @@ int messageStack[MAX_MESSAGES] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 int currentTargetIndex = 0;
 //`...............................
 
+// #-------------------------------
+#define echoPin 14 //  attach pin D2 Arduino to pin Echo of HC-SR04
+#define trigPin 27 // attach pin D3 Arduino to pin Trig of HC-SR04
+
+long duration;    // variable for the duration of sound wave travel
+int distance = 0; // variable for the distance measurement
+bool DEBUGGING = true;
+// unsigned int debuggerTimeFlag = x;
+//` in seconds if user enable debugging then it will disable after x seconds
+
 //! * # # # # # # # # # # # # * !
 void setup() {
   SerialMon.begin(115200);
@@ -127,6 +137,8 @@ void setup() {
   modem.sendAT(GF("+CLIP=1"));
   modem.sendAT(GF("+CMGF=1"));
   pinMode(ALERT_PIN, OUTPUT);
+  delay(1000);
+  Println("Before Display functionality");
   //`...............................
   pinMode(DISPLAY_POWER_PIN, OUTPUT);
   digitalWrite(DISPLAY_POWER_PIN, HIGH);
@@ -148,19 +160,30 @@ void setup() {
   // Display static text
   display.println("Hello, world!" + String(random(99)));
   display.display();
-
+  delay(500);
   dht.begin(); // Initialize the DHT11 sensor
   connect_wifi();
+  Println("after wifi connection");
   pinMode(LED, OUTPUT);
-  ThingSpeak.begin(client); // Initialize ThingSpeak
-  ThingSpeak.setField(4, random(10, 31));
+  delay(100);
+  if (ThingSpeakEnable) {
+    Println("\nThinkSpeak initializing...\n");
+    ThingSpeak.begin(client); // Initialize ThingSpeak
+    ThingSpeak.setField(4, random(10, 31));
+  }
   END_VALUES.setCharAt(1, '#');
   messages_in_inbox = totalUnreadMessages();
   updateBatteryParameters(updateBatteryStatus());
   //`...............................
+  // #-------------------------------
+  pinMode(trigPin, OUTPUT); // Sets the trigPin as an OUTPUT
+  pinMode(echoPin, INPUT);  // Sets the echoPin as an INPUT
+  Println("leaving setup");
 }
 
 void loop() {
+  Println("in loop");
+  delay(100);
   if (SerialMon.available()) {
     String command = SerialMon.readString();
     if (command.indexOf("smsTo") != -1) {
@@ -178,7 +201,8 @@ void loop() {
       // fetch sms from input string, sample-> sms : msg here
       String sms = command.substring(command.indexOf("sms") + 4);
       println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
-      sendSMS(sms);
+
+      sendSms(sms);
     } else if (command.indexOf("all") != -1) {
       println("Reading all messages");
       moduleManager();
@@ -202,21 +226,27 @@ void loop() {
       terminateLastMessage();
     } else if (command.indexOf("hangUp") != -1) {
       say("AT+CHUP");
+    } else if (command.indexOf("debug") != -1) {
+      DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
+      delay(50);
+      println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
     } else {
       println("Executing: " + command);
       say(command);
     }
   }
+
+  Println("after serial test");
+
   if (SerialAT.available())
     println(getResponse());
   if (millis() - time_ > 10000) {
     time_ = millis();
-    // get all messages index number and execute them
   }
+  delay(100);
   //`..................................
   float temperature = dht.readTemperature();
   int humidity = dht.readHumidity();
-
   char temperatureStr[5];
   dtostrf(temperature, 4, 1, temperatureStr);
 
@@ -224,12 +254,21 @@ void loop() {
       line_1.substring(0, 6) + String(temperatureStr) + " C  " + END_VALUES;
 
   line_2 = "Hu: " + String(humidity) + " % / " + get_time();
+  Println("before lcd update");
+  delay(100);
   lcd_print();
+  Println("after lcd update");
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
-    // struct
+    delay(100);
     previousUpdateTime = (millis() / 1000);
-    updateThingSpeak(temperature, humidity);
+    if (ThingSpeakEnable) {
+      Println("before thingspeak update");
+      updateThingSpeak(temperature, humidity);
+      Println("After thingspeak update");
+    }
     messages_in_inbox = totalUnreadMessages();
+    delay(100);
+
     if (batteryUpdateAfter >= 5) {
       updateBatteryParameters(updateBatteryStatus());
       batteryUpdateAfter = 0;
@@ -239,9 +278,45 @@ void loop() {
     if ((millis() / 1000) % 300 == 0) // after every 5 minutes
       terminateLastMessage();
   }
+  delay(100);
+  Println("after millis condition");
   //`..................................
+
+  // #----------------------------------
+  int previousValue = distance;
+  update_distance();
+  delay(100);
+  int newValue = distance;
+  Println("checking distance status");
+  if (change_Detector(abs(newValue), abs(previousValue), 2)) {
+    delay(100);
+    if (distance < 0) {
+      println("Distance  : " + String(abs(distance)) + " inches");
+      String temp_msg =
+          "Motion detected by sensor new value : " + String(abs(newValue)) +
+          " previous value : " + String(abs(previousValue));
+      // sendSms(temp_msg);
+      distance *= -1;
+    } else {
+      println("Distance  : " + String(abs(distance)) + " inches (ignored)");
+      distance *= -1;
+      // println("*__________*");
+    }
+  }
+  delay(1000);
+  Println("loop end");
+  if ((millis() / 1000) > 130 && DEBUGGING) {
+    println("disabling DEBUGGING");
+    DEBUGGING = false;
+  }
 }
 void println(String str) { SerialMon.println(str); }
+void Println(String str) {
+  if (DEBUGGING) {
+    Serial.println(str);
+  }
+}
+
 void print(String str) { SerialMon.print(str); }
 void say(String str) { SerialAT.println(str); }
 
@@ -257,12 +332,13 @@ void call(String number) {
   say("ATD+ " + number + ";");
   updateSerial();
 }
+void sendSms(String sms) {
 
-void sendSMS(String sms) {
   if (modem.sendSMS(MOBILE_No, sms)) {
     println("$send{" + sms + "}");
   } else {
     println("SMS failed to send");
+    println("\n!send{" + sms + "}!\n");
   }
   delay(500);
 }
@@ -277,7 +353,8 @@ void sendSMS(String sms, String number) {
 }
 
 void updateSerial() {
-  delay(500);
+  delay(100);
+
   while (SerialMon.available()) {
     SerialAT.write(SerialMon.read());
   }
@@ -342,7 +419,8 @@ String getResponse() {
     if (temp_str.indexOf("<executed>") != -1)
       deleteMessage(newMessageNumber);
     else {
-      sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
+      sendSms("<Unable to execute sms no. {" + String(newMessageNumber) +
+
               "} message : > [ " +
               temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
               " ] from : " + getNumberOfMessage(newMessageNumber));
@@ -351,7 +429,7 @@ String getResponse() {
   } else if (response.indexOf("+CLIP:") != -1) {
     //+CLIP: "03354888420",161,"",0,"",0
     String temp_str = "Missed call from : " + fetchDetails(response, "\"", 1);
-    sendSMS(temp_str);
+    sendSms(temp_str);
     // println(temp_str);
   }
   return response;
@@ -397,7 +475,8 @@ String executeCommand(String str) {
     str += " <executed>";
   } else if (str.indexOf("#battery") != -1) {
     updateBatteryParameters(updateBatteryStatus());
-    sendSMS("Battery percentage : " + String(batteryPercentage) +
+    sendSms("Battery percentage : " + String(batteryPercentage) +
+
             "\nBattery voltage : " + String(batteryVoltage));
     str += " <executed>";
   } else if (str.indexOf("#delete") != -1) {
@@ -439,7 +518,8 @@ String executeCommand(String str) {
     str += " <executed>";
   } else if (str.indexOf("#help") != -1) {
     // send sms which includes all the trained commands of this module
-    sendSMS("#call\n#callTo{number}\n#battery\n#delete index \n#forward index"
+    sendSms("#call\n#callTo{number}\n#battery\n#delete index \n#forward index"
+
             "\n#display on/"
             "off \n#on pin\n#off pin\n#reboot\n#smsTo[sms]{number}\n#"
             "terminateNext\n#allMsg\n#help");
@@ -477,9 +557,9 @@ bool timeOut(int sec, unsigned int entrySec) {
 void forwardMessage(int index) {
   String message = removeOk(readMessage(index));
   if (messageExists(index))
-    sendSMS(message);
+    sendSms(message);
   else
-    sendSMS("No message found at index : " + String(index));
+    sendSms("No message found at index : " + String(index));
 }
 
 String getNumberOfMessage(int index) {
@@ -518,7 +598,7 @@ void terminateLastMessage() {
     println("Message {" + String(currentTargetIndex) + "} deleted");
   } else { // if the message don't execute
     if (!checkStack(currentTargetIndex)) {
-      sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
+      sendSms("Unable to execute sms no. {" + String(currentTargetIndex) +
               "} message : [ " +
               temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
               " ] from : " + getNumberOfMessage(currentTargetIndex) +
@@ -647,8 +727,10 @@ bool messageExists(int index) {
 //`..................................
 
 void updateThingSpeak(float temperature, int humidity) {
+  Println("entering thingspeak function");
   ThingSpeak.setField(1, temperature); // Set temperature value
   ThingSpeak.setField(2, humidity);    // Set humidity value
+  Println("After setting up fields");
 
   int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
   if (updateStatus == 200) {
@@ -659,6 +741,7 @@ void updateThingSpeak(float temperature, int humidity) {
     println(String(updateStatus));
     ERROR_MSG();
   }
+  Println("leaving thingspeak function");
 }
 
 void SUCCESS_MSG() {
@@ -676,6 +759,10 @@ void ERROR_MSG() {
 }
 
 void connect_wifi() {
+  if (String(ssid).indexOf("skip") != -1) {
+    END_VALUES.setCharAt(0, 'Z');
+    return;
+  }
   WiFi.begin(ssid, password); // Connect to Wi-Fi
   int i = 0;
   while (!wifi_connected()) {
@@ -710,12 +797,15 @@ bool wifi_connected() {
 }
 
 void lcd_print() {
+  Println("entering lcd function");
   display.clearDisplay();
-
+  Println("second line of lcd function");
   display.setTextSize(1);
   display.setCursor(0, 0);
   // Display static text
+  Println("before checking wifi status lcd function");
   drawWifiSymbol(wifi_connected());
+  Println("after checking wifi status lcd function");
   display.print("   ");
   display.print(String(messages_in_inbox));
   display.print("   ");
@@ -733,6 +823,7 @@ void lcd_print() {
 
   display.display();
   delay(1000);
+  Println("leaving lcd function");
 }
 
 String get_time() {
@@ -743,7 +834,7 @@ String get_time() {
     return (String(sec / 60) + " m " + String(sec % 60) + " s");
   } else {
     println("Issue spotted sec value: " + String(sec));
-    sendSMS("Got problem in time function time overflow");
+    sendSms("Got problem in time function time overflow");
     connect_wifi();
     return String(-1);
   }
@@ -775,3 +866,29 @@ void drawWifiSymbol(bool isConnected) {
     display.drawBitmap(0, 0, wifiSymbol, 8, 8, WHITE);
 }
 //`..................................
+
+// #---------------------------------
+
+void update_distance() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  duration = pulseIn(echoPin, HIGH);
+  if (distance > 0) {
+    distance = duration * 0.034 / 2;
+  } else {
+    distance = duration * 0.034 / 2;
+    distance *= -1;
+  }
+}
+
+bool change_Detector(int newValue, int previousValue, int margin) {
+  if ((newValue >= previousValue - margin) &&
+      (newValue <= previousValue + margin)) {
+    return false;
+  } else {
+    return true;
+  }
+}
