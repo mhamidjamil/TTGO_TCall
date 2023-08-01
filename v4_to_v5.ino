@@ -107,8 +107,8 @@ int currentTargetIndex = 0;
 //`...............................
 
 // #-------------------------------
-#define echoPin 14 //  attach pin D2 Arduino to pin Echo of HC-SR04
-#define trigPin 27 // attach pin D3 Arduino to pin Trig of HC-SR04
+#define echoPin 2  //  attach pin D2 Arduino to pin Echo of HC-SR04
+#define trigPin 15 // attach pin D3 Arduino to pin Trig of HC-SR04
 
 long duration;    // variable for the duration of sound wave travel
 int distance = 0; // variable for the distance measurement
@@ -158,7 +158,7 @@ void setup() {
 
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0, 10);
+  display.setCursor(0, 0);
   // Display static text
   display.println("Hello, world!" + String(random(99)));
   display.display();
