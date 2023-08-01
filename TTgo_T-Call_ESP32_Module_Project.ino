@@ -22,7 +22,7 @@ DHT dht(DHTPIN, DHT11);
 const char *ssid = "Archer 73";
 const char *password = "Archer@73_102#";
 const unsigned long channelID = 2201589;
-const char *apiKey = "M6GKK40AB3Q7YE42";
+const char *apiKey = "Q3TSTOM87EUBNOAE";
 
 unsigned long updateInterval = 2 * 60;
 unsigned long previousUpdateTime = 0;

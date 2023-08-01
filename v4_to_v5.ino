@@ -1,6 +1,6 @@
-//$ last work 1/August/23 [01:15 AM]
-// # version 5.0.8
-// rebooting Issue fixed
+//$ last work 1/August/23 [09:59 PM]
+// # version 5.0.9
+// looking for AT commands not working
 
 //`===================================
 #include <DHT.h>
@@ -117,6 +117,8 @@ bool DEBUGGING = true;
 //` in seconds if user enable debugging then it will disable after x seconds
 
 //! * # # # # # # # # # # # # * !
+void say(String str);
+
 void setup() {
   SerialMon.begin(115200);
   // Keep power when running from battery
@@ -332,6 +334,7 @@ void call(String number) {
   say("ATD+ " + number + ";");
   updateSerial();
 }
+
 void sendSms(String sms) {
 
   if (modem.sendSMS(MOBILE_No, sms)) {
@@ -399,6 +402,7 @@ void getLastMessageAndIndex(String response, String &lastMessage,
 }
 
 String getResponse() {
+  Println("entering getResponse");
   String response = "";
   unsigned int entrySec = millis() / 1000;
   int timeoutSec = 3;
@@ -420,7 +424,6 @@ String getResponse() {
       deleteMessage(newMessageNumber);
     else {
       sendSms("<Unable to execute sms no. {" + String(newMessageNumber) +
-
               "} message : > [ " +
               temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
               " ] from : " + getNumberOfMessage(newMessageNumber));
