@@ -25,6 +25,8 @@ const char *password = "Archer@73_102#";
 const unsigned long channelID = 2201589;
 const char *apiKey = "Q3TSTOM87EUBNOAE";
 #define ThingSpeakEnable true
+const char *apiKey = "Q3TSTOM87EUBNOAE";
+#define ThingSpeakEnable true
 
 unsigned long updateInterval = 2 * 60;
 unsigned long previousUpdateTime = 0;
@@ -116,7 +118,19 @@ bool DEBUGGING = true;
 // unsigned int debuggerTimeFlag = x;
 //` in seconds if user enable debugging then it will disable after x seconds
 
+// #-------------------------------
+#define echoPin 2  //  attach pin D2 Arduino to pin Echo of HC-SR04
+#define trigPin 15 // attach pin D3 Arduino to pin Trig of HC-SR04
+
+long duration;    // variable for the duration of sound wave travel
+int distance = 0; // variable for the distance measurement
+bool DEBUGGING = true;
+// unsigned int debuggerTimeFlag = x;
+//` in seconds if user enable debugging then it will disable after x seconds
+
 //! * # # # # # # # # # # # # * !
+void say(String str);
+
 void say(String str);
 
 void setup() {
@@ -141,6 +155,8 @@ void setup() {
   pinMode(ALERT_PIN, OUTPUT);
   delay(1000);
   Println("Before Display functionality");
+  delay(1000);
+  Println("Before Display functionality");
   //`...............................
   pinMode(DISPLAY_POWER_PIN, OUTPUT);
   digitalWrite(DISPLAY_POWER_PIN, HIGH);
@@ -159,14 +175,23 @@ void setup() {
   display.setTextSize(1);
   display.setTextColor(WHITE);
   display.setCursor(0, 0);
+  display.setCursor(0, 0);
   // Display static text
   display.println("Hello, world!" + String(random(99)));
   display.display();
   delay(500);
+  delay(500);
   dht.begin(); // Initialize the DHT11 sensor
   connect_wifi();
   Println("after wifi connection");
+  Println("after wifi connection");
   pinMode(LED, OUTPUT);
+  delay(100);
+  if (ThingSpeakEnable) {
+    Println("\nThinkSpeak initializing...\n");
+    ThingSpeak.begin(client); // Initialize ThingSpeak
+    ThingSpeak.setField(4, random(10, 31));
+  }
   delay(100);
   if (ThingSpeakEnable) {
     Println("\nThinkSpeak initializing...\n");
@@ -181,9 +206,15 @@ void setup() {
   pinMode(trigPin, OUTPUT); // Sets the trigPin as an OUTPUT
   pinMode(echoPin, INPUT);  // Sets the echoPin as an INPUT
   Println("leaving setup");
+  // #-------------------------------
+  pinMode(trigPin, OUTPUT); // Sets the trigPin as an OUTPUT
+  pinMode(echoPin, INPUT);  // Sets the echoPin as an INPUT
+  Println("leaving setup");
 }
 
 void loop() {
+  Println("in loop");
+  delay(100);
   Println("in loop");
   delay(100);
   if (SerialMon.available()) {
@@ -203,6 +234,8 @@ void loop() {
       // fetch sms from input string, sample-> sms : msg here
       String sms = command.substring(command.indexOf("sms") + 4);
       println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
+
+      sendSms(sms);
 
       sendSms(sms);
     } else if (command.indexOf("all") != -1) {
@@ -232,6 +265,10 @@ void loop() {
       DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
       delay(50);
       println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
+    } else if (command.indexOf("debug") != -1) {
+      DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
+      delay(50);
+      println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
     } else {
       println("Executing: " + command);
       say(command);
@@ -245,6 +282,7 @@ void loop() {
     time_ = millis();
   }
   delay(100);
+  delay(100);
   //`..................................
   float temperature = dht.readTemperature();
   int humidity = dht.readHumidity();
@@ -257,9 +295,13 @@ void loop() {
   line_2 = "Hu: " + String(humidity) + " % / " + get_time();
   Println("before lcd update");
   delay(100);
+  Println("before lcd update");
+  delay(100);
   lcd_print();
   Println("after lcd update");
+  Println("after lcd update");
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
+    delay(100);
     delay(100);
     previousUpdateTime = (millis() / 1000);
     if (ThingSpeakEnable) {
@@ -267,7 +309,14 @@ void loop() {
       updateThingSpeak(temperature, humidity);
       Println("After thingspeak update");
     }
+    if (ThingSpeakEnable) {
+      Println("before thingspeak update");
+      updateThingSpeak(temperature, humidity);
+      Println("After thingspeak update");
+    }
     messages_in_inbox = totalUnreadMessages();
+    delay(100);
+
     delay(100);
 
     if (batteryUpdateAfter >= 5) {
@@ -281,35 +330,9 @@ void loop() {
   }
   delay(100);
   Println("after millis condition");
-  //`..................................
-
-  // #----------------------------------
-  int previousValue = distance;
-  update_distance();
   delay(100);
-  int newValue = distance;
-  Println("checking distance status");
-  if (change_Detector(abs(newValue), abs(previousValue), 2)) {
-    delay(100);
-    if (distance < 0) {
-      println("Distance  : " + String(abs(distance)) + " inches");
-      String temp_msg =
-          "Motion detected by sensor new value : " + String(abs(newValue)) +
-          " previous value : " + String(abs(previousValue));
-      // sendSms(temp_msg);
-      distance *= -1;
-    } else {
-      println("Distance  : " + String(abs(distance)) + " inches (ignored)");
-      distance *= -1;
-      // println("*__________*");
-    }
-  }
-  delay(1000);
-  Println("loop end");
-  if ((millis() / 1000) > 130 && DEBUGGING) {
-    println("disabling DEBUGGING");
-    DEBUGGING = false;
-  }
+  Println("after millis condition");
+  //`..................................
 }
 void println(String str) { SerialMon.println(str); }
 void Println(String str) {
