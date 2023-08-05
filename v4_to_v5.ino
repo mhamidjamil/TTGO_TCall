@@ -1,5 +1,5 @@
 //$ last work 5/August/23 [08:08 PM]
-// # version 5.1.0
+// # version 5.1.1
 //! power cut issue
 
 //`===================================
@@ -855,12 +855,19 @@ String get_time() {
   unsigned int sec = (millis() / 1000) - last_update;
   if (sec < 60) {
     return (String(sec) + " s");
-  } else if ((sec >= 60) && (sec < 3600)) {
+  } else if ((sec >= 60) && (sec < 3600)) { // deal one hour
     return (String(sec / 60) + " m " + String(sec % 60) + " s");
+  } else if ((sec >= 3600) && (sec < 86400)) { // deal one day
+    return (String(sec / 3600) + " h " + String((sec % 3600) / 60) + " m " +
+            String(sec % 60) + " s");
+  } else if ((sec >= 86400) && (sec < 604800)) { // deal one week
+    return (String(sec / 86400) + " d " + String((sec % 86400) / 3600) + " h " +
+            String((sec % 3600) / 60) + " m " + String(sec % 60) + " s");
   } else {
+
     println("Issue spotted sec value: " + String(sec));
-    sendSms("Got problem in time function time overflow");
-    connect_wifi();
+    sendSms("Got problem in time function time overflow (or module runs for "
+            "more than a week want to reboot send #reboot sms)");
     return String(-1);
   }
   return "X";
