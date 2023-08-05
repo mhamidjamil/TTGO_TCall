@@ -1,6 +1,6 @@
-//$ last work 1/August/23 [09:59 PM]
-// # version 5.0.9
-// looking for AT commands not working
+//$ last work 5/August/23 [08:08 PM]
+// # version 5.1.0
+//! power cut issue
 
 //`===================================
 #include <DHT.h>
@@ -237,7 +237,6 @@ void loop() {
       say(command);
     }
   }
-
   Println("after serial test");
 
   if (SerialAT.available())
