@@ -1,6 +1,7 @@
-//$ last work 5/August/23 [11:14 PM]
-// # version 5.1.2 [1st message for variables update]
-//! power cut issue
+//$ last work 6/August/23 [9:27 PM]
+// # version 5.1.3
+// unwanted distance will be ignored and
+// thingspeak update interval will automatically adjust according to situation
 
 //`===================================
 #include <DHT.h>
@@ -113,6 +114,7 @@ int currentTargetIndex = 0;
 long duration;    // variable for the duration of sound wave travel
 int distance = 0; // variable for the distance measurement
 bool DEBUGGING = true;
+int multiVar = 0;
 // unsigned int debuggerTimeFlag = x;
 //` in seconds if user enable debugging then it will disable after x seconds
 
@@ -751,12 +753,18 @@ void SUCCESS_MSG() {
   digitalWrite(LED, HIGH);
   END_VALUES.setCharAt(1, '+');
   last_update = (millis() / 1000);
+  if (updateInterval > 2 * 60)
+    updateInterval = 2 * 60;
 }
 
 void ERROR_MSG() {
   // set curser to first row, first last column and print "tick symbol"
   digitalWrite(LED, LOW);
   END_VALUES.setCharAt(1, '-');
+  if (updateInterval < 60 * 30)
+    updateInterval *= 2;
+  else
+    END_VALUES.setCharAt(1, 'e');
   connect_wifi();
 }
 
@@ -775,17 +783,14 @@ void connect_wifi() {
     delay(500);
     i++;
     END_VALUES.setCharAt(0, '?');
-    lcd_print();
     delay(500);
     END_VALUES.setCharAt(0, ' ');
   }
-  println("Wi-Fi connected successfully");
   if (wifi_connected()) {
     END_VALUES.setCharAt(0, '*');
-    lcd_print();
+    println("Wi-Fi connected successfully");
   } else {
     END_VALUES.setCharAt(0, '!');
-    lcd_print();
     digitalWrite(LED, LOW);
   }
 }
@@ -884,11 +889,14 @@ void update_distance() {
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
   duration = pulseIn(echoPin, HIGH);
-  if (distance > 0) {
-    distance = duration * 0.034 / 2;
-  } else {
-    distance = duration * 0.034 / 2;
-    distance *= -1;
+  int tempDistance = duration * 0.034 / 2;
+  if (tempDistance < 1000) { // ignore unwanted readings
+    if (distance > 0) {
+      distance = tempDistance;
+    } else {
+      distance = tempDistance;
+      distance *= -1;
+    }
   }
 }
 
