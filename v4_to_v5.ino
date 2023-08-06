@@ -1,5 +1,5 @@
-//$ last work 5/August/23 [08:08 PM]
-// # version 5.1.1
+//$ last work 5/August/23 [11:14 PM]
+// # version 5.1.2 [1st message for variables update]
 //! power cut issue
 
 //`===================================
@@ -841,7 +841,6 @@ String get_time() {
     return (String(sec / 86400) + " d " + String((sec % 86400) / 3600) + " h " +
             String((sec % 3600) / 60) + " m " + String(sec % 60) + " s");
   } else {
-
     println("Issue spotted sec value: " + String(sec));
     sendSms("Got problem in time function time overflow (or module runs for "
             "more than a week want to reboot send #reboot sms)");
