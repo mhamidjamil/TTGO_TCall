@@ -115,6 +115,10 @@ long duration;    // variable for the duration of sound wave travel
 int distance = 0; // variable for the distance measurement
 bool DEBUGGING = true;
 int multiVar = 0;
+
+bool ultraSoundWorking = true;
+bool wifiWorking = true;
+bool displayWorking = true;
 // unsigned int debuggerTimeFlag = x;
 //` in seconds if user enable debugging then it will disable after x seconds
 
@@ -162,7 +166,7 @@ void setup() {
   display.setTextColor(WHITE);
   display.setCursor(0, 0);
   // Display static text
-  display.println("Hello, world!" + String(random(99)));
+  display.println("Hello, world!  " + String(random(99)));
   display.display();
   delay(500);
   dht.begin(); // Initialize the DHT11 sensor
@@ -218,8 +222,9 @@ void loop() {
           String(getMessageNumberBefore(command.substring(11, -1).toInt())));
     } else if (command.indexOf("read") != -1) {
       if (messageExists(command.substring(command.indexOf("read") + 5).toInt()))
-        println(readMessage(
-            command.substring(command.indexOf("read") + 5).toInt()));
+        println("Message: " +
+                readMessage(
+                    command.substring(command.indexOf("read") + 5).toInt()));
       else
         println("Message not Exists");
     } else if (command.indexOf("delete") != -1) { // to delete message
@@ -234,6 +239,11 @@ void loop() {
       DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
       delay(50);
       println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
+    } else if (command.indexOf("status") != -1) {
+      println(getVariablesValues());
+    } else if (command.indexOf("update") != -1) {
+      updateVariablesValues(readMessage(
+          (command.substring(command.indexOf("update") + 7, -1)).toInt()));
     } else {
       println("Executing: " + command);
       say(command);
@@ -259,24 +269,27 @@ void loop() {
   line_2 = "Hu: " + String(humidity) + " % / " + get_time();
   Println("before lcd update");
   delay(100);
-  lcd_print();
+  if (displayWorking)
+    lcd_print();
   Println("after lcd update");
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
     delay(100);
     previousUpdateTime = (millis() / 1000);
-    if (ThingSpeakEnable) {
+    if (ThingSpeakEnable && wifiWorking) {
       Println("before thingspeak update");
       updateThingSpeak(temperature, humidity);
       Println("After thingspeak update");
     }
-    messages_in_inbox = totalUnreadMessages();
-    delay(100);
+    if (displayWorking) {
+      messages_in_inbox = totalUnreadMessages();
+      delay(100);
 
-    if (batteryUpdateAfter >= 5) {
-      updateBatteryParameters(updateBatteryStatus());
-      batteryUpdateAfter = 0;
-    } else {
-      batteryUpdateAfter++;
+      if (batteryUpdateAfter >= 5) {
+        updateBatteryParameters(updateBatteryStatus());
+        batteryUpdateAfter = 0;
+      } else {
+        batteryUpdateAfter++;
+      }
     }
     if ((millis() / 1000) % 300 == 0) // after every 5 minutes
       terminateLastMessage();
@@ -286,24 +299,26 @@ void loop() {
   //`..................................
 
   // #----------------------------------
-  int previousValue = distance;
-  update_distance();
-  delay(100);
-  int newValue = distance;
-  Println("checking distance status");
-  if (change_Detector(abs(newValue), abs(previousValue), 2)) {
+  if (ultraSoundWorking) {
+    int previousValue = distance;
+    update_distance();
     delay(100);
-    if (distance < 0) {
-      println("Distance  : " + String(abs(distance)) + " inches");
-      String temp_msg =
-          "Motion detected by sensor new value : " + String(abs(newValue)) +
-          " previous value : " + String(abs(previousValue));
-      // sendSms(temp_msg);
-      distance *= -1;
-    } else {
-      println("Distance  : " + String(abs(distance)) + " inches (ignored)");
-      distance *= -1;
-      // println("*__________*");
+    int newValue = distance;
+    Println("checking distance status");
+    if (change_Detector(abs(newValue), abs(previousValue), 2)) {
+      delay(100);
+      if (distance < 0) {
+        println("Distance  : " + String(abs(distance)) + " inches");
+        String temp_msg =
+            "Motion detected by sensor new value : " + String(abs(newValue)) +
+            " previous value : " + String(abs(previousValue));
+        // sendSms(temp_msg);
+        distance *= -1;
+      } else {
+        println("Distance  : " + String(abs(distance)) + " inches (ignored)");
+        distance *= -1;
+        // println("*__________*");
+      }
     }
   }
   delay(1000);
@@ -417,7 +432,8 @@ String getResponse() {
       timeoutSec = 1;
     }
   }
-  if (response.indexOf("+CMTI:") != -1) {
+  if (response.indexOf("+CMTI:") != -1 &&
+      messageSender(response).indexOf("3374888420") == -1) {
     int newMessageNumber = getNewMessageNumber(response);
     String temp_str = executeCommand(removeOk(readMessage(newMessageNumber)));
     println("New message [ " + temp_str + "]");
@@ -480,7 +496,6 @@ String executeCommand(String str) {
   } else if (str.indexOf("#battery") != -1) {
     updateBatteryParameters(updateBatteryStatus());
     sendSms("Battery percentage : " + String(batteryPercentage) +
-
             "\nBattery voltage : " + String(batteryVoltage));
     str += " <executed>";
   } else if (str.indexOf("#delete") != -1) {
@@ -527,6 +542,12 @@ String executeCommand(String str) {
             "\n#display on/"
             "off \n#on pin\n#off pin\n#reboot\n#smsTo[sms]{number}\n#"
             "terminateNext\n#allMsg\n#help");
+    str += " <executed>";
+  } else if (str.indexOf("#setting") != -1) {
+    updateVariablesValues(str);
+    deleteMessage(1);
+    delay(200);
+    sendSms(str);
     str += " <executed>";
   } else {
     println("-> Module is not trained to execute this command ! <-");
@@ -907,4 +928,75 @@ bool change_Detector(int newValue, int previousValue, int margin) {
   } else {
     return true;
   }
+}
+
+String getVariablesValues() {
+  return String(
+      (String(displayWorking ? "Display on" : "Display off") + ", " +
+       String(ultraSoundWorking ? "ultraSound on" : "ultraSound off") + ", " +
+       String(wifiWorking ? "wifi on" : "wifi off")));
+}
+
+void updateVariablesValues(String str) {
+  // str will have : #setting
+  // <ultra sound alerts 0>
+  // <display 1>
+  // <wifi connectivity 1>
+  int newValues = findOccurrences(str, "<");
+  if (newValues == 0) {
+    println("No new value to be update");
+    return;
+  } else {
+    println("Updating " + String(newValues) + " values");
+    if (str.indexOf("ultra") != -1) {
+      String forUltraSound =
+          str.substring(str.indexOf("<ultra sound alerts") + 20,
+                        str.indexOf("<ultra sound alerts") + 22);
+      if (forUltraSound.indexOf("0") != -1) {
+        ultraSoundWorking = false;
+      } else if (forUltraSound.indexOf("1") != -1) {
+        ultraSoundWorking = true;
+      }
+    }
+    if (str.indexOf("display") != -1) {
+      String forDisplay = str.substring(str.indexOf("<display") + 9,
+                                        str.indexOf("<display") + 11);
+      if (forDisplay.indexOf("0") != -1) {
+        displayWorking = false;
+      } else if (forDisplay.indexOf("1") != -1) {
+        displayWorking = true;
+      }
+    }
+    if (str.indexOf("wifi") != -1) {
+      String forWifi = str.substring(str.indexOf("<wifi connectivity") + 19,
+                                     str.indexOf("<wifi connectivity") + 21);
+      if (forWifi.indexOf("0") != -1) {
+        wifiWorking = false;
+      } else if (forWifi.indexOf("1") != -1) {
+        wifiWorking = true;
+      }
+    }
+  }
+  println("msg : " + str + "\nAfter  update : ");
+  println(getVariablesValues());
+}
+
+int findOccurrences(String str, String target) {
+  int occurrences = 0;
+  int index = -1;
+  while ((index = str.indexOf(target, index + 1)) != -1) {
+    occurrences++;
+  }
+  return occurrences;
+}
+
+String messageSender(String str) {
+  // +CMTI: "SM",10
+  // fetch mobile number from above string then read message by AT+CMGR=
+  // messageNumber
+  // +CMGR: "REC READ","+923354888420","","23/07/23,00:50:53+20"
+  //  0020
+  // and at the end fetch the mobile number from this string in this case mobile
+  // number is:  +923354888420
+  // and return it as a string
 }
