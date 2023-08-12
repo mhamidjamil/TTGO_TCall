@@ -105,7 +105,7 @@ int multiVar = 0;
 float temperature;
 int humidity;
 
-bool ultraSoundWorking = false;
+bool UltraSoundAlerts = false;
 bool wifiWorking = false;
 bool displayWorking = true;
 // unsigned int debuggerTimeFlag = x;
@@ -294,7 +294,7 @@ void loop() {
       String temp_msg =
           "Motion detected by sensor new value : " + String(abs(newValue)) +
           " previous value : " + String(abs(previousValue));
-      if (ultraSoundWorking)
+      if (UltraSoundAlerts)
         sendSms(temp_msg);
       distance *= -1;
     } else {
@@ -743,9 +743,6 @@ void lcd_print() {
   display.setTextSize(1);
   display.setCursor(0, 0);
   // Display static text
-  Println("before checking wifi status lcd function");
-  drawWifiSymbol(wifi_connected());
-  Println("after checking wifi status lcd function");
   display.print("   ");
   display.print(String(messages_in_inbox));
   display.print("   ");
@@ -819,10 +816,9 @@ bool change_Detector(int newValue, int previousValue, int margin) {
 }
 
 String getVariablesValues() {
-  return String(
-      (String(displayWorking ? "Display on" : "Display off") + ", " +
-       String(ultraSoundWorking ? "ultraSound on" : "ultraSound off") + ", " +
-       String(wifiWorking ? "wifi on" : "wifi off")));
+  return String((String(displayWorking ? "Display on" : "Display off") + ", " +
+                 String(UltraSoundAlerts ? "ultraSound on" : "ultraSound off") +
+                 ", " + String(wifiWorking ? "wifi on" : "wifi off")));
 }
 
 void updateVariablesValues(String str) {
@@ -837,9 +833,9 @@ void updateVariablesValues(String str) {
           str.substring(str.indexOf("<ultra sound alerts") + 20,
                         str.indexOf("<ultra sound alerts") + 22);
       if (forUltraSound.indexOf("0") != -1) {
-        ultraSoundWorking = false;
+        UltraSoundAlerts = false;
       } else if (forUltraSound.indexOf("1") != -1) {
-        ultraSoundWorking = true;
+        UltraSoundAlerts = true;
       }
     }
     if (str.indexOf("display") != -1) {

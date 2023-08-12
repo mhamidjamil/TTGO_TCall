@@ -830,9 +830,6 @@ void lcd_print() {
   display.setTextSize(1);
   display.setCursor(0, 0);
   // Display static text
-  Println("before checking wifi status lcd function");
-  drawWifiSymbol(wifi_connected());
-  Println("after checking wifi status lcd function");
   display.print("   ");
   display.print(String(messages_in_inbox));
   display.print("   ");
