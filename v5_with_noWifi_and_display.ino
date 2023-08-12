@@ -4,39 +4,16 @@
 
 //`===================================
 #include <DHT.h>
-#include <ThingSpeak.h>
-#include <WiFi.h>
 #include <Wire.h>
 #include <random>
-
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
 // Initialize the DHT11 sensor
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
 
-// ThingSpeak parameters
-const char *ssid = "Archer 73";
-const char *password = "Archer@73_102#";
-const unsigned long channelID = 2201589;
-const char *apiKey = "Q3TSTOM87EUBNOAE";
-#define ThingSpeakEnable true
-
 unsigned long updateInterval = 2 * 60;
 unsigned long previousUpdateTime = 0;
 unsigned int last_update = 0; // in seconds
-WiFiClient client;
-
-String END_VALUES = "  ";
-String line_1 = "Temp: 00.0 C";
-String line_2 = "                ";
-
-void connect_wifi();
-void lcd_print();
 const int LED = 13;
 //`===================================
 
@@ -63,8 +40,6 @@ String MOBILE_No = "+923354888420";
 
 #define IP5306_ADDR 0x75
 #define IP5306_REG_SYS_CTL0 0x00
-
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 #define SerialMon Serial
 #define SerialAT Serial1
@@ -116,9 +91,8 @@ int multiVar = 0;
 float temperature;
 int humidity;
 
-bool ultraSoundWorking = true;
+bool UltraSoundAlerts = true;
 bool wifiWorking = true;
-bool displayWorking = true;
 // unsigned int debuggerTimeFlag = x;
 //` in seconds if user enable debugging then it will disable after x seconds
 
@@ -149,34 +123,10 @@ void setup() {
 
   updateVariablesValues(readMessage(1));
 
-  Println("Before Display functionality");
-  //`...............................
-
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
-    Serial.println(F("SSD1306 allocation failed"));
-    for (;;)
-      ;
-  }
-  delay(2000);
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0, 0);
-  // Display static text
-  display.println("Hello, world!  " + String(random(99)));
-  display.display();
-  delay(500);
+  Println("DHT 11");
   dht.begin(); // Initialize the DHT11 sensor
-  connect_wifi();
-  Println("after wifi connection");
   pinMode(LED, OUTPUT);
   delay(100);
-  if (ThingSpeakEnable) {
-    Println("\nThinkSpeak initializing...\n");
-    ThingSpeak.begin(client); // Initialize ThingSpeak
-    ThingSpeak.setField(4, random(10, 31));
-  }
-  END_VALUES.setCharAt(1, '#');
   messages_in_inbox = totalUnreadMessages();
   updateBatteryParameters(updateBatteryStatus());
   //`...............................
@@ -259,35 +209,9 @@ void loop() {
   humidity = dht.readHumidity();
   char temperatureStr[5];
   dtostrf(temperature, 4, 1, temperatureStr);
-
-  line_1 =
-      line_1.substring(0, 6) + String(temperatureStr) + " C  " + END_VALUES;
-
-  line_2 = "Hu: " + String(humidity) + " % / " + get_time();
-  Println("before lcd update");
-  delay(100);
-  if (displayWorking)
-    lcd_print();
-  Println("after lcd update");
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
     delay(100);
     previousUpdateTime = (millis() / 1000);
-    if (ThingSpeakEnable && wifiWorking) {
-      Println("before thingspeak update");
-      updateThingSpeak(temperature, humidity);
-      Println("After thingspeak update");
-    }
-    if (displayWorking) {
-      messages_in_inbox = totalUnreadMessages();
-      delay(100);
-
-      if (batteryUpdateAfter >= 5) {
-        updateBatteryParameters(updateBatteryStatus());
-        batteryUpdateAfter = 0;
-      } else {
-        batteryUpdateAfter++;
-      }
-    }
     if ((millis() / 1000) % 300 == 0) // after every 5 minutes
       terminateLastMessage();
   }
@@ -296,7 +220,7 @@ void loop() {
   //`..................................
 
   // #----------------------------------
-  if (ultraSoundWorking) {
+  if (UltraSoundAlerts) {
     int previousValue = distance;
     update_distance();
     delay(100);
@@ -325,6 +249,7 @@ void loop() {
     DEBUGGING = false;
   }
 }
+
 void println(String str) { SerialMon.println(str); }
 void Println(String str) {
   if (DEBUGGING) {
@@ -481,7 +406,8 @@ String removeOk(String str) {
 }
 
 String executeCommand(String str) {
-  //~ additional commands will be executed here so define new sms commands here
+  //~ additional commands will be executed here so define new sms commands
+  // here
   if (str.indexOf("<executed>") != -1 || str.indexOf("<not executed>") != -1) {
     println("-> Already executed <-");
     return str;
@@ -750,148 +676,6 @@ bool messageExists(int index) {
 
 //`..................................
 
-void updateThingSpeak(float temperature, int humidity) {
-  Println("entering thingspeak function");
-  ThingSpeak.setField(1, temperature); // Set temperature value
-  ThingSpeak.setField(2, humidity);    // Set humidity value
-  Println("After setting up fields");
-
-  int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
-  if (updateStatus == 200) {
-    println("ThingSpeak update successful");
-    SUCCESS_MSG();
-  } else {
-    print("Error updating ThingSpeak. Status: ");
-    println(String(updateStatus));
-    ERROR_MSG();
-  }
-  Println("leaving thingspeak function");
-}
-
-void SUCCESS_MSG() {
-  // set curser to first row, first last column and print "tick symbol"
-  digitalWrite(LED, HIGH);
-  END_VALUES.setCharAt(1, '+');
-  last_update = (millis() / 1000);
-  if (updateInterval > 2 * 60)
-    updateInterval = 2 * 60;
-}
-
-void ERROR_MSG() {
-  // set curser to first row, first last column and print "tick symbol"
-  digitalWrite(LED, LOW);
-  END_VALUES.setCharAt(1, '-');
-  if (updateInterval < 60 * 30)
-    updateInterval *= 2;
-  else
-    END_VALUES.setCharAt(1, 'e');
-  connect_wifi();
-}
-
-void connect_wifi() {
-  if (String(ssid).indexOf("skip") != -1 && wifiWorking) {
-    END_VALUES.setCharAt(0, 'Z');
-    return;
-  }
-  WiFi.begin(ssid, password); // Connect to Wi-Fi
-  int i = 0;
-  while (!wifi_connected()) {
-    if (i > 10) {
-      println("Timeout: Unable to connect to WiFi");
-      break;
-    }
-    delay(500);
-    i++;
-    END_VALUES.setCharAt(0, '?');
-    delay(500);
-    END_VALUES.setCharAt(0, ' ');
-  }
-  if (wifi_connected()) {
-    END_VALUES.setCharAt(0, '*');
-    println("Wi-Fi connected successfully");
-  } else {
-    END_VALUES.setCharAt(0, '!');
-    digitalWrite(LED, LOW);
-  }
-}
-
-bool wifi_connected() {
-  if (WiFi.status() == WL_CONNECTED) {
-    return true;
-  } else {
-    return false;
-  }
-}
-
-void lcd_print() {
-  Println("entering lcd function");
-  display.clearDisplay();
-  Println("second line of lcd function");
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  // Display static text
-  Println("before checking wifi status lcd function");
-  drawWifiSymbol(wifi_connected());
-  Println("after checking wifi status lcd function");
-  display.print("   ");
-  display.print(String(messages_in_inbox));
-  display.print("   ");
-  display.print(batteryPercentage);
-  display.print("%");
-  display.print("   ");
-  display.print(batteryVoltage);
-  display.print("V");
-
-  display.setCursor(0, 20);
-  display.print(line_1);
-
-  display.setCursor(0, 40);
-  display.print(line_2);
-
-  display.display();
-  delay(1000);
-  Println("leaving lcd function");
-}
-
-String get_time() {
-  unsigned int sec = (millis() / 1000) - last_update;
-  if (sec < 60) {
-    return (String(sec) + " s");
-  } else if ((sec >= 60) && (sec < 3600)) { // deal one hour
-    return (String(sec / 60) + " m " + String(sec % 60) + " s");
-  } else if ((sec >= 3600) && (sec < 86400)) { // deal one day
-    return (String(sec / 3600) + " h " + String((sec % 3600) / 60) + " m  " +
-            String(sec % 60) + " s");
-  } else if ((sec >= 86400) && (sec < 604800)) { // deal one week
-    return (String(sec / 86400) + " d " + String((sec % 86400) / 3600) + " h " +
-            String((sec % 3600) / 60) + " m " + String(sec % 60) + " s");
-  } else {
-    println("Issue spotted sec value: " + String(sec));
-    sendSms("Got problem in time function time overflow (or module runs for "
-            "more than a week want to reboot send #reboot sms)");
-    return String(-1);
-  }
-  return "X";
-}
-
-const unsigned char wifiSymbol[] PROGMEM = {B00000000, B01111110, B10000001,
-                                            B01111100, B10000010, B00111000,
-                                            B01000100, B00010000};
-
-const unsigned char questionMark[] PROGMEM = {B00111000, B01000100, B10000010,
-                                              B00000100, B00001000, B00010000,
-                                              B00010000, B0001000};
-
-void drawWifiSymbol(bool isConnected) {
-
-  if (!isConnected) {
-    display.setCursor(0, 0);
-    display.print("X");
-  } else
-    display.drawBitmap(0, 0, wifiSymbol, 8, 8, WHITE);
-}
-//`..................................
-
 // #---------------------------------
 
 void update_distance() {
@@ -922,10 +706,8 @@ bool change_Detector(int newValue, int previousValue, int margin) {
 }
 
 String getVariablesValues() {
-  return String(
-      (String(displayWorking ? "Display on" : "Display off") + ", " +
-       String(ultraSoundWorking ? "ultraSound on" : "ultraSound off") + ", " +
-       String(wifiWorking ? "wifi on" : "wifi off")));
+  return String(String(UltraSoundAlerts ? "ultraSound on" : "ultraSound off") +
+                ", " + String(wifiWorking ? "wifi on" : "wifi off"));
 }
 
 void updateVariablesValues(String str) {
@@ -940,20 +722,20 @@ void updateVariablesValues(String str) {
           str.substring(str.indexOf("<ultra sound alerts") + 20,
                         str.indexOf("<ultra sound alerts") + 22);
       if (forUltraSound.indexOf("0") != -1) {
-        ultraSoundWorking = false;
+        UltraSoundAlerts = false;
       } else if (forUltraSound.indexOf("1") != -1) {
-        ultraSoundWorking = true;
+        UltraSoundAlerts = true;
       }
     }
-    if (str.indexOf("display") != -1) {
-      String forDisplay = str.substring(str.indexOf("<display") + 9,
-                                        str.indexOf("<display") + 11);
-      if (forDisplay.indexOf("0") != -1) {
-        displayWorking = false;
-      } else if (forDisplay.indexOf("1") != -1) {
-        displayWorking = true;
-      }
-    }
+    // if (str.indexOf("display") != -1) {
+    //   String forDisplay = str.substring(str.indexOf("<display") + 9,
+    //                                     str.indexOf("<display") + 11);
+    //   if (forDisplay.indexOf("0") != -1) {
+    //     displayWorking = false;
+    //   } else if (forDisplay.indexOf("1") != -1) {
+    //     displayWorking = true;
+    //   }
+    // }
     if (str.indexOf("wifi") != -1) {
       String forWifi = str.substring(str.indexOf("<wifi connectivity") + 19,
                                      str.indexOf("<wifi connectivity") + 21);
