@@ -1,6 +1,6 @@
-//$ last work 12/August/23 [7:16 AM]
-// # version 5.1.3
-// variables will be update automatically in setup using 1st message
+//$ last work 12/August/23 [4:15 PM]
+// # version 5.1.4
+// ultra sound messages alerts are enabled
 
 //`===================================
 #include <DHT.h>
@@ -191,6 +191,14 @@ void loop() {
     } else if (command.indexOf("update") != -1) {
       updateVariablesValues(readMessage(
           (command.substring(command.indexOf("update") + 7, -1)).toInt()));
+    } else if (command.indexOf("ultrasound") != -1) {
+      if (command.indexOf("enable") != -1) {
+        UltraSoundAlerts = true;
+        println("UltraSoundAlerts Enabled");
+      } else if (command.indexOf("disable") != -1) {
+        UltraSoundAlerts = false;
+        println("UltraSoundAlerts Disabled");
+      }
     } else {
       println("Executing: " + command);
       say(command);
@@ -220,28 +228,28 @@ void loop() {
   //`..................................
 
   // #----------------------------------
-  if (UltraSoundAlerts) {
-    int previousValue = distance;
-    update_distance();
+  int previousValue = distance;
+  update_distance();
+  delay(100);
+  int newValue = distance;
+  Println("checking distance status");
+  if (change_Detector(abs(newValue), abs(previousValue), 2)) {
     delay(100);
-    int newValue = distance;
-    Println("checking distance status");
-    if (change_Detector(abs(newValue), abs(previousValue), 2)) {
-      delay(100);
-      if (distance < 0) {
-        println("Distance  : " + String(abs(distance)) + " inches");
-        String temp_msg =
-            "Motion detected by sensor new value : " + String(abs(newValue)) +
-            " previous value : " + String(abs(previousValue));
-        // sendSms(temp_msg);
-        distance *= -1;
-      } else {
-        println("Distance  : " + String(abs(distance)) + " inches (ignored)");
-        distance *= -1;
-        // println("*__________*");
-      }
+    if (distance < 0) {
+      println("Distance  : " + String(abs(distance)) + " inches");
+      String temp_msg =
+          "Motion detected by sensor new value : " + String(abs(newValue)) +
+          " previous value : " + String(abs(previousValue));
+      if (UltraSoundAlerts)
+        sendSms(temp_msg);
+      distance *= -1;
+    } else {
+      println("Distance  : " + String(abs(distance)) + " inches (ignored)");
+      distance *= -1;
+      // println("*__________*");
     }
   }
+
   delay(1000);
   Println("loop end");
   if ((millis() / 1000) > 130 && DEBUGGING) {
