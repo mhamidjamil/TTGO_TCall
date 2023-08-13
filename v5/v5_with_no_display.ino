@@ -1,5 +1,5 @@
-//$ last work 12/August/23 [7:16 AM]
-// # version 5.1.3
+//$ last work 13/August/23 [11:03 AM]
+// # version 5.1.4
 // variables will be update automatically in setup using 1st message
 
 //`===================================
@@ -257,26 +257,25 @@ void loop() {
   //`..................................
 
   // #----------------------------------
-  if (UltraSoundAlerts) {
-    int previousValue = distance;
-    update_distance();
+  int previousValue = distance;
+  update_distance();
+  delay(100);
+  int newValue = distance;
+  Println("checking distance status");
+  if (change_Detector(abs(newValue), abs(previousValue), 2)) {
     delay(100);
-    int newValue = distance;
-    Println("checking distance status");
-    if (change_Detector(abs(newValue), abs(previousValue), 2)) {
-      delay(100);
-      if (distance < 0) {
-        println("Distance  : " + String(abs(distance)) + " inches");
-        String temp_msg =
-            "Motion detected by sensor new value : " + String(abs(newValue)) +
-            " previous value : " + String(abs(previousValue));
-        // sendSms(temp_msg);
-        distance *= -1;
-      } else {
-        println("Distance  : " + String(abs(distance)) + " inches (ignored)");
-        distance *= -1;
-        // println("*__________*");
-      }
+    if (distance < 0) {
+      println("Distance  : " + String(abs(distance)) + " inches");
+      String temp_msg =
+          "Motion detected by sensor new value : " + String(abs(newValue)) +
+          " previous value : " + String(abs(previousValue));
+      if (UltraSoundAlerts)
+        sendSms(temp_msg);
+      distance *= -1;
+    } else {
+      println("Distance  : " + String(abs(distance)) + " inches (ignored)");
+      distance *= -1;
+      // println("*__________*");
     }
   }
   delay(1000);

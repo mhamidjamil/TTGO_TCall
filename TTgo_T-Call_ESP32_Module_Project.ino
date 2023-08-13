@@ -1,5 +1,6 @@
-//$ last work 5/August/23 [11:14 PM]
-// # version 5.1.2
+//$ last work 13/August/23 [11:43 PM]
+// # version 5.1
+//$ Stable till 13/AUgust/2023
 
 //`===================================
 #include <DHT.h>
@@ -48,7 +49,6 @@ String MOBILE_No = "+923354888420";
 #define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
 
 #include <TinyGsmClient.h>
-#include <Wire.h>
 
 // TTGO T-Call pins
 #define MODEM_RST 5
@@ -112,6 +112,9 @@ int currentTargetIndex = 0;
 long duration;    // variable for the duration of sound wave travel
 int distance = 0; // variable for the distance measurement
 bool DEBUGGING = true;
+bool ultraSoundWorking = true;
+bool wifiWorking = true;
+bool displayWorking = true;
 // unsigned int debuggerTimeFlag = x;
 //` in seconds if user enable debugging then it will disable after x seconds
 
@@ -159,7 +162,7 @@ void setup() {
   display.setTextColor(WHITE);
   display.setCursor(0, 0);
   // Display static text
-  display.println("Hello, world!" + String(random(99)));
+  display.println("Hello, world! " + String(random(99)));
   display.display();
   delay(500);
   dht.begin(); // Initialize the DHT11 sensor
@@ -261,7 +264,7 @@ void loop() {
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
     delay(100);
     previousUpdateTime = (millis() / 1000);
-    if (ThingSpeakEnable) {
+    if (ThingSpeakEnable && wifiWorking) {
       Println("before thingspeak update");
       updateThingSpeak(temperature, humidity);
       Println("After thingspeak update");
@@ -756,6 +759,10 @@ void ERROR_MSG() {
   // set curser to first row, first last column and print "tick symbol"
   digitalWrite(LED, LOW);
   END_VALUES.setCharAt(1, '-');
+  if (updateInterval < 60 * 30)
+    updateInterval *= 2;
+  else
+    END_VALUES.setCharAt(1, 'e');
   connect_wifi();
 }
 
@@ -774,17 +781,14 @@ void connect_wifi() {
     delay(500);
     i++;
     END_VALUES.setCharAt(0, '?');
-    lcd_print();
     delay(500);
     END_VALUES.setCharAt(0, ' ');
   }
-  println("Wi-Fi connected successfully");
   if (wifi_connected()) {
     END_VALUES.setCharAt(0, '*');
-    lcd_print();
+    println("Wi-Fi connected successfully");
   } else {
     END_VALUES.setCharAt(0, '!');
-    lcd_print();
     digitalWrite(LED, LOW);
   }
 }
@@ -883,11 +887,14 @@ void update_distance() {
   delayMicroseconds(10);
   digitalWrite(trigPin, LOW);
   duration = pulseIn(echoPin, HIGH);
-  if (distance > 0) {
-    distance = duration * 0.034 / 2;
-  } else {
-    distance = duration * 0.034 / 2;
-    distance *= -1;
+  int tempDistance = duration * 0.034 / 2;
+  if (tempDistance < 1000) { // ignore unwanted readings
+    if (distance > 0) {
+      distance = tempDistance;
+    } else {
+      distance = tempDistance;
+      distance *= -1;
+    }
   }
 }
 

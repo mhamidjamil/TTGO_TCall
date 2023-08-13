@@ -1,9 +1,15 @@
-//$ last work 12/August/23 [7:16 AM]
-// # version 5.1.3
-// variables will be update automatically in setup using 1st message
+//$ last work 13/August/23 [11:03 AM]
+// # version 5.1.4
+// display is still causing problem
 
 //`===================================
+
+// Configure TinyGSM library
+#define TINY_GSM_MODEM_SIM800   // Modem is SIM800
+#define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
+
 #include <DHT.h>
+#include <TinyGsmClient.h>
 #include <Wire.h>
 #include <random>
 
@@ -32,13 +38,6 @@ const int LED = 13;
 const char simPIN[] = "";
 
 String MOBILE_No = "+923354888420";
-
-// Configure TinyGSM library
-#define TINY_GSM_MODEM_SIM800   // Modem is SIM800
-#define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
-
-#include <TinyGsmClient.h>
-#include <Wire.h>
 
 // TTGO T-Call pins
 #define MODEM_RST 5
@@ -825,6 +824,7 @@ void updateVariablesValues(String str) {
   int newValues = findOccurrences(str, "<");
   if (newValues == 0) {
     println("No new value to be update");
+    println("Input : [" + str + "]");
     return;
   } else {
     println("Updating " + String(newValues) + " values");
