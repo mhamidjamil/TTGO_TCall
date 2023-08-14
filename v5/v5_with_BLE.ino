@@ -1,9 +1,6 @@
 //$ last work 14/August/23 [11:15 PM]
 // # version 5.1.6
-// module flow adjusted, termination of messages are now working fine
-//! getResponse() is causing a problem try to use try catch if possible
-//` All messages are fetched more then 5 times in 1st 2 minutes :FIX_IT
-
+// ! attempt failed because of global variable space issue
 const char simPIN[] = "";
 
 String MOBILE_No = "+923354888420";
@@ -19,6 +16,10 @@ String MOBILE_No = "+923354888420";
 #include <ThingSpeak.h>
 #include <WiFi.h>
 #include <random>
+
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
 
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -174,9 +175,39 @@ String getVariablesValues();
 void updateVariablesValues(String str);
 int findOccurrences(String str, String target);
 void wait(unsigned int seconds);
+void inputManager(String input);
 // # ......... < functions .......
 
 //! * # # # # # # # # # # # # * !
+
+BLEServer *pServer = NULL;
+BLECharacteristic *pCharacteristic = NULL;
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+std::string receivedData = "";
+
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *pServer) { deviceConnected = true; }
+
+  void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
+};
+
+void inputManager(String input);
+class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) {
+    std::string value = pCharacteristic->getValue();
+    if (value.length() > 0) {
+      receivedData = value;
+      Serial.print("Received from BLE: ");
+      Serial.println(receivedData.c_str());
+      inputManager(String(receivedData.c_str()));
+
+      // Print the received data back to the BLE connection
+      pCharacteristic->setValue("BLE: " + receivedData);
+      pCharacteristic->notify();
+    }
+  }
+};
 
 void setup() {
   SerialMon.begin(115200);
@@ -214,7 +245,7 @@ void setup() {
       display.setTextColor(WHITE);
       display.setCursor(0, 0);
       // Display static text
-      display.println("Boot Code :  " + String(random(99)));
+      display.println("Hello, world!  " + String(random(99)));
       display.display();
       delay(500);
     }
@@ -266,6 +297,31 @@ void setup() {
   pinMode(echoPin, INPUT);  // Sets the echoPin as an INPUT
   Println("leaving setup...");
   delay(3000);
+
+  Println("BLE code start");
+
+  BLEDevice::init("TTGO T-Call BLE");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  BLEService *pService = pServer->createService(
+      BLEUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b")); // Custom service UUID
+  pCharacteristic = pService->createCharacteristic(
+      BLEUUID(
+          "beb5483e-36e1-4688-b7f5-ea07361b26a8"), // Custom characteristic UUID
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+
+  pService->start();
+
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(pService->getUUID());
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06); // sets the minimum advertising interval
+  BLEDevice::startAdvertising();
+
+  println("Waiting for Bluetooth connection...");
+  Println("BLE code end");
 }
 
 void loop() {
@@ -411,6 +467,20 @@ void loop() {
     wait(5000);
     updateVariablesValues(readMessage(1));
   }
+
+  Println("BLE part (start) in loop");
+  if (deviceConnected) {
+    if (!oldDeviceConnected) {
+      Serial.println("Connected to device");
+      oldDeviceConnected = true;
+    }
+  } else {
+    if (oldDeviceConnected) {
+      Serial.println("Disconnected from device");
+      oldDeviceConnected = false;
+    }
+  }
+  Println("BLE part (end) in loop");
 }
 
 void println(String str) { SerialMon.println(str); }
@@ -505,6 +575,7 @@ String getResponse() {
   delay(100);
   String response = "";
   if ((SerialAT.available() > 0)) {
+    Println("reading serial data");
     response += SerialAT.readString();
   }
   Println("After while loop in get response");
@@ -846,6 +917,7 @@ int getMessageNumberBefore(int messageNumber) {
 }
 
 int firstMessageIndex() {
+  // ! function will be remove in V6 (there will be a message at 1st index)
   say("AT+CMGL=\"ALL\"");
   String response = getResponse();
   int targetValue =
@@ -1127,5 +1199,15 @@ void wait(unsigned int seconds) { // most important task will be executed here
       delay(1000);
     }
     delay(5);
+  }
+}
+
+void inputManager(String input) {
+  if (input == "test") {
+    println("defined word: test");
+  } else if (input.indexOf("#run") != -1) {
+    println("HID function will be call here");
+  } else {
+    println("undefined word : " + input);
   }
 }
