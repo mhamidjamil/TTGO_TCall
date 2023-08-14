@@ -260,7 +260,7 @@ void setup() {
 
 void loop() {
   Println("in loop");
-  wait(100);
+  delay(100);
   if (SerialMon.available()) {
     String command = SerialMon.readString();
     if (command.indexOf("smsTo") != -1) {
@@ -306,7 +306,7 @@ void loop() {
       say("AT+CHUP");
     } else if (command.indexOf("debug") != -1) {
       DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
-      wait(50);
+      delay(50);
       println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
     } else if (command.indexOf("status") != -1) {
       println(getVariablesValues());
@@ -325,7 +325,7 @@ void loop() {
   if (SerialAT.available() > 0)
     Serial.println(getResponse());
   Println("after AT check");
-  wait(100);
+  delay(100);
   //`..................................
   temperature = dht.readTemperature();
   humidity = dht.readHumidity();
@@ -340,14 +340,14 @@ void loop() {
 
   line_2 = "Hu: " + String(humidity) + " % / " + get_time();
   Println("before lcd update");
-  wait(100);
+  delay(100);
   if (displayWorking)
     lcd_print();
   Println("after lcd update");
 
   if (ThingSpeakEnable && wifiWorking && wifi_connected() &&
       (((millis() / 1000) - previousUpdateTime) >= updateInterval)) {
-    wait(100);
+    delay(100);
     previousUpdateTime = (millis() / 1000);
     Println("before thingspeak update");
     updateThingSpeak(temperature, humidity);
@@ -356,7 +356,7 @@ void loop() {
 
   if (displayWorking) {
     messages_in_inbox = totalUnreadMessages();
-    wait(100);
+    delay(100);
     if (batteryUpdateAfter >= 5) {
       updateBatteryParameters(updateBatteryStatus());
       batteryUpdateAfter = 0;
