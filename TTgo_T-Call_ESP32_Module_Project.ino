@@ -153,9 +153,6 @@ void setup() {
       ;
   }
   delay(2000);
-
-  pinMode(DISPLAY_POWER_PIN, OUTPUT);
-  digitalWrite(DISPLAY_POWER_PIN, HIGH);
   display.clearDisplay();
 
   display.setTextSize(1);
@@ -869,10 +866,12 @@ const unsigned char questionMark[] PROGMEM = {B00111000, B01000100, B10000010,
                                               B00010000, B0001000};
 
 void drawWifiSymbol(bool isConnected) {
-
   if (!isConnected) {
     display.setCursor(0, 0);
-    display.print("X");
+    if (!wifiWorking)
+      display.print("X");
+    else
+      display.print("D");
   } else
     display.drawBitmap(0, 0, wifiSymbol, 8, 8, WHITE);
 }

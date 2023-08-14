@@ -517,6 +517,7 @@ String executeCommand(String str) {
     digitalWrite(switchNumber, LOW);
   } else if (str.indexOf("#reboot") != -1) {
     println("Rebooting...");
+    str += " <executed>";
     modem.restart();
   } else if (str.indexOf("#smsTo") != -1) {
     // smsto [sms here] {number here}
@@ -525,6 +526,7 @@ String executeCommand(String str) {
     sendSMS(strSms, strNumber);
     str += " <executed>";
   } else if (str.indexOf("#terminator") != -1) {
+    str += " <executed>";
     terminateLastMessage();
   } else if (str.indexOf("#allMsg") != -1) {
     println("Reading and forwarding all messages..");
@@ -883,10 +885,12 @@ const unsigned char questionMark[] PROGMEM = {B00111000, B01000100, B10000010,
                                               B00010000, B0001000};
 
 void drawWifiSymbol(bool isConnected) {
-
   if (!isConnected) {
     display.setCursor(0, 0);
-    display.print("X");
+    if (!wifiWorking)
+      display.print("X");
+    else
+      display.print("D");
   } else
     display.drawBitmap(0, 0, wifiSymbol, 8, 8, WHITE);
 }
