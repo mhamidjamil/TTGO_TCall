@@ -1,6 +1,6 @@
-//$ last work 14/August/23 [11:15 PM]
-// # version 5.1.6
-// module flow adjusted, termination of messages are now working fine
+//$ last work 15/August/23 [06:32 AM]
+// # version 5.1.7
+// unable to terminate message at 0 index issue solved
 //! getResponse() is causing a problem try to use try catch if possible
 //` All messages are fetched more then 5 times in 1st 2 minutes :FIX_IT
 
@@ -745,7 +745,7 @@ int totalUnreadMessages() {
 
 void terminateLastMessage() {
   currentTargetIndex = getLastIndexToTerminate();
-  if (currentTargetIndex == firstMessageIndex() || currentTargetIndex == 1)
+  if (currentTargetIndex == firstMessageIndex() || currentTargetIndex <= 1)
     return;
   println("work index : " + String(currentTargetIndex));
   String temp_str = executeCommand(removeOk(readMessage(currentTargetIndex)));

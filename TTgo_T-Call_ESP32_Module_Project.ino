@@ -1,6 +1,9 @@
-//$ last work 12/August/23 [7:16 AM]
-// # version 5.1.5
-// variables position adjusted and more debug information added
+//$ last work 15/August/23 [06:32 AM]
+// # version 5.1.7
+// unable to terminate message at 0 index issue solved
+//! getResponse() is causing a problem try to use try catch if possible
+//` All messages are fetched more then 5 times in 1st 2 minutes :FIX_IT
+
 const char simPIN[] = "";
 
 String MOBILE_No = "+923354888420";
@@ -99,6 +102,14 @@ byte batteryUpdateAfter = 1; // 1 mean 2 minutes
 int messageStack[MAX_MESSAGES] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 int currentTargetIndex = 0;
 
+const unsigned char wifiSymbol[] PROGMEM = {B00000000, B01111110, B10000001,
+                                            B01111100, B10000010, B00111000,
+                                            B01000100, B00010000};
+
+const unsigned char questionMark[] PROGMEM = {B00111000, B01000100, B10000010,
+                                              B00000100, B00001000, B00010000,
+                                              B00010000, B0001000};
+
 long duration;    // variable for the duration of sound wave travel
 int distance = 0; // variable for the distance measurement
 
@@ -109,6 +120,62 @@ bool DEBUGGING = true;
 bool ultraSoundWorking = false;
 bool wifiWorking = false;
 bool displayWorking = true;
+int terminationTime = 60 * 5; // 5 minutes
+
+// # ......... functions > .......
+void println(String str);
+void Println(String str);
+void print(String str);
+void say(String str);
+void giveMissedCall();
+void call(String number);
+void sendSms(String sms);
+void sendSMS(String sms, String number);
+void updateSerial();
+void moduleManager();
+void getLastMessageAndIndex(String response, String &lastMessage,
+                            int &messageNumber);
+String getResponse();
+String simResponse();
+int getNewMessageNumber(String response);
+String readMessage(int index);
+void deleteMessage(int index);
+String removeOk(String str);
+String executeCommand(String str);
+String updateBatteryStatus();
+void updateBatteryParameters(String response);
+bool timeOut(unsigned int sec, unsigned int entrySec);
+void forwardMessage(int index);
+String getMobileNumberOfMsg(int index);
+String fetchDetails(String str, String begin_end, int padding);
+int totalUnreadMessages();
+void terminateLastMessage();
+bool checkStack(int messageNumber);
+int getIndex(int messageNumber);
+void arrangeStack();
+void deleteIndexFromStack(int messageNumber);
+int getLastIndexToTerminate();
+int lastMessageIndex();
+int getMessageNumberBefore(int messageNumber);
+int firstMessageIndex();
+String sendAllMessagesWithIndex();
+bool messageExists(int index);
+void connect_wifi();
+void updateThingSpeak(float temperature, int humidity);
+void SUCCESS_MSG();
+void ERROR_MSG();
+bool wifi_connected();
+void lcd_print();
+String get_time();
+void drawWifiSymbol(bool isConnected);
+void update_distance();
+bool change_Detector(int newValue, int previousValue, int margin);
+String getVariablesValues();
+void updateVariablesValues(String str);
+int findOccurrences(String str, String target);
+void wait(unsigned int seconds);
+// # ......... < functions .......
+
 //! * # # # # # # # # # # # # * !
 
 void setup() {
@@ -147,12 +214,14 @@ void setup() {
       display.setTextColor(WHITE);
       display.setCursor(0, 0);
       // Display static text
-      display.println("Hello, world!  " + String(random(99)));
+      display.println("Boot Code :  " + String(random(99)));
       display.display();
       delay(500);
     }
   }
+  delay(100);
   dht.begin(); // Initialize the DHT11 sensor
+  delay(100);
   Println("before wifi connection");
 
   if (wifiWorking) {
@@ -174,7 +243,7 @@ void setup() {
       println(String(WiFi.localIP()));
     }
   }
-
+  delay(500);
   Println("after wifi connection");
   pinMode(LED, OUTPUT);
   delay(100);
@@ -183,16 +252,20 @@ void setup() {
     ThingSpeak.begin(client); // Initialize ThingSpeak
   }
   Println("\nAfter ThingSpeak");
-  if (wifiWorking) {
+  if (displayWorking) {
     END_VALUES.setCharAt(1, '#');
+    delay(500);
     messages_in_inbox = totalUnreadMessages();
+    delay(500);
     updateBatteryParameters(updateBatteryStatus());
+    delay(500);
   }
   //`...............................
   // #-------------------------------
   pinMode(trigPin, OUTPUT); // Sets the trigPin as an OUTPUT
   pinMode(echoPin, INPUT);  // Sets the echoPin as an INPUT
-  Println("leaving setup");
+  Println("leaving setup...");
+  delay(3000);
 }
 
 void loop() {
@@ -281,28 +354,27 @@ void loop() {
   if (displayWorking)
     lcd_print();
   Println("after lcd update");
-  if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
+
+  if (ThingSpeakEnable && wifiWorking && wifi_connected() &&
+      (((millis() / 1000) - previousUpdateTime) >= updateInterval)) {
     delay(100);
     previousUpdateTime = (millis() / 1000);
-    if (ThingSpeakEnable && wifiWorking && wifi_connected()) {
-      Println("before thingspeak update");
-      updateThingSpeak(temperature, humidity);
-      Println("After thingspeak update");
-    }
-    if (displayWorking) {
-      messages_in_inbox = totalUnreadMessages();
-      delay(100);
-      if (batteryUpdateAfter >= 5) {
-        updateBatteryParameters(updateBatteryStatus());
-        batteryUpdateAfter = 0;
-      } else {
-        batteryUpdateAfter++;
-      }
-    }
-    if ((millis() / 1000) % 300 == 0) // after every 5 minutes
-      terminateLastMessage();
+    Println("before thingspeak update");
+    updateThingSpeak(temperature, humidity);
+    Println("After thingspeak update");
   }
-  delay(100);
+
+  if (displayWorking) {
+    messages_in_inbox = totalUnreadMessages();
+    delay(100);
+    if (batteryUpdateAfter >= 5) {
+      updateBatteryParameters(updateBatteryStatus());
+      batteryUpdateAfter = 0;
+    } else {
+      batteryUpdateAfter++;
+    }
+  }
+  wait(100);
   Println("after millis condition");
   //`..................................
 
@@ -310,11 +382,11 @@ void loop() {
   int previousValue = distance;
   update_distance();
   Println("After distance update");
-  delay(100);
+  wait(100);
   int newValue = distance;
   Println("checking distance status");
   if (change_Detector(abs(newValue), abs(previousValue), 2)) {
-    delay(100);
+    wait(100);
     if (distance < 0) {
       println("Distance  : " + String(abs(distance)) + " inches");
       String temp_msg =
@@ -330,16 +402,17 @@ void loop() {
       // println("*__________*");
     }
   }
-  delay(1000);
+  wait(1000);
   Println("loop end");
   if ((millis() / 1000) > 130 && DEBUGGING) {
     println("disabling DEBUGGING");
     DEBUGGING = false;
   } else if (((millis() / 1000) > 100) && (millis() / 1000) < 105) {
-    delay(5000);
+    wait(5000);
     updateVariablesValues(readMessage(1));
   }
 }
+
 void println(String str) { SerialMon.println(str); }
 void Println(String str) {
   if (DEBUGGING) {
@@ -364,7 +437,6 @@ void call(String number) {
 }
 
 void sendSms(String sms) {
-
   if (modem.sendSMS(MOBILE_No, sms)) {
     println("$send{" + sms + "}");
   } else {
@@ -385,7 +457,6 @@ void sendSMS(String sms, String number) {
 
 void updateSerial() {
   delay(100);
-
   while (SerialMon.available()) {
     SerialAT.write(SerialMon.read());
   }
@@ -434,7 +505,6 @@ String getResponse() {
   delay(100);
   String response = "";
   if ((SerialAT.available() > 0)) {
-    Println("reading serial data");
     response += SerialAT.readString();
   }
   Println("After while loop in get response");
@@ -675,7 +745,7 @@ int totalUnreadMessages() {
 
 void terminateLastMessage() {
   currentTargetIndex = getLastIndexToTerminate();
-  if (currentTargetIndex == firstMessageIndex())
+  if (currentTargetIndex == firstMessageIndex() || currentTargetIndex <= 1)
     return;
   println("work index : " + String(currentTargetIndex));
   String temp_str = executeCommand(removeOk(readMessage(currentTargetIndex)));
@@ -905,7 +975,7 @@ void lcd_print() {
   display.setCursor(0, 20);
   display.print(line_1);
 
-  display.setCursor(0, 40);
+  display.setCursor(0, 35);
   display.print(line_2);
 
   display.display();
@@ -934,14 +1004,6 @@ String get_time() {
   }
   return "X";
 }
-
-const unsigned char wifiSymbol[] PROGMEM = {B00000000, B01111110, B10000001,
-                                            B01111100, B10000010, B00111000,
-                                            B01000100, B00010000};
-
-const unsigned char questionMark[] PROGMEM = {B00111000, B01000100, B10000010,
-                                              B00000100, B00001000, B00010000,
-                                              B00010000, B0001000};
 
 void drawWifiSymbol(bool isConnected) {
   if (!isConnected) {
@@ -990,7 +1052,8 @@ String getVariablesValues() {
   return String(
       (String(displayWorking ? "Display on" : "Display off") + ", " +
        String(ultraSoundWorking ? "ultraSound on" : "ultraSound off") + ", " +
-       String(wifiWorking ? "wifi on" : "wifi off")));
+       String(wifiWorking ? "wifi on" : "wifi off")) +
+      "Termination time : " + String(terminationTime));
 }
 
 void updateVariablesValues(String str) {
@@ -1033,6 +1096,14 @@ void updateVariablesValues(String str) {
         }
       }
     }
+    if (str.indexOf("termination") != -1) {
+      String forTerminator =
+          str.substring(str.indexOf("<termination time") + 18,
+                        str.indexOf("<termination time") + 20);
+      print("\nTermination time updated: " + String(terminationTime) + " -> ");
+      terminationTime = forTerminator.toInt() * 60;
+      println(String(terminationTime));
+    }
   }
   println("msg : " + str + "\nAfter  update : ");
   println(getVariablesValues());
@@ -1045,4 +1116,16 @@ int findOccurrences(String str, String target) {
     occurrences++;
   }
   return occurrences;
+}
+
+void wait(unsigned int seconds) { // most important task will be executed here
+  for (int i = 0; (seconds > (i * 5)); i++) {
+    if ((millis() / 1000) % terminationTime == 0 &&
+        terminationTime > 0) // after every 5 minutes
+    {
+      terminateLastMessage();
+      delay(1000);
+    }
+    delay(5);
+  }
 }
