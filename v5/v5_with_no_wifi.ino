@@ -1,11 +1,23 @@
-//$ last work 12/August/23 [7:16 AM]
-// # version 5.1.3
-// variables will be update automatically in setup using 1st message
+//$ last work 13/August/23 [11:03 AM]
+// # version 5.1.4
+// display is still causing problem
 
 //`===================================
+
+// Configure TinyGSM library
+#define TINY_GSM_MODEM_SIM800   // Modem is SIM800
+#define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
+
 #include <DHT.h>
+#include <TinyGsmClient.h>
 #include <Wire.h>
 #include <random>
+
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
 // Initialize the DHT11 sensor
 #define DHTPIN 33 // Change the pin if necessary
@@ -14,19 +26,18 @@ DHT dht(DHTPIN, DHT11);
 unsigned long updateInterval = 2 * 60;
 unsigned long previousUpdateTime = 0;
 unsigned int last_update = 0; // in seconds
+
+String END_VALUES = "  ";
+String line_1 = "Temp: 00.0 C";
+String line_2 = "                ";
+
+void lcd_print();
 const int LED = 13;
 //`===================================
 
 const char simPIN[] = "";
 
 String MOBILE_No = "+923354888420";
-
-// Configure TinyGSM library
-#define TINY_GSM_MODEM_SIM800   // Modem is SIM800
-#define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
-
-#include <TinyGsmClient.h>
-#include <Wire.h>
 
 // TTGO T-Call pins
 #define MODEM_RST 5
@@ -40,6 +51,8 @@ String MOBILE_No = "+923354888420";
 
 #define IP5306_ADDR 0x75
 #define IP5306_REG_SYS_CTL0 0x00
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 #define SerialMon Serial
 #define SerialAT Serial1
@@ -91,8 +104,9 @@ int multiVar = 0;
 float temperature;
 int humidity;
 
-bool UltraSoundAlerts = true;
-bool wifiWorking = true;
+bool UltraSoundAlerts = false;
+bool wifiWorking = false;
+bool displayWorking = true;
 // unsigned int debuggerTimeFlag = x;
 //` in seconds if user enable debugging then it will disable after x seconds
 
@@ -123,10 +137,28 @@ void setup() {
 
   updateVariablesValues(readMessage(1));
 
-  Println("DHT 11");
+  Println("Before Display functionality");
+  //`...............................
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
+    Serial.println(F("SSD1306 allocation failed"));
+    for (;;)
+      ;
+  }
+  delay(2000);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, 0);
+  // Display static text
+  display.println("Hello, world!  " + String(random(99)));
+  display.display();
+  delay(500);
   dht.begin(); // Initialize the DHT11 sensor
   pinMode(LED, OUTPUT);
   delay(100);
+
+  END_VALUES.setCharAt(1, '#');
   messages_in_inbox = totalUnreadMessages();
   updateBatteryParameters(updateBatteryStatus());
   //`...............................
@@ -191,6 +223,14 @@ void loop() {
     } else if (command.indexOf("update") != -1) {
       updateVariablesValues(readMessage(
           (command.substring(command.indexOf("update") + 7, -1)).toInt()));
+    } else if (command.indexOf("ultrasound") != -1) {
+      if (command.indexOf("enable") != -1) {
+        UltraSoundAlerts = true;
+        println("UltraSoundAlerts Enabled");
+      } else if (command.indexOf("disable") != -1) {
+        UltraSoundAlerts = false;
+        println("UltraSoundAlerts Disabled");
+      }
     } else {
       println("Executing: " + command);
       say(command);
@@ -209,9 +249,30 @@ void loop() {
   humidity = dht.readHumidity();
   char temperatureStr[5];
   dtostrf(temperature, 4, 1, temperatureStr);
+
+  line_1 =
+      line_1.substring(0, 6) + String(temperatureStr) + " C  " + END_VALUES;
+
+  line_2 = "Hu: " + String(humidity) + " % / " + get_time();
+  Println("before lcd update");
+  delay(100);
+  if (displayWorking)
+    lcd_print();
+  Println("after lcd update");
   if (((millis() / 1000) - previousUpdateTime) >= updateInterval) {
     delay(100);
     previousUpdateTime = (millis() / 1000);
+    if (displayWorking) {
+      messages_in_inbox = totalUnreadMessages();
+      delay(100);
+
+      if (batteryUpdateAfter >= 5) {
+        updateBatteryParameters(updateBatteryStatus());
+        batteryUpdateAfter = 0;
+      } else {
+        batteryUpdateAfter++;
+      }
+    }
     if ((millis() / 1000) % 300 == 0) // after every 5 minutes
       terminateLastMessage();
   }
@@ -220,28 +281,28 @@ void loop() {
   //`..................................
 
   // #----------------------------------
-  if (UltraSoundAlerts) {
-    int previousValue = distance;
-    update_distance();
+  int previousValue = distance;
+  update_distance();
+  delay(100);
+  int newValue = distance;
+  Println("checking distance status");
+  if (change_Detector(abs(newValue), abs(previousValue), 2)) {
     delay(100);
-    int newValue = distance;
-    Println("checking distance status");
-    if (change_Detector(abs(newValue), abs(previousValue), 2)) {
-      delay(100);
-      if (distance < 0) {
-        println("Distance  : " + String(abs(distance)) + " inches");
-        String temp_msg =
-            "Motion detected by sensor new value : " + String(abs(newValue)) +
-            " previous value : " + String(abs(previousValue));
-        // sendSms(temp_msg);
-        distance *= -1;
-      } else {
-        println("Distance  : " + String(abs(distance)) + " inches (ignored)");
-        distance *= -1;
-        // println("*__________*");
-      }
+    if (distance < 0) {
+      println("Distance  : " + String(abs(distance)) + " inches");
+      String temp_msg =
+          "Motion detected by sensor new value : " + String(abs(newValue)) +
+          " previous value : " + String(abs(previousValue));
+      if (UltraSoundAlerts)
+        sendSms(temp_msg);
+      distance *= -1;
+    } else {
+      println("Distance  : " + String(abs(distance)) + " inches (ignored)");
+      distance *= -1;
+      // println("*__________*");
     }
   }
+
   delay(1000);
   Println("loop end");
   if ((millis() / 1000) > 130 && DEBUGGING) {
@@ -249,7 +310,6 @@ void loop() {
     DEBUGGING = false;
   }
 }
-
 void println(String str) { SerialMon.println(str); }
 void Println(String str) {
   if (DEBUGGING) {
@@ -406,8 +466,7 @@ String removeOk(String str) {
 }
 
 String executeCommand(String str) {
-  //~ additional commands will be executed here so define new sms commands
-  // here
+  //~ additional commands will be executed here so define new sms commands here
   if (str.indexOf("<executed>") != -1 || str.indexOf("<not executed>") != -1) {
     println("-> Already executed <-");
     return str;
@@ -676,6 +735,56 @@ bool messageExists(int index) {
 
 //`..................................
 
+void lcd_print() {
+  Println("entering lcd function");
+  display.clearDisplay();
+  Println("second line of lcd function");
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  // Display static text
+  display.print("   ");
+  display.print(String(messages_in_inbox));
+  display.print("   ");
+  display.print(batteryPercentage);
+  display.print("%");
+  display.print("   ");
+  display.print(batteryVoltage);
+  display.print("V");
+
+  display.setCursor(0, 20);
+  display.print(line_1);
+
+  display.setCursor(0, 40);
+  display.print(line_2);
+
+  display.display();
+  delay(1000);
+  Println("leaving lcd function");
+}
+
+String get_time() {
+  unsigned int sec = (millis() / 1000) - last_update;
+  if (sec < 60) {
+    return (String(sec) + " s");
+  } else if ((sec >= 60) && (sec < 3600)) { // deal one hour
+    return (String(sec / 60) + " m " + String(sec % 60) + " s");
+  } else if ((sec >= 3600) && (sec < 86400)) { // deal one day
+    return (String(sec / 3600) + " h " + String((sec % 3600) / 60) + " m  " +
+            String(sec % 60) + " s");
+  } else if ((sec >= 86400) && (sec < 604800)) { // deal one week
+    return (String(sec / 86400) + " d " + String((sec % 86400) / 3600) + " h " +
+            String((sec % 3600) / 60) + " m " + String(sec % 60) + " s");
+  } else {
+    println("Issue spotted sec value: " + String(sec));
+    sendSms("Got problem in time function time overflow (or module runs for "
+            "more than a week want to reboot send #reboot sms)");
+    return String(-1);
+  }
+  return "X";
+}
+
+//`..................................
+
 // #---------------------------------
 
 void update_distance() {
@@ -706,14 +815,16 @@ bool change_Detector(int newValue, int previousValue, int margin) {
 }
 
 String getVariablesValues() {
-  return String(String(UltraSoundAlerts ? "ultraSound on" : "ultraSound off") +
-                ", " + String(wifiWorking ? "wifi on" : "wifi off"));
+  return String((String(displayWorking ? "Display on" : "Display off") + ", " +
+                 String(UltraSoundAlerts ? "ultraSound on" : "ultraSound off") +
+                 ", " + String(wifiWorking ? "wifi on" : "wifi off")));
 }
 
 void updateVariablesValues(String str) {
   int newValues = findOccurrences(str, "<");
   if (newValues == 0) {
     println("No new value to be update");
+    println("Input : [" + str + "]");
     return;
   } else {
     println("Updating " + String(newValues) + " values");
@@ -727,15 +838,15 @@ void updateVariablesValues(String str) {
         UltraSoundAlerts = true;
       }
     }
-    // if (str.indexOf("display") != -1) {
-    //   String forDisplay = str.substring(str.indexOf("<display") + 9,
-    //                                     str.indexOf("<display") + 11);
-    //   if (forDisplay.indexOf("0") != -1) {
-    //     displayWorking = false;
-    //   } else if (forDisplay.indexOf("1") != -1) {
-    //     displayWorking = true;
-    //   }
-    // }
+    if (str.indexOf("display") != -1) {
+      String forDisplay = str.substring(str.indexOf("<display") + 9,
+                                        str.indexOf("<display") + 11);
+      if (forDisplay.indexOf("0") != -1) {
+        displayWorking = false;
+      } else if (forDisplay.indexOf("1") != -1) {
+        displayWorking = true;
+      }
+    }
     if (str.indexOf("wifi") != -1) {
       String forWifi = str.substring(str.indexOf("<wifi connectivity") + 19,
                                      str.indexOf("<wifi connectivity") + 21);
