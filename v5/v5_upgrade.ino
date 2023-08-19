@@ -322,11 +322,13 @@ void loop() {
       println("Rebooting...");
       modem.restart();
     } else if (command.indexOf("time") != -1) {
-      String tempTime =
-          "+CMGL: 1,\"REC "
-          "READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
-      println("dummy time : [" + tempTime + "]");
-      setTime(tempTime);
+      if (RTC.length() < 2) {
+        String tempTime =
+            "+CMGL: 1,\"REC "
+            "READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
+        println("dummy time : [" + tempTime + "]");
+        setTime(tempTime);
+      }
       println("Time String : " + RTC);
       // println(Time.Date);
       // println(Time.hour);
@@ -954,8 +956,8 @@ void lcd_print() {
   }
   display.print(batteryPercentage);
   display.print("%");
-  // display.print(" ");
-  // display.print(completeTime);
+  display.print(" ");
+  display.print(RTC);
 
   display.setCursor(0, 20);
   display.print(line_1);
@@ -1146,7 +1148,7 @@ void wait(unsigned int seconds) { // most important task will be executed here
       updateVariablesValues(readMessage(1));
       Println("\nValues are updated from message 1\n");
       delay(1000);
-      // sendSMS("#setTime", "+923374888420");
+      sendSMS("#setTime", "+923374888420");
       delay(1000);
       i += 2000;
       condition = true;
@@ -1164,8 +1166,11 @@ void wait(unsigned int seconds) { // most important task will be executed here
 
 void setTime(String timeOfMessage) {
   // +CMGL: 1,"REC READ","+923374888420","","23/08/14,17:21:05+20"
-  RTC = fetchDetails(timeOfMessage, ",\"" + String(YEAR) + "/", "\"", 1);
-  println("Fetched data from : " + timeOfMessage + "Final data : " + RTC);
+  RTC = fetchDetails(timeOfMessage, "\"23/", "\"", 1);
+  println(
+      "\n+++++++++++++++++++++++++++++++++++++++++++\n Fetched data from : " +
+      timeOfMessage + "\nFinal data : " + RTC +
+      "\n+++++++++++++++++++++++++++++++++++++++++++\n");
 }
 
 void setTime() {
@@ -1186,6 +1191,7 @@ String fetchDetails(String str, String begin, String end, int padding) {
   // padding remove the data around the required data if padding is 1 then it
   // will only remove the begin and end string/character
   String beginOfTarget = str.substring(str.indexOf(begin) + 1, -1);
+  Println("beginOfTarget : " + beginOfTarget);
   return beginOfTarget.substring(padding - 1,
                                  beginOfTarget.indexOf(end) - (padding - 1));
 }
