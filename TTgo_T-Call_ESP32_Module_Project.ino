@@ -1,8 +1,10 @@
-//$ last work 15/August/23 [06:32 AM]
-// # version 5.1.7
-// unable to terminate message at 0 index issue solved
+//$ last work 15/August/23 [10:35 PM]
+// # version 5.2
+// # record run time 3 hours and 25 minutes
 //! getResponse() is causing a problem try to use try catch if possible
+//! ultrasound values are not accurate
 //` All messages are fetched more then 5 times in 1st 2 minutes :FIX_IT
+//` use display last row as a debugging process.
 
 const char simPIN[] = "";
 
@@ -85,7 +87,6 @@ const unsigned long channelID = 2201589;
 const char *apiKey = "Q3TSTOM87EUBNOAE";
 
 unsigned long updateInterval = 2 * 60;
-unsigned long previousUpdateTime = 0;
 unsigned int last_update = 0; // in seconds
 WiFiClient client;
 
@@ -98,7 +99,6 @@ double batteryVoltage = 0;
 int batteryPercentage = 0;
 // another variable to store time in millis
 int messages_in_inbox = 0;
-byte batteryUpdateAfter = 1; // 1 mean 2 minutes
 int messageStack[MAX_MESSAGES] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 int currentTargetIndex = 0;
 
@@ -195,8 +195,11 @@ void setup() {
   delay(3000);
   println("Initializing modem...");
   modem.restart();
+  delay(300);
   modem.sendAT(GF("+CLIP=1"));
+  delay(300);
   modem.sendAT(GF("+CMGF=1"));
+  delay(300);
   pinMode(ALERT_PIN, OUTPUT);
   delay(1000);
 
@@ -264,8 +267,8 @@ void setup() {
   // #-------------------------------
   pinMode(trigPin, OUTPUT); // Sets the trigPin as an OUTPUT
   pinMode(echoPin, INPUT);  // Sets the echoPin as an INPUT
-  Println("leaving setup...");
-  delay(3000);
+  Println("Leaving setup with seconds : " + String(millis() / 1000));
+  delay(2000);
 }
 
 void loop() {
@@ -340,42 +343,22 @@ void loop() {
   temperature = dht.readTemperature();
   humidity = dht.readHumidity();
   Println("after DHT reading");
-  char temperatureStr[5];
-  dtostrf(temperature, 4, 1, temperatureStr);
-  Println("after DHT conversion");
-
-  line_1 =
-      line_1.substring(0, 6) + String(temperatureStr) + " C  " + END_VALUES;
-  Println("after line 1");
-
-  line_2 = "Hu: " + String(humidity) + " % / " + get_time();
-  Println("before lcd update");
-  delay(100);
-  if (displayWorking)
-    lcd_print();
-  Println("after lcd update");
-
-  if (ThingSpeakEnable && wifiWorking && wifi_connected() &&
-      (((millis() / 1000) - previousUpdateTime) >= updateInterval)) {
-    delay(100);
-    previousUpdateTime = (millis() / 1000);
-    Println("before thingspeak update");
-    updateThingSpeak(temperature, humidity);
-    Println("After thingspeak update");
-  }
-
   if (displayWorking) {
-    messages_in_inbox = totalUnreadMessages();
+    char temperatureStr[5];
+    dtostrf(temperature, 4, 1, temperatureStr);
+    Println("after DHT conversion");
+
+    line_1 = line_1.substring(0, 6) + String(temperatureStr) + " C  " +
+             END_VALUES + " " + String(millis() % 100);
+    Println("after line 1");
+
+    line_2 = "Hu: " + String(humidity) + " % / " + get_time();
+    Println("before lcd call");
     delay(100);
-    if (batteryUpdateAfter >= 5) {
-      updateBatteryParameters(updateBatteryStatus());
-      batteryUpdateAfter = 0;
-    } else {
-      batteryUpdateAfter++;
-    }
+    lcd_print();
   }
+  Println("after lcd update");
   wait(100);
-  Println("after millis condition");
   //`..................................
 
   // #----------------------------------
@@ -399,18 +382,10 @@ void loop() {
     } else {
       println("Distance  : " + String(abs(distance)) + " inches (ignored)");
       distance *= -1;
-      // println("*__________*");
     }
   }
   wait(1000);
   Println("loop end");
-  if ((millis() / 1000) > 130 && DEBUGGING) {
-    println("disabling DEBUGGING");
-    DEBUGGING = false;
-  } else if (((millis() / 1000) > 100) && (millis() / 1000) < 105) {
-    wait(5000);
-    updateVariablesValues(readMessage(1));
-  }
 }
 
 void println(String str) { SerialMon.println(str); }
@@ -1053,7 +1028,7 @@ String getVariablesValues() {
       (String(displayWorking ? "Display on" : "Display off") + ", " +
        String(ultraSoundWorking ? "ultraSound on" : "ultraSound off") + ", " +
        String(wifiWorking ? "wifi on" : "wifi off")) +
-      "Termination time : " + String(terminationTime));
+      " Termination time : " + String(terminationTime));
 }
 
 void updateVariablesValues(String str) {
@@ -1119,13 +1094,52 @@ int findOccurrences(String str, String target) {
 }
 
 void wait(unsigned int seconds) { // most important task will be executed here
+  bool condition = false;
   for (int i = 0; (seconds > (i * 5)); i++) {
     if ((millis() / 1000) % terminationTime == 0 &&
         terminationTime > 0) // after every 5 minutes
     {
+      println("after termination");
       terminateLastMessage();
-      delay(1000);
+      println("after termination");
+      condition = true;
     }
-    delay(5);
+    if (displayWorking) {
+      if ((millis() / 1000) % 100) {
+        Println("before display status work in wait function");
+        messages_in_inbox = totalUnreadMessages();
+        updateBatteryParameters(updateBatteryStatus());
+        condition = true;
+        Println("after display status work in wait function");
+      }
+    }
+    if (ThingSpeakEnable && wifiWorking &&
+        ((millis() / 1000) % updateInterval)) {
+      if (wifi_connected()) {
+        Println("before thingspeak update");
+        updateThingSpeak(temperature, humidity);
+        Println("After thingspeak update");
+        condition = true;
+      }
+    }
+    if ((millis() / 1000) > 130 && DEBUGGING) {
+      println("disabling DEBUGGING");
+      DEBUGGING = false;
+      condition = true;
+    }
+    if (((millis() / 1000) > 100) && (millis() / 1000) < 102) {
+      // it will just run at first time when system booted
+      Println("\nBefore updating values from message 1\n");
+      updateVariablesValues(readMessage(1));
+      Println("\nValues are updated from message 1\n");
+      delay(1050);
+      condition = true;
+    }
+
+    if (condition) {
+      delay(1000);
+      condition = false;
+    } else
+      delay(5);
   }
 }
