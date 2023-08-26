@@ -1,6 +1,7 @@
-//$ last work 26/August/23 [04:08 PM]
-// # version 5.2.3
-// # Release Note : Time is not fetched and store in RTC struct element
+//$ last work 26/August/23 [05:21 PM]
+// # version 5.2.4
+// # Release Note : RTC functionality is added completely
+// but not tested it completely
 
 //! ultrasound values are not accurate
 
@@ -121,6 +122,7 @@ int terminationTime = 60 * 5; // 5 minutes
 String rtc = "";              // real Time Clock
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
+  int milliSeconds = 0;
   int month = 0;
   int date = 0;
   int hour = 0;    // hour will be 05
@@ -178,10 +180,12 @@ bool change_Detector(int newValue, int previousValue, int margin);
 String getVariablesValues();
 void updateVariablesValues(String str);
 int findOccurrences(String str, String target);
-void wait(unsigned int seconds);
+void wait(unsigned int miliSeconds);
 void setTime(String timeOfMessage);
 void setTime(); // TODO: update time in real time
 String fetchDetails(String str, String begin_end, int padding);
+void updateRTC();
+void Delay(int milliSeconds);
 // # ......... < functions .......
 
 //! * # # # # # # # # # # # # * !
@@ -271,7 +275,7 @@ void setup() {
 
 void loop() {
   Println("in loop");
-  delay(100);
+  Delay(100);
   if (SerialMon.available()) {
     String command = SerialMon.readString();
     if (command.indexOf("smsTo") != -1) {
@@ -317,7 +321,7 @@ void loop() {
       say("AT+CHUP");
     } else if (command.indexOf("debug") != -1) {
       DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
-      delay(50);
+      Delay(50);
       println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
     } else if (command.indexOf("status") != -1) {
       println(getVariablesValues());
@@ -348,7 +352,7 @@ void loop() {
   if (SerialAT.available() > 0)
     Serial.println(getResponse());
   Println("after AT check");
-  delay(100);
+  Delay(100);
   //`..................................
   temperature = dht.readTemperature();
   humidity = dht.readHumidity();
@@ -364,7 +368,7 @@ void loop() {
 
     line_2 = "Hu: " + String(humidity) + " % / " + thingSpeakLastUpdate();
     Println("before lcd call");
-    delay(100);
+    Delay(100);
     lcd_print();
   }
   Println("after lcd update");
@@ -411,7 +415,7 @@ void say(String str) { SerialAT.println(str); }
 void giveMissedCall() {
   say("ATD+ " + MOBILE_No + ";");
   updateSerial();
-  // delay(20000);            // wait for 20 seconds...
+  // Delay(20000);            // wait for 20 seconds...
   // say("ATH"); // hang up
   // updateSerial();
 }
@@ -428,7 +432,7 @@ void sendSMS(String sms) {
     println("SMS failed to send");
     println("\n!send{" + sms + "}!\n");
   }
-  delay(500);
+  Delay(500);
 }
 
 void sendSMS(String sms, String number) {
@@ -437,11 +441,11 @@ void sendSMS(String sms, String number) {
   } else {
     println("SMS failed to send");
   }
-  delay(500);
+  Delay(500);
 }
 
 void updateSerial() {
-  delay(100);
+  Delay(100);
   while (SerialMon.available()) {
     SerialAT.write(SerialMon.read());
   }
@@ -487,7 +491,7 @@ void getLastMessageAndIndex(String response, String &lastMessage,
 
 String getResponse() {
   Println("entering getResponse");
-  delay(100);
+  Delay(100);
   String response = "";
   if ((SerialAT.available() > 0)) {
     response += SerialAT.readString();
@@ -614,7 +618,7 @@ String executeCommand(String str) {
   } else if (str.indexOf("#setting") != -1) {
     updateVariablesValues(str);
     deleteMessage(1);
-    delay(500);
+    Delay(500);
     sendSMS(str, "+923374888420");
     str += " <executed>";
   } else if (str.indexOf("#setTime") != -1) {
@@ -709,7 +713,7 @@ void terminateLastMessage() {
               temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
               " ] from : " + getMobileNumberOfMsg(String(currentTargetIndex)) +
               ", what to do ?");
-      delay(2000);
+      Delay(2000);
     }
   }
 }
@@ -838,9 +842,9 @@ void connect_wifi() {
       println("Timeout: Unable to connect to WiFi");
       break;
     }
-    delay(500);
+    Delay(500);
     END_VALUES.setCharAt(0, '?');
-    delay(500);
+    Delay(500);
     END_VALUES.setCharAt(0, ' ');
   }
   if (wifi_connected()) {
@@ -916,7 +920,8 @@ void lcd_print() {
   display.print(batteryPercentage);
   display.print("%");
   display.print(" ");
-  display.print(rtc);
+  display.print(String(RTC.hour) + ":" + String(RTC.minutes) + ":" +
+                String(RTC.seconds));
 
   display.setCursor(0, 20);
   display.print(line_1);
@@ -925,7 +930,7 @@ void lcd_print() {
   display.print(line_2);
 
   display.display();
-  delay(1000);
+  Delay(1000);
   Println("leaving lcd function");
 }
 
@@ -970,9 +975,9 @@ void drawWifiSymbol(bool isConnected) {
 void update_distance() {
   Println("entered into update_distance function");
   digitalWrite(trigPin, LOW);
-  delay(50);
+  Delay(50);
   digitalWrite(trigPin, HIGH);
-  delay(50);
+  Delay(50);
   digitalWrite(trigPin, LOW);
   duration = pulseIn(echoPin, HIGH);
   int tempDistance = duration * 0.034 / 2;
@@ -1066,10 +1071,13 @@ int findOccurrences(String str, String target) {
   return occurrences;
 }
 
-void wait(unsigned int seconds) { // most important task will be executed here
+void wait(unsigned int miliSeconds) {
+  // replace Delay function with this function
+  //  most important task will be executed here
+  RTC.milliSeconds += miliSeconds;
   bool condition = false;
   Println("Entering wait function...");
-  for (int i = 0; (seconds > (i * 5)); i++) {
+  for (int i = 0; (miliSeconds > (i * 5)); i++) {
     if ((millis() / 1000) % terminationTime == 0 &&
         terminationTime > 0) // after every 5 minutes
     {
@@ -1106,21 +1114,22 @@ void wait(unsigned int seconds) { // most important task will be executed here
       Println("\nBefore updating values from message 1\n");
       updateVariablesValues(readMessage(1));
       Println("\nValues are updated from message 1\n");
-      delay(1000);
+      Delay(1000);
       sendSMS("#setTime", "+923374888420");
-      delay(1000);
+      Delay(1000);
       i += 2000;
       condition = true;
     }
 
     if (condition) {
-      delay(1000);
+      Delay(1000);
       condition = false;
       i += 1000;
     } else
-      delay(5);
+      Delay(5);
   }
   Println("leaving wait function...");
+  updateRTC();
 }
 
 void setTime(String timeOfMessage) {
@@ -1155,6 +1164,31 @@ void setTime() { // this function will set RTC struct using rtc string
           " Seconds : " + (RTC.seconds) + " Day : " + String(RTC.date) +
           " Month : " + (RTC.month));
   println("--------------------------------");
+}
+
+void Delay(int milliseconds) {
+  delay(milliseconds);
+  RTC.milliSeconds += milliseconds;
+  updateRTC();
+}
+
+void updateRTC() {
+  if (RTC.milliSeconds > 1000) {
+    RTC.milliSeconds -= 1000;
+    RTC.seconds++;
+  }
+  if (RTC.seconds > 59) {
+    RTC.seconds -= 60;
+    RTC.minutes++;
+  }
+  if (RTC.minutes > 59) {
+    RTC.minutes -= 60;
+    RTC.hour++;
+  }
+  if (RTC.hour > 23) {
+    RTC.hour -= 24;
+    RTC.date++;
+  }
 }
 
 String fetchDetails(String str, String begin_end, int padding) {
