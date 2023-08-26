@@ -1,9 +1,7 @@
-//$ last work 26/August/23 [05:21 PM]
+//$ last work 26/August/23 [11:06 PM]
 // # version 5.2.4
 // # Release Note : RTC functionality is added completely
 // but not tested it completely
-
-//! ultrasound values are not accurate
 
 //` All messages are fetched more then 5 times in 1st 2 minutes :FIX_IT
 
@@ -46,9 +44,6 @@ String MOBILE_No = "+923354888420";
 #define I2C_SDA 21
 #define I2C_SCL 22
 #define LED 13
-
-#define echoPin 2
-#define trigPin 15
 
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
@@ -266,9 +261,6 @@ void setup() {
   }
   Println("\nAfter ThingSpeak");
   //`...............................
-  // #-------------------------------
-  pinMode(trigPin, OUTPUT); // Sets the trigPin as an OUTPUT
-  pinMode(echoPin, INPUT);  // Sets the echoPin as an INPUT
   Println("Leaving setup with seconds : " + String(millis() / 1000));
   delay(2000);
 }
@@ -376,28 +368,6 @@ void loop() {
   //`..................................
 
   // #----------------------------------
-  int previousValue = distance;
-  update_distance();
-  Println("After distance update");
-  wait(100);
-  int newValue = distance;
-  Println("checking distance status");
-  if (change_Detector(abs(newValue), abs(previousValue), 2)) {
-    wait(100);
-    if (distance < 0) {
-      println("Distance  : " + String(abs(distance)) + " inches");
-      String temp_msg =
-          "Motion detected by sensor new value : " + String(abs(newValue)) +
-          " previous value : " + String(abs(previousValue));
-      if (ultraSoundWorking) {
-        sendSMS(temp_msg);
-      }
-      distance *= -1;
-    } else {
-      println("Distance  : " + String(abs(distance)) + " inches (ignored)");
-      distance *= -1;
-    }
-  }
   wait(1000);
   Println("loop end");
 }
@@ -971,26 +941,6 @@ void drawWifiSymbol(bool isConnected) {
 //`..................................
 
 // #---------------------------------
-
-void update_distance() {
-  Println("entered into update_distance function");
-  digitalWrite(trigPin, LOW);
-  Delay(50);
-  digitalWrite(trigPin, HIGH);
-  Delay(50);
-  digitalWrite(trigPin, LOW);
-  duration = pulseIn(echoPin, HIGH);
-  int tempDistance = duration * 0.034 / 2;
-  if (tempDistance < 1000) { // ignore unwanted readings
-    if (distance > 0) {
-      distance = tempDistance;
-    } else {
-      distance = tempDistance;
-      distance *= -1;
-    }
-  }
-  Println("Leaving update_distance function");
-}
 
 bool change_Detector(int newValue, int previousValue, int margin) {
   if ((newValue >= previousValue - margin) &&
