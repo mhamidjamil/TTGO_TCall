@@ -1,12 +1,14 @@
-//$ last work 16/August/23 [12:52 AM]
-// # version 5.2.1
+//$ last work 26/August/23 [04:08 PM]
+// # version 5.2.3
+// # Release Note : Time is not fetched and store in RTC struct element
+
 //! ultrasound values are not accurate
 
 //` All messages are fetched more then 5 times in 1st 2 minutes :FIX_IT
 
 //` use display last row as a debugging process.
 
-//` what if ran out of balance of package ? add this check that module will then
+//` what if ran out of balance of package ? add this check so module will
 // not send any message if there is no package is subscribed
 
 const char simPIN[] = "";
@@ -42,7 +44,6 @@ String MOBILE_No = "+923354888420";
 #define MODEM_RX 26
 #define I2C_SDA 21
 #define I2C_SCL 22
-#define ALERT_PIN 12
 #define LED 13
 
 #define echoPin 2
@@ -114,10 +115,18 @@ int humidity;
 
 bool DEBUGGING = true;
 bool ultraSoundWorking = false;
-bool wifiWorking = false;
+bool wifiWorking = true;
 bool displayWorking = true;
 int terminationTime = 60 * 5; // 5 minutes
-String RTC = "";              // real Time Clock
+String rtc = "";              // real Time Clock
+struct RTC {
+  // Final data : 23/08/26,05:38:34+20
+  int month = 0;
+  int date = 0;
+  int hour = 0;    // hour will be 05
+  int minutes = 0; // minutes will be 38
+  int seconds = 0; // seconds will be 34
+} RTC;
 
 // # ......... functions > .......
 void println(String str);
@@ -133,7 +142,6 @@ void moduleManager();
 void getLastMessageAndIndex(String response, String &lastMessage,
                             int &messageNumber);
 String getResponse();
-String simResponse();
 int getNewMessageNumber(String response);
 String readMessage(int index);
 void deleteMessage(int index);
@@ -172,7 +180,7 @@ void updateVariablesValues(String str);
 int findOccurrences(String str, String target);
 void wait(unsigned int seconds);
 void setTime(String timeOfMessage);
-void setTime();
+void setTime(); // TODO: update time in real time
 String fetchDetails(String str, String begin_end, int padding);
 // # ......... < functions .......
 
@@ -195,13 +203,11 @@ void setup() {
   delay(3000);
   println("Initializing modem...");
   modem.restart();
-  delay(300);
+  delay(2000);
   modem.sendAT(GF("+CLIP=1"));
   delay(300);
   modem.sendAT(GF("+CMGF=1"));
-  delay(300);
-  pinMode(ALERT_PIN, OUTPUT);
-  delay(1000);
+  delay(2000);
 
   Println("Before Display functionality");
   //`...............................
@@ -222,11 +228,11 @@ void setup() {
       delay(500);
     }
   }
-  delay(100);
+  Println("After display functionality");
+  delay(500);
   dht.begin(); // Initialize the DHT11 sensor
-  delay(100);
-  Println("before wifi connection");
-
+  delay(1000);
+  Println("Before wifi connection");
   if (wifiWorking) {
     WiFi.begin(ssid, password);
     println("Connecting");
@@ -322,14 +328,14 @@ void loop() {
       println("Rebooting...");
       modem.restart();
     } else if (command.indexOf("time") != -1) {
-      if (RTC.length() < 2) {
+      if (rtc.length() < 2) {
         String tempTime =
             "+CMGL: 1,\"REC "
             "READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
         println("dummy time : [" + tempTime + "]");
         setTime(tempTime);
       }
-      println("Time String : " + RTC);
+      println("Time String : " + rtc);
       // println(Time.Date);
       // println(Time.hour);
       // println(Time.minutes);
@@ -510,53 +516,6 @@ String getResponse() {
     // println(temp_str);
   }
   Println("Leaving response function with response [" + response + "]");
-  return response;
-}
-
-String simResponse() { //! function will be deleted in version 6
-  Println("entering simResponse");
-  // replica of getResponse function, #the old get response function
-  delay(100);
-  String response = "";
-  unsigned int entrySec = (millis() / 1000);
-  unsigned int timeoutSec = 3;
-  if ((SerialAT.available() > 0)) {
-    Println("reading serial data simResponse");
-    while ((SerialAT.available() > 0) ||
-           (!((response.indexOf("OK") != -1) ||
-              (response.indexOf("ERROR") != -1)))) {
-      response += SerialAT.readString();
-      if (timeOut(timeoutSec, entrySec) && !(SerialAT.available() > 0)) {
-        println(String("******\tTimeout\t******"));
-        break;
-      } else if (SerialAT.available()) {
-        timeoutSec = 1;
-      }
-    }
-  }
-  Println("After while loop in simResponse");
-  if (response.indexOf("+CMTI:") != -1) {
-    int newMessageNumber = getNewMessageNumber(response);
-    String senderNumber = getMobileNumberOfMsg(newMessageNumber);
-    if (senderNumber.indexOf("3374888420") == -1) {
-      String temp_str = executeCommand(removeOk(readMessage(newMessageNumber)));
-      println("New message [ " + temp_str + "]");
-      if (temp_str.indexOf("<executed>") != -1)
-        deleteMessage(newMessageNumber);
-      else {
-        sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
-                "} message : > [ " +
-                temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
-                " ] from : " + senderNumber);
-      }
-    }
-  } else if (response.indexOf("+CLIP:") != -1) {
-    //+CLIP: "03354888420",161,"",0,"",0
-    String temp_str = "Missed call from : " + fetchDetails(response, "\"", 1);
-    sendSMS(temp_str);
-    // println(temp_str);
-  }
-  Println("Leaving simResponse function with response [" + response + "]");
   return response;
 }
 
@@ -957,7 +916,7 @@ void lcd_print() {
   display.print(batteryPercentage);
   display.print("%");
   display.print(" ");
-  display.print(RTC);
+  display.print(rtc);
 
   display.setCursor(0, 20);
   display.print(line_1);
@@ -1166,15 +1125,36 @@ void wait(unsigned int seconds) { // most important task will be executed here
 
 void setTime(String timeOfMessage) {
   // +CMGL: 1,"REC READ","+923374888420","","23/08/14,17:21:05+20"
-  RTC = fetchDetails(timeOfMessage, "\"23/", "\"", 1);
+  rtc = fetchDetails(timeOfMessage, "\"23/", "\"", 1);
   println(
       "\n+++++++++++++++++++++++++++++++++++++++++++\n Fetched data from : " +
-      timeOfMessage + "\nFinal data : " + RTC +
+      timeOfMessage + "\nFinal data : " + rtc +
       "\n+++++++++++++++++++++++++++++++++++++++++++\n");
+  // Final data : 23/08/26,05:38:34+20
+  setTime();
 }
 
-void setTime() {
-  // this function will set Time struct using RTC string
+void setTime() { // this function will set RTC struct using rtc string
+  // Final data : 23/08/26,05:38:34+20
+  String datePart = rtc.substring(0, rtc.indexOf(",")); // 23/08/26
+  Println("fetched date : " + datePart);
+  String date_ = (datePart.substring(datePart.indexOf("/") + 1)); // 08/26
+  Println("fetched date_ : " + date_);
+  RTC.month = date_.substring(0, datePart.indexOf("/")).toInt(); // 08
+  RTC.date = date_.substring(datePart.indexOf("/") + 1).toInt(); // 26
+
+  String timePart = rtc.substring(rtc.indexOf(",") + 1);       // 05:38:34+20
+  String time_ = timePart.substring(0, timePart.indexOf("+")); // 05:38:34
+  RTC.hour = time_.substring(0, time_.indexOf(":")).toInt();   // 05
+  RTC.minutes = time_.substring(time_.indexOf(":") + 1, time_.lastIndexOf(":"))
+                    .toInt();                                        // 38
+  RTC.seconds = time_.substring(time_.lastIndexOf(":") + 1).toInt(); // 34
+  println("RTC updated");
+  println("--------------------------------\n");
+  println("Hour : " + String(RTC.hour) + " Minutes : " + String(RTC.minutes) +
+          " Seconds : " + (RTC.seconds) + " Day : " + String(RTC.date) +
+          " Month : " + (RTC.month));
+  println("--------------------------------");
 }
 
 String fetchDetails(String str, String begin_end, int padding) {
