@@ -1,14 +1,8 @@
-//$ last work 26/August/23 [11:06 PM]
-// # version 5.2.4
-// # Release Note : RTC functionality is added completely
-// but not tested it completely
+//$ last work 27/August/23 [02:06 PM]
+// # version 5.2.5
+// # Release Note : Messages control implemented
 
 //` All messages are fetched more then 5 times in 1st 2 minutes :FIX_IT
-
-//` use display last row as a debugging process.
-
-//` what if ran out of balance of package ? add this check so module will
-// not send any message if there is no package is subscribed
 
 const char simPIN[] = "";
 
@@ -110,9 +104,12 @@ float temperature;
 int humidity;
 
 bool DEBUGGING = true;
+int debugFor = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
 bool wifiWorking = true;
 bool displayWorking = true;
+bool smsAllowed = true;
+
 int terminationTime = 60 * 5; // 5 minutes
 String rtc = "";              // real Time Clock
 struct RTC {
@@ -396,22 +393,30 @@ void call(String number) {
 }
 
 void sendSMS(String sms) {
-  if (modem.sendSMS(MOBILE_No, sms)) {
-    println("$send{" + sms + "}");
+  if (smsAllowed) {
+    if (modem.sendSMS(MOBILE_No, sms)) {
+      println("$send{" + sms + "}");
+    } else {
+      println("SMS failed to send");
+      println("\n!send{" + sms + "}!\n");
+    }
+    Delay(500);
   } else {
-    println("SMS failed to send");
-    println("\n!send{" + sms + "}!\n");
+    println("SMS sending is not allowed");
   }
-  Delay(500);
 }
 
 void sendSMS(String sms, String number) {
-  if (modem.sendSMS(number, sms)) {
-    println("sending : [" + sms + "] to : " + String(number));
+  if (smsAllowed) {
+    if (modem.sendSMS(number, sms)) {
+      println("sending : [" + sms + "] to : " + String(number));
+    } else {
+      println("SMS failed to send");
+    }
+    Delay(500);
   } else {
-    println("SMS failed to send");
+    println("SMS sending is not allowed");
   }
-  Delay(500);
 }
 
 void updateSerial() {
@@ -986,6 +991,15 @@ void updateVariablesValues(String str) {
         displayWorking = true;
       }
     }
+    if (str.indexOf("sms") != -1) {
+      String forSms =
+          str.substring(str.indexOf("<sms") + 5, str.indexOf("<sms") + 7);
+      if (forSms.indexOf("0") != -1) {
+        smsAllowed = false;
+      } else if (forSms.indexOf("1") != -1) {
+        smsAllowed = true;
+      }
+    }
     if (str.indexOf("wifi") != -1) {
       String forWifi = str.substring(str.indexOf("<wifi connectivity") + 19,
                                      str.indexOf("<wifi connectivity") + 21);
@@ -1055,11 +1069,12 @@ void wait(unsigned int miliSeconds) {
         condition = true;
       }
     }
-    if ((millis() / 1000) > 130 && DEBUGGING) {
+    if ((millis() / 1000) > debugFor && DEBUGGING) {
       Println("Disabling DEBUGGING...");
       DEBUGGING = false;
     }
-    if (((millis() / 1000) > 100) && (millis() / 1000) < 103) {
+    if (((millis() / 1000) > (debugFor - 30)) &&
+        (millis() / 1000) < (debugFor - 27)) {
       // it will just run at first time when system booted
       Println("\nBefore updating values from message 1\n");
       updateVariablesValues(readMessage(1));
@@ -1070,7 +1085,6 @@ void wait(unsigned int miliSeconds) {
       i += 2000;
       condition = true;
     }
-
     if (condition) {
       Delay(1000);
       condition = false;
