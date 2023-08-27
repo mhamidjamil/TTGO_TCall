@@ -1,8 +1,6 @@
-//$ last work 27/August/23 [02:06 PM]
-// # version 5.2.5
-// # Release Note : Messages control implemented
-
-//` All messages are fetched more then 5 times in 1st 2 minutes :FIX_IT
+//$ last work 27/August/23 [03:41 PM]
+// # version 5.2.6
+// # Release Note : BLE implemented successfully
 
 const char simPIN[] = "";
 
@@ -174,16 +172,60 @@ void updateVariablesValues(String str);
 int findOccurrences(String str, String target);
 void wait(unsigned int miliSeconds);
 void setTime(String timeOfMessage);
-void setTime(); // TODO: update time in real time
+void setTime();
 String fetchDetails(String str, String begin_end, int padding);
 void updateRTC();
 void Delay(int milliSeconds);
-// # ......... < functions .......
 
+void initBLE();
+void BLE_inputManager(String input);
+// # ......... < functions .......
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+
+BLEServer *pServer = NULL;
+BLECharacteristic *pCharacteristic = NULL;
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+std::string receivedData = "";
+
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *pServer) { deviceConnected = true; }
+
+  void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
+};
+
+class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) {
+    std::string value = pCharacteristic->getValue();
+    if (value.length() > 0) {
+      receivedData = value;
+      Serial.print("Received from BLE: ");
+      Serial.println(receivedData.c_str());
+      BLE_inputManager(String(receivedData.c_str()));
+
+      // Print the received data back to the BLE connection
+      pCharacteristic->setValue("BLE: " + receivedData);
+      pCharacteristic->notify();
+    }
+  }
+};
+
+void BLE_inputManager(String input) {
+  if (input == "test") {
+    Serial.println("defined word: test");
+  } else if (input.indexOf("#run") != -1) {
+    Serial.println("HID function will be call here");
+  } else {
+    Serial.println("undefined word : " + input);
+  }
+}
 //! * # # # # # # # # # # # # * !
 
 void setup() {
   SerialMon.begin(115200);
+  initBLE();
   // Keep power when running from battery
   Wire.begin(I2C_SDA, I2C_SCL);
   bool isOk = setPowerBoostKeepOn(1);
@@ -264,6 +306,22 @@ void setup() {
 
 void loop() {
   Println("in loop");
+
+  if (deviceConnected) {
+    if (!oldDeviceConnected) {
+      Serial.println("Connected to device");
+      oldDeviceConnected = true;
+    }
+  } else {
+    if (oldDeviceConnected) {
+      Serial.println("Disconnected from device");
+      Delay(500);
+      pServer->startAdvertising(); // restart advertising
+      Serial.println("Restart advertising");
+      oldDeviceConnected = false;
+    }
+  }
+
   Delay(100);
   if (SerialMon.available()) {
     String command = SerialMon.readString();
@@ -1172,4 +1230,28 @@ String fetchDetails(String str, String begin, String end, int padding) {
   Println("beginOfTarget : " + beginOfTarget);
   return beginOfTarget.substring(padding - 1,
                                  beginOfTarget.indexOf(end) - (padding - 1));
+}
+
+void initBLE() {
+  BLEDevice::init("TTGO T-Call BLE");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  BLEService *pService = pServer->createService(
+      BLEUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b")); // Custom service UUID
+  pCharacteristic = pService->createCharacteristic(
+      BLEUUID(
+          "beb5483e-36e1-4688-b7f5-ea07361b26a8"), // Custom characteristic UUID
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+
+  pService->start();
+
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(pService->getUUID());
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06); // sets the minimum advertising interval
+  BLEDevice::startAdvertising();
+
+  Serial.println("Waiting for Bluetooth connection...");
 }
