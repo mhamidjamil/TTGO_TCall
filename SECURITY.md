@@ -13,6 +13,4 @@ As new features are being added to v5 before switching to [SECO](https://github.
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
-
-Module faces signal issue so try to use best antenna. Any use can communicate via sms.
+Till 5.2 version any user can communicate with module via sms or BLE, any one can ask module to send message or call to any number he want. It wil be fixed in future update.
