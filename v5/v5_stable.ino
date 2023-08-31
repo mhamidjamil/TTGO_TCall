@@ -1,6 +1,6 @@
-//$ last work 27/August/23 [03:41 PM]
-// # version 5.2.6
-// # Release Note : BLE implemented successfully
+//$ last work 1/Sep/23 [01:39 AM]
+// # version 5.2.7
+// # Release Note : user can delete multiple messages
 
 const char simPIN[] = "";
 
@@ -176,6 +176,8 @@ void setTime();
 String fetchDetails(String str, String begin_end, int padding);
 void updateRTC();
 void Delay(int milliSeconds);
+bool isNum(String num);
+void deleteMessages(String index);
 
 void initBLE();
 void BLE_inputManager(String input);
@@ -283,6 +285,7 @@ void setup() {
       }
       delay(500);
       print(".");
+      i++;
     }
     if (i < 10) {
       println("");
@@ -325,75 +328,7 @@ void loop() {
   Delay(100);
   if (SerialMon.available()) {
     String command = SerialMon.readString();
-    if (command.indexOf("smsTo") != -1) {
-      String strSms =
-          command.substring(command.indexOf("[") + 1, command.indexOf("]"));
-      String strNumber =
-          command.substring(command.indexOf("{") + 1, command.indexOf("}"));
-      sendSMS(strSms, strNumber);
-    } else if (command.indexOf("callTo") != -1) {
-      call(command.substring(command.indexOf("{") + 1, command.indexOf("}")));
-    } else if (command.indexOf("call") != -1) {
-      println("Calling " + String(MOBILE_No));
-      giveMissedCall();
-    } else if (command.indexOf("sms") != -1) {
-      // fetch sms from input string, sample-> sms : msg here
-      String sms = command.substring(command.indexOf("sms") + 4);
-      println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
-
-      sendSMS(sms);
-    } else if (command.indexOf("all") != -1) {
-      println("Reading all messages");
-      moduleManager();
-    } else if (command.indexOf("battery") != -1) {
-      println(updateBatteryStatus());
-    } else if (command.indexOf("lastBefore") != -1) {
-      println(
-          "Index before <" + command.substring(11, -1) + "> is : " +
-          String(getMessageNumberBefore(command.substring(11, -1).toInt())));
-    } else if (command.indexOf("read") != -1) {
-      if (messageExists(command.substring(command.indexOf("read") + 5).toInt()))
-        println("Message: " +
-                readMessage(
-                    command.substring(command.indexOf("read") + 5).toInt()));
-      else
-        println("Message not Exists");
-    } else if (command.indexOf("delete") != -1) { // to delete message
-      println("Deleting message number : " +
-              String(command.substring(command.indexOf("delete") + 7)));
-      deleteMessage(command.substring(command.indexOf("delete") + 7).toInt());
-    } else if (command.indexOf("terminator") != -1) {
-      terminateLastMessage();
-    } else if (command.indexOf("hangUp") != -1) {
-      say("AT+CHUP");
-    } else if (command.indexOf("debug") != -1) {
-      DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
-      Delay(50);
-      println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
-    } else if (command.indexOf("status") != -1) {
-      println(getVariablesValues());
-    } else if (command.indexOf("update") != -1) {
-      updateVariablesValues(readMessage(
-          (command.substring(command.indexOf("update") + 7, -1)).toInt()));
-    } else if (command.indexOf("reboot") != -1) {
-      println("Rebooting...");
-      modem.restart();
-    } else if (command.indexOf("time") != -1) {
-      if (rtc.length() < 2) {
-        String tempTime =
-            "+CMGL: 1,\"REC "
-            "READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
-        println("dummy time : [" + tempTime + "]");
-        setTime(tempTime);
-      }
-      println("Time String : " + rtc);
-      // println(Time.Date);
-      // println(Time.hour);
-      // println(Time.minutes);
-    } else {
-      println("Executing: " + command);
-      say(command);
-    }
+    inputManager(command, 2);
   }
   Println("after serial test");
   if (SerialAT.available() > 0)
@@ -575,6 +510,10 @@ String readMessage(int index) { // read the message of given index
 }
 
 void deleteMessage(int index) {
+  if (index == 1) {
+    println("you are not allowed to delete message of index 1");
+    return;
+  }
   say("AT+CMGD=" + String(index));
   println(getResponse());
   messages_in_inbox--;
@@ -593,11 +532,11 @@ String executeCommand(String str) {
   if (str.indexOf("<executed>") != -1 || str.indexOf("<not executed>") != -1) {
     println("-> Already executed <-");
     return str;
-  } else if (str.indexOf("#call") != -1) {
-    giveMissedCall();
-    str += " <executed>";
   } else if (str.indexOf("#callTo") != -1) {
     call(str.substring(str.indexOf("{") + 1, str.indexOf("}")));
+    str += " <executed>";
+  } else if (str.indexOf("#call") != -1) {
+    giveMissedCall();
     str += " <executed>";
   } else if (str.indexOf("#battery") != -1) {
     updateBatteryParameters(updateBatteryStatus());
@@ -606,9 +545,10 @@ String executeCommand(String str) {
     str += " <executed>";
   } else if (str.indexOf("#delete") != -1) {
     // user will send #delete 2, so it will delete message of index 2
-    println("Deleting message of index : " +
-            str.substring(str.indexOf("#delete") + 8).toInt());
-    deleteMessage(str.substring(str.indexOf("#delete") + 8).toInt());
+    // println("Deleting message of index : " +
+    //         str.substring(str.indexOf("#delete") + 8).toInt());
+    // deleteMessage(str.substring(str.indexOf("#delete") + 8).toInt());
+    deleteMessages(str);
     str += " <executed>";
   } else if (str.indexOf("#forward") != -1) {
     str += " <executed>";
@@ -1118,13 +1058,20 @@ void wait(unsigned int miliSeconds) {
         Println("after display status work in wait function");
       }
     }
-    if (ThingSpeakEnable && wifiWorking &&
-        ((millis() / 1000) % updateInterval == 0)) {
+    if (ThingSpeakEnable && ((millis() / 1000) % updateInterval == 0)) {
       if (wifi_connected()) {
-        Println("before thingspeak update");
-        updateThingSpeak(temperature, humidity);
-        Println("After thingspeak update");
-        condition = true;
+        if (wifiWorking) {
+          Println("before thingspeak update");
+          updateThingSpeak(temperature, humidity);
+          Println("After thingspeak update");
+          condition = true;
+        }
+      } else { // comment it if you don't want to connect to wifi
+        connect_wifi();
+        if (wifi_connected()) {
+          wifiWorking = true;
+          ThingSpeak.begin(client); // Initialize ThingSpeak
+        }
       }
     }
     if ((millis() / 1000) > debugFor && DEBUGGING) {
@@ -1213,6 +1160,31 @@ void updateRTC() {
   }
 }
 
+void deleteMessages(String deleteCommand) {
+  // let say deleteCommand = "#delete 3,4,5"
+  int num = 0;
+  String numHolder = "";
+  String targetCommand =
+      deleteCommand.substring(deleteCommand.indexOf("delete") + 7, -1);
+  // targetCommand = "3,4,5"
+  for (int i = 0; i <= targetCommand.length(); i++) {
+    {
+      if (targetCommand[i] == ',' || targetCommand[i] == ' ') {
+        if (isNum(numHolder)) {
+          println("$Deleting message number : " + numHolder);
+          deleteMessage(numHolder.toInt());
+          numHolder = "";
+        } else {
+          println("Error in delete command");
+          println("numHolder : " + numHolder);
+        }
+      } else {
+        numHolder += targetCommand[i];
+      }
+    }
+  }
+}
+
 String fetchDetails(String str, String begin_end, int padding) {
   // str is the string to fetch data using begin_end character or string and
   // padding remove the data around the required data if padding is 1 then it
@@ -1254,4 +1226,84 @@ void initBLE() {
   BLEDevice::startAdvertising();
 
   Serial.println("Waiting for Bluetooth connection...");
+}
+
+void inputManager(String command, int inputFrom) {
+  // input from indicated from where the input is coming BLE, Serial or sms
+  if (command.indexOf("smsTo") != -1) {
+    String strSms =
+        command.substring(command.indexOf("[") + 1, command.indexOf("]"));
+    String strNumber =
+        command.substring(command.indexOf("{") + 1, command.indexOf("}"));
+    sendSMS(strSms, strNumber);
+  } else if (command.indexOf("callTo") != -1) {
+    call(command.substring(command.indexOf("{") + 1, command.indexOf("}")));
+  } else if (command.indexOf("call") != -1) {
+    println("Calling " + String(MOBILE_No));
+    giveMissedCall();
+  } else if (command.indexOf("sms") != -1) {
+    // fetch sms from input string, sample-> sms : msg here
+    String sms = command.substring(command.indexOf("sms") + 4);
+    println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
+
+    sendSMS(sms);
+  } else if (command.indexOf("all") != -1) {
+    println("Reading all messages");
+    moduleManager();
+  } else if (command.indexOf("battery") != -1) {
+    println(updateBatteryStatus());
+  } else if (command.indexOf("lastBefore") != -1) {
+    println("Index before <" + command.substring(11, -1) + "> is : " +
+            String(getMessageNumberBefore(command.substring(11, -1).toInt())));
+  } else if (command.indexOf("read") != -1) {
+    if (messageExists(command.substring(command.indexOf("read") + 5).toInt()))
+      println(
+          "Message: " +
+          readMessage(command.substring(command.indexOf("read") + 5).toInt()));
+    else
+      println("Message not Exists");
+  } else if (command.indexOf("delete") != -1) { // to delete message
+    deleteMessages(command);
+    // println("Deleting message number : " +
+    //         String(command.substring(command.indexOf("delete") + 7)));
+    // deleteMessage(command.substring(command.indexOf("delete") + 7).toInt());
+  } else if (command.indexOf("terminator") != -1) {
+    terminateLastMessage();
+  } else if (command.indexOf("hangUp") != -1) {
+    say("AT+CHUP");
+  } else if (command.indexOf("debug") != -1) {
+    DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
+    Delay(50);
+    println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
+  } else if (command.indexOf("status") != -1) {
+    println(getVariablesValues());
+  } else if (command.indexOf("update") != -1) {
+    updateVariablesValues(readMessage(
+        (command.substring(command.indexOf("update") + 7, -1)).toInt()));
+  } else if (command.indexOf("reboot") != -1) {
+    println("Rebooting...");
+    modem.restart();
+  } else if (command.indexOf("time") != -1) {
+    if (rtc.length() < 2) {
+      String tempTime =
+          "+CMGL: 1,\"REC "
+          "READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
+      println("dummy time : [" + tempTime + "]");
+      setTime(tempTime);
+    }
+    println("Time String : " + rtc);
+    // println(Time.Date);
+    // println(Time.hour);
+    // println(Time.minutes);
+  } else {
+    println("Executing: " + command);
+    say(command);
+  }
+}
+
+bool isNum(String num) {
+  if (num.toInt() > -9999 || num.toInt() < 9999)
+    return true;
+  else
+    return false;
 }
