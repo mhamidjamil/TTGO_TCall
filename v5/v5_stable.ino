@@ -1,6 +1,6 @@
-//$ last work 1/Sep/23 [01:39 AM]
-// # version 5.2.7
-// # Release Note : user can delete multiple messages
+//$ last work 1/Sep/23 [02:17 AM]
+// # version 5.2.8
+// # Release Note : BLE input commands will now passed to inputManager
 
 const char simPIN[] = "";
 
@@ -110,6 +110,7 @@ bool smsAllowed = true;
 
 int terminationTime = 60 * 5; // 5 minutes
 String rtc = "";              // real Time Clock
+String BLE_String = "";
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
   int milliSeconds = 0;
@@ -178,7 +179,7 @@ void updateRTC();
 void Delay(int milliSeconds);
 bool isNum(String num);
 void deleteMessages(String index);
-
+void inputManager(String input, int inputFrom);
 void initBLE();
 void BLE_inputManager(String input);
 // # ......... < functions .......
@@ -208,21 +209,28 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
       BLE_inputManager(String(receivedData.c_str()));
 
       // Print the received data back to the BLE connection
-      pCharacteristic->setValue("BLE: " + receivedData);
+      pCharacteristic->setValue("BLE: " + receivedData); //! TODO:
       pCharacteristic->notify();
     }
   }
 };
 
 void BLE_inputManager(String input) {
-  if (input == "test") {
-    Serial.println("defined word: test");
-  } else if (input.indexOf("#run") != -1) {
-    Serial.println("HID function will be call here");
+  if (input.indexOf("#") != -1) { // means string is now fetched completely
+    BLE_String += input.substring(0, input.indexOf("#"));
+    println("Executing (BLE input) : {" + BLE_String + "}");
+    inputManager(BLE_String, 1);
+    BLE_String = "";
   } else {
-    Serial.println("undefined word : " + input);
+    BLE_String += input;
+    if (BLE_String.length() > 50) {
+      println("BLE input is getting to large , here is the current string (" +
+              BLE_String + ") flushing it...");
+      BLE_String = "";
+    }
   }
 }
+
 //! * # # # # # # # # # # # # * !
 
 void setup() {
