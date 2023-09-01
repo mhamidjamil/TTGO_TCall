@@ -1,6 +1,7 @@
-//$ last work 1/Sep/23 [03:54 PM]
-// # version 5.2.9
-// # Release Note : ThingSpeak and user will be notified when the system rebooted
+//$ last work 2/Sep/23 [01:14 AM]
+// # version 5.3.0
+// # Release Note : Bugs fixes for reboot sms notifier feature
+// # and BLE output functionality is added
 
 const char simPIN[] = "";
 
@@ -110,7 +111,9 @@ bool smsAllowed = true;
 
 int terminationTime = 60 * 5; // 5 minutes
 String rtc = "";              // real Time Clock
-String BLE_String = "";
+String BLE_Input = "";
+String BLE_Output = "";
+
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
   int milliSeconds = 0;
@@ -209,7 +212,8 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
       BLE_inputManager(String(receivedData.c_str()));
 
       // Print the received data back to the BLE connection
-      pCharacteristic->setValue("BLE: " + receivedData); //! TODO:
+      receivedData = BLE_Output.c_str();
+      pCharacteristic->setValue("BLE: " + receivedData);
       pCharacteristic->notify();
     }
   }
@@ -217,16 +221,16 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
 
 void BLE_inputManager(String input) {
   if (input.indexOf("#") != -1) { // means string is now fetched completely
-    BLE_String += input.substring(0, input.indexOf("#"));
-    println("Executing (BLE input) : {" + BLE_String + "}");
-    inputManager(BLE_String, 1);
-    BLE_String = "";
+    BLE_Input += input.substring(0, input.indexOf("#"));
+    println("Executing (BLE input) : {" + BLE_Input + "}");
+    inputManager(BLE_Input, 1);
+    BLE_Input = "";
   } else {
-    BLE_String += input;
-    if (BLE_String.length() > 50) {
+    BLE_Input += input;
+    if (BLE_Input.length() > 50) {
       println("BLE input is getting to large , here is the current string (" +
-              BLE_String + ") flushing it...");
-      BLE_String = "";
+              BLE_Input + ") flushing it...");
+      BLE_Input = "";
     }
   }
 }
@@ -372,14 +376,26 @@ void loop() {
   Println("loop end");
 }
 
-void println(String str) { SerialMon.println(str); }
+void println(String str) {
+  SerialMon.println(str);
+  BLE_Output = str;
+  receivedData = BLE_Output.c_str();
+  pCharacteristic->setValue("BLE: " + receivedData);
+  pCharacteristic->notify();
+}
 void Println(String str) {
   if (DEBUGGING) {
     Serial.println(str);
   }
 }
 
-void print(String str) { SerialMon.print(str); }
+void print(String str) {
+  SerialMon.print(str);
+  BLE_Output = str;
+  receivedData = BLE_Output.c_str();
+  pCharacteristic->setValue("BLE: " + receivedData);
+  pCharacteristic->notify();
+}
 void say(String str) { SerialAT.println(str); }
 
 void giveMissedCall() {
@@ -953,8 +969,6 @@ void drawWifiSymbol(bool isConnected) {
 }
 //`..................................
 
-// #---------------------------------
-
 bool change_Detector(int newValue, int previousValue, int margin) {
   if ((newValue >= previousValue - margin) &&
       (newValue <= previousValue + margin)) {
@@ -1080,7 +1094,7 @@ void wait(unsigned int miliSeconds) {
         connect_wifi();
         if (wifi_connected()) {
           wifiWorking = true;
-          ThingSpeak.begin(client); // Initialize ThingSpeak
+          ThingSpeak.begin(client);               // Initialize ThingSpeak
           ThingSpeak.setField(4, random(52, 99)); // set any random value.
         }
       }
@@ -1100,10 +1114,6 @@ void wait(unsigned int miliSeconds) {
       Delay(1000);
       i += 2000;
       condition = true;
-      String bootMessage = "System rebooted, Time stamp is : "+
-      String(RTC.hour) + " : " + String(RTC.minutes) +" : " + String(RTC.seconds)
-      + "_" + String(RTC.date) +"/" + String(RTC.month);
-      sendSms(bootMessage);
     }
     if (condition) {
       Delay(1000);
@@ -1129,6 +1139,7 @@ void setTime(String timeOfMessage) {
 
 void setTime() { // this function will set RTC struct using rtc string
   // Final data : 23/08/26,05:38:34+20
+  int tempDate = RTC.date;
   String datePart = rtc.substring(0, rtc.indexOf(",")); // 23/08/26
   Println("fetched date : " + datePart);
   String date_ = (datePart.substring(datePart.indexOf("/") + 1)); // 08/26
@@ -1148,6 +1159,13 @@ void setTime() { // this function will set RTC struct using rtc string
           " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
           " Month : " + String(RTC.month));
   println("--------------------------------");
+  if (tempDate == 0 && RTC.date != 0) { // it should be run at fist time.
+    String bootMessage =
+        "System rebooted, Time stamp is : " + String(RTC.hour) + " : " +
+        String(RTC.minutes) + " : " + String(RTC.seconds) + "_" +
+        String(RTC.date) + "/" + String(RTC.month);
+    sendSMS(bootMessage);
+  }
 }
 
 void Delay(int milliseconds) {
@@ -1173,6 +1191,7 @@ void updateRTC() {
     RTC.hour -= 24;
     RTC.date++;
   }
+  // still the loop hole is present for month increment.
 }
 
 void deleteMessages(String deleteCommand) {
@@ -1317,5 +1336,8 @@ void inputManager(String command, int inputFrom) {
 }
 
 bool isNum(String num) {
-(num.toInt() > -9999 && num.toInt() < 9999) ? return true : return false
+  if (num.toInt() > -9999 && num.toInt() < 9999)
+    return true;
+  else
+    return false;
 }
