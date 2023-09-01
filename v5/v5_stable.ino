@@ -1,6 +1,6 @@
-//$ last work 1/Sep/23 [02:17 AM]
-// # version 5.2.8
-// # Release Note : BLE input commands will now passed to inputManager
+//$ last work 1/Sep/23 [03:54 PM]
+// # version 5.2.9
+// # Release Note : ThingSpeak and user will be notified when the system rebooted
 
 const char simPIN[] = "";
 
@@ -308,6 +308,8 @@ void setup() {
   if (ThingSpeakEnable && wifiWorking) {
     Println("\nThinkSpeak initializing...\n");
     ThingSpeak.begin(client); // Initialize ThingSpeak
+    delay(500);
+    ThingSpeak.setField(4, random(1, 50)); // set any random value.
   }
   Println("\nAfter ThingSpeak");
   //`...............................
@@ -1079,6 +1081,7 @@ void wait(unsigned int miliSeconds) {
         if (wifi_connected()) {
           wifiWorking = true;
           ThingSpeak.begin(client); // Initialize ThingSpeak
+          ThingSpeak.setField(4, random(52, 99)); // set any random value.
         }
       }
     }
@@ -1097,6 +1100,10 @@ void wait(unsigned int miliSeconds) {
       Delay(1000);
       i += 2000;
       condition = true;
+      String bootMessage = "System rebooted, Time stamp is : "+
+      String(RTC.hour) + " : " + String(RTC.minutes) +" : " + String(RTC.seconds)
+      + "_" + String(RTC.date) +"/" + String(RTC.month);
+      sendSms(bootMessage);
     }
     if (condition) {
       Delay(1000);
@@ -1138,8 +1145,8 @@ void setTime() { // this function will set RTC struct using rtc string
   println("RTC updated");
   println("--------------------------------\n");
   println("Hour : " + String(RTC.hour) + " Minutes : " + String(RTC.minutes) +
-          " Seconds : " + (RTC.seconds) + " Day : " + String(RTC.date) +
-          " Month : " + (RTC.month));
+          " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
+          " Month : " + String(RTC.month));
   println("--------------------------------");
 }
 
@@ -1310,8 +1317,5 @@ void inputManager(String command, int inputFrom) {
 }
 
 bool isNum(String num) {
-  if (num.toInt() > -9999 || num.toInt() < 9999)
-    return true;
-  else
-    return false;
+(num.toInt() > -9999 && num.toInt() < 9999) ? return true : return false
 }
