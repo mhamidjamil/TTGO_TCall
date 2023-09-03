@@ -1,6 +1,6 @@
-//$ last work 3/Sep/23 [11:05 PM]
-// # version 5.3.3
-// # Release Note : PowerBank for router #First success
+//$ last work 4/Sep/23 [02:34 AM]
+// # version 5.3.4
+// # Release Note : PowerBank rework logic fixes and tested
 
 const char simPIN[] = "";
 
