@@ -1,7 +1,6 @@
-//$ last work 3/Sep/23 [01:16 AM]
-// # version 5.3.1
-// # Release Note : Issue fixed when DHT sensor was not connected properly it
-// was sending the corrupt value to ThingSpeak Server
+//$ last work 3/Sep/23 [11:05 PM]
+// # version 5.3.3
+// # Release Note : PowerBank for router #First success
 
 const char simPIN[] = "";
 
@@ -37,6 +36,15 @@ String MOBILE_No = "+923354888420";
 #define I2C_SDA 21
 #define I2C_SCL 22
 #define LED 13
+
+#define WAPDA_STATE 15 // Check if wapda is on or off
+
+// Magenta  R1
+#define BATTERY_PAIR_SELECTOR 32 // Select which battery pair is to be charge
+// Blue R2-A
+#define BATTERY_CHARGER 14 // Battery should charge or not
+// Green R2-B
+#define POWER_OUTPUT_SELECTOR 12 // Router input source selector
 
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
@@ -80,8 +88,8 @@ const char *password = "Archer@73_102#";
 const unsigned long channelID = 2201589;
 const char *apiKey = "Q3TSTOM87EUBNOAE";
 
-unsigned long updateInterval = 2 * 60;
-unsigned int last_update = 0; // in seconds
+int updateInterval = 2 * 60;
+unsigned int last_update = 1; // in minutes
 WiFiClient client;
 
 String END_VALUES = "  ";
@@ -102,7 +110,7 @@ int distance = 0; // variable for the distance measurement
 float temperature;
 int humidity;
 
-bool DEBUGGING = true;
+bool DEBUGGING = false;
 int debugFor = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
 bool wifiWorking = true;
@@ -113,6 +121,10 @@ int terminationTime = 60 * 5; // 5 minutes
 String rtc = "";              // real Time Clock
 String BLE_Input = "";
 String BLE_Output = "";
+
+int batteryChargeTime = 30 * 60; // 30 minutes
+unsigned int wapdaInTime = 0;    // when wapda is on it store the time stamp.
+bool batteriesCharged = false;
 
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
@@ -318,7 +330,15 @@ void setup() {
   Println("\nAfter ThingSpeak");
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
-  delay(2000);
+
+  pinMode(WAPDA_STATE, INPUT);            // Check if wapda is on or off
+  pinMode(BATTERY_PAIR_SELECTOR, OUTPUT); // Pair selector
+  pinMode(BATTERY_CHARGER, OUTPUT);       // Charge battery or not
+  pinMode(POWER_OUTPUT_SELECTOR, OUTPUT); // router INPUT selector
+
+  digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+  digitalWrite(BATTERY_CHARGER, HIGH);
+  digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
 }
 
 void loop() {
@@ -383,6 +403,7 @@ void println(String str) {
   pCharacteristic->setValue("BLE: " + receivedData);
   pCharacteristic->notify();
 }
+
 void Println(String str) {
   if (DEBUGGING) {
     Serial.println(str);
@@ -396,6 +417,7 @@ void print(String str) {
   pCharacteristic->setValue("BLE: " + receivedData);
   pCharacteristic->notify();
 }
+
 void say(String str) { SerialAT.println(str); }
 
 void giveMissedCall() {
@@ -1171,7 +1193,26 @@ void setTime() { // this function will set RTC struct using rtc string
 }
 
 void Delay(int milliseconds) {
-  delay(milliseconds);
+  for (int i = 0; i < milliseconds; i += 5) {
+    if (wapdaOn()) {   // charge batteries
+      backup("WAPDA"); // shift backup to WAPDA
+      if (wapdaInTime == 0) {
+        wapdaInTime = ((millis() / 1000) / 60);
+        println("Shifting router input Source to WAPDA");
+      }
+      chargeBatteries(true);
+    } else { // power on router from batteries
+      if (wapdaInTime != 0) {
+        println("Shifting router to Batteries");
+        wapdaInTime = 0;
+      }
+      // convert milles to minutes>seconds
+      backup("Batteries"); // shift backup to WAPDA
+      chargeBatteries(false);
+    }
+    delay(5);
+  }
+
   RTC.milliSeconds += milliseconds;
   updateRTC();
 }
@@ -1331,6 +1372,26 @@ void inputManager(String command, int inputFrom) {
     // println(Time.Date);
     // println(Time.hour);
     // println(Time.minutes);
+  } else if (command.indexOf("!") != -1) {
+    if (command.indexOf("r11") != -1) {
+      digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
+      delay(1000);
+    } else if (command.indexOf("r10") != -1) {
+      digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+      delay(1000);
+    } else if (command.indexOf("r2a1") != -1) {
+      digitalWrite(BATTERY_CHARGER, LOW);
+      delay(1000);
+    } else if (command.indexOf("r2a0") != -1) {
+      digitalWrite(BATTERY_CHARGER, HIGH);
+      delay(1000);
+    } else if (command.indexOf("r2b1") != -1) {
+      digitalWrite(POWER_OUTPUT_SELECTOR, LOW);
+      delay(1000);
+    } else if (command.indexOf("r2b0") != -1) {
+      digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
+      delay(1000);
+    }
   } else {
     println("Executing: " + command);
     say(command);
@@ -1342,4 +1403,43 @@ bool isNum(String num) {
     return true;
   else
     return false;
+}
+
+bool wapdaOn() {
+  if (digitalRead(WAPDA_STATE) == HIGH)
+    return true;
+  else
+    return false;
+}
+
+void backup(String state) {
+  if (state == "WAPDA") {
+    digitalWrite(POWER_OUTPUT_SELECTOR, LOW); // Relay module ON on low
+  } else if (state == "Batteries") {
+    digitalWrite(POWER_OUTPUT_SELECTOR, HIGH); // Relay module OFF on high
+  } else {
+    println("Error in backup function");
+  }
+}
+
+void chargeBatteries(bool charge) {
+  if (!batteriesCharged && charge) {
+    if (((millis() / 60000) - wapdaInTime) < (batteryChargeTime * 2)) {
+      digitalWrite(BATTERY_CHARGER, LOW); // on
+      if (((millis() / 60000) - wapdaInTime) < batteryChargeTime) {
+        // charge first pair of batteries
+        digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
+      } else {
+        // charge second pair of batteries
+        digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+      }
+    } else {
+      digitalWrite(BATTERY_CHARGER, HIGH); // off
+    }
+  } else if (!charge) {
+    digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+    digitalWrite(BATTERY_CHARGER, HIGH); // on
+  } else {
+    println("unexpected error at chargeBatteries function");
+  }
 }
