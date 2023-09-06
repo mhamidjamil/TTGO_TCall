@@ -1,6 +1,6 @@
-//$ last work 4/Sep/23 [02:34 AM]
-// # version 5.3.4
-// # Release Note : PowerBank rework logic fixes and tested
+//$ last work 6/Sep/23 [11:36 PM]
+// # version 5.3.5
+// # Release Note : Company messages will be deleted automatically
 
 const char simPIN[] = "";
 
@@ -532,10 +532,16 @@ String getResponse() {
       if (temp_str.indexOf("<executed>") != -1)
         deleteMessage(newMessageNumber);
       else {
-        sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
-                "} message : > [ " +
-                temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
-                " ] from : " + senderNumber);
+        if (!companyMsg(senderNumber))
+          sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
+                  "} message : > [ " +
+                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                  " ] from : " + senderNumber);
+        else
+          sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
+                  "} message : > [ " +
+                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                  " ] from : " + senderNumber + ". deleting it...");
       }
     }
   } else if (response.indexOf("+CLIP:") != -1) {
@@ -737,13 +743,22 @@ void terminateLastMessage() {
     deleteMessage(currentTargetIndex);
     println("Message {" + String(currentTargetIndex) + "} deleted");
   } else { // if the message don't execute
+    String mobileNumber = getMobileNumberOfMsg(String(currentTargetIndex));
     if (!checkStack(currentTargetIndex)) {
-      sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
-              "} message : [ " +
-              temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
-              " ] from : " + getMobileNumberOfMsg(String(currentTargetIndex)) +
-              ", what to do ?");
-      Delay(2000);
+      if (!companyMsg(mobileNumber)) {
+        sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
+                "} message : [ " +
+                temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                " ] from : " + mobileNumber + ", what to do ?");
+        Delay(2000);
+      } else {
+        sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
+                "} message : [ " +
+                temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                " ] from : " + mobileNumber + ". deleting it...");
+        Delay(2000);
+        deleteMessage(currentTargetIndex);
+      }
     }
   }
 }
@@ -1280,9 +1295,9 @@ String fetchDetails(String str, String begin_end, int padding) {
 }
 
 String fetchDetails(String str, String begin, String end, int padding) {
-  // str is the string to fetch data using begin and end character or string and
-  // padding remove the data around the required data if padding is 1 then it
-  // will only remove the begin and end string/character
+  // str is the string to fetch data using begin and end character or string
+  // and padding remove the data around the required data if padding is 1 then
+  // it will only remove the begin and end string/character
   String beginOfTarget = str.substring(str.indexOf(begin) + 1, -1);
   Println("beginOfTarget : " + beginOfTarget);
   return beginOfTarget.substring(padding - 1,
@@ -1297,8 +1312,8 @@ void initBLE() {
   BLEService *pService = pServer->createService(
       BLEUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b")); // Custom service UUID
   pCharacteristic = pService->createCharacteristic(
-      BLEUUID(
-          "beb5483e-36e1-4688-b7f5-ea07361b26a8"), // Custom characteristic UUID
+      BLEUUID("beb5483e-36e1-4688-b7f5-ea07361b26a8"), // Custom
+                                                       // characteristic UUID
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
   pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
 
@@ -1417,7 +1432,6 @@ void inputManager(String command, int inputFrom) {
     // fetch sms from input string, sample-> sms : msg here
     String sms = command.substring(command.indexOf("sms") + 4);
     println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
-
     sendSMS(sms);
   } else if (command.indexOf("all") != -1) {
     println("Reading all messages");
@@ -1428,17 +1442,13 @@ void inputManager(String command, int inputFrom) {
     println("Index before <" + command.substring(11, -1) + "> is : " +
             String(getMessageNumberBefore(command.substring(11, -1).toInt())));
   } else if (command.indexOf("read") != -1) {
-    if (messageExists(command.substring(command.indexOf("read") + 5).toInt()))
-      println(
-          "Message: " +
-          readMessage(command.substring(command.indexOf("read") + 5).toInt()));
+    int targetMsg = fetchNumber(command);
+    if (messageExists(targetMsg))
+      println("Message: " + readMessage(targetMsg));
     else
       println("Message not Exists");
   } else if (command.indexOf("delete") != -1) { // to delete message
     deleteMessages(command);
-    // println("Deleting message number : " +
-    //         String(command.substring(command.indexOf("delete") + 7)));
-    // deleteMessage(command.substring(command.indexOf("delete") + 7).toInt());
   } else if (command.indexOf("terminator") != -1) {
     terminateLastMessage();
   } else if (command.indexOf("hangUp") != -1) {
@@ -1505,4 +1515,22 @@ void inputManager(String command, int inputFrom) {
     println("Executing: " + command);
     say(command);
   }
+}
+
+bool companyMsg(String mobileNumber) {
+  if (mobileNumber.indexOf("Telenor") != -1)
+    return true;
+  else if (mobileNumber.indexOf("Jazz") == -1 ||
+           senderNumber.indexOf("JAZZ") == -1 ||
+           senderNumber.indexOf("JAZZ OFFER") == -1 ||
+           senderNumber.indexOf("JazzCash") == -1)
+    return true;
+  else if (mobileNumber.indexOf("Zong") != -1)
+    return true;
+  else if (mobileNumber.indexOf("Ufone") != -1)
+    return true;
+  else if (mobileNumber.indexOf("Warid") != -1)
+    return true;
+  else
+    return false;
 }
