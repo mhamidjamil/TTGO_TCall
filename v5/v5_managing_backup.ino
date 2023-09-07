@@ -544,7 +544,7 @@ String getResponse() {
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
         else
-          sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
+          sendSMS("<Unable to execute new sms no. {" + String(newMessageNumber) +
                   "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber + ". deleting it...");
@@ -758,7 +758,7 @@ void terminateLastMessage() {
                 " ] from : " + mobileNumber + ", what to do ?");
         Delay(2000);
       } else {
-        sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
+        sendSMS("Unable to execute previous sms no. {" + String(currentTargetIndex) +
                 "} message : [ " +
                 temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                 " ] from : " + mobileNumber + ". deleting it...");
