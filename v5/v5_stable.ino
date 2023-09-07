@@ -1,6 +1,6 @@
-//$ last work 3/Sep/23 [11:05 PM]
-// # version 5.3.3
-// # Release Note : PowerBank for router #First success
+//$ last work 7/Sep/23 [12:19 AM]
+// # version 5.3.5
+// # Release Note : Company messages will be deleted automatically
 
 const char simPIN[] = "";
 
@@ -38,13 +38,12 @@ String MOBILE_No = "+923354888420";
 #define LED 13
 
 #define WAPDA_STATE 15 // Check if wapda is on or off
-
-// Magenta  R1
+// Magenta  R1:
 #define BATTERY_PAIR_SELECTOR 32 // Select which battery pair is to be charge
-// Blue R2-A
+// Blue R2-A:
 #define BATTERY_CHARGER 14 // Battery should charge or not
-// Green R2-B
-#define POWER_OUTPUT_SELECTOR 12 // Router input source selector
+// Green R2-B:
+#define POWER_OUTPUT_SELECTOR 0 // Router input source selector
 
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
@@ -117,6 +116,10 @@ bool wifiWorking = true;
 bool displayWorking = true;
 bool smsAllowed = true;
 
+String messageTemplate =
+    "#setting <ultra sound alerts 0> <display 1> <wifi "
+    "connectivity 1> <sms 1> <termination time 300> <battery charge time 1800>";
+
 int terminationTime = 60 * 5; // 5 minutes
 String rtc = "";              // real Time Clock
 String BLE_Input = "";
@@ -125,6 +128,10 @@ String BLE_Output = "";
 int batteryChargeTime = 30 * 60; // 30 minutes
 unsigned int wapdaInTime = 0;    // when wapda is on it store the time stamp.
 bool batteriesCharged = false;
+
+String errorCodes = "";
+String chargingStatus = "";
+// these error codes will be moving in the last row of lcd
 
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
@@ -197,6 +204,13 @@ void deleteMessages(String index);
 void inputManager(String input, int inputFrom);
 void initBLE();
 void BLE_inputManager(String input);
+bool isNum(String num);
+bool wapdaOn();
+void backup(String state);
+void chargeBatteries(bool charge);
+String getCompleteString(String str, String target);
+int fetchNumber(String str);
+bool companyMsg(String);
 // # ......... < functions .......
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -379,7 +393,7 @@ void loop() {
     Println("after DHT conversion");
 
     line_1 = line_1.substring(0, 6) + String(temperatureStr) + " C  " +
-             END_VALUES + " " + String((millis() / 1000) % 100);
+             END_VALUES + " " + chargingStatus;
     Println("after line 1");
 
     line_2 = "Hu: " + String(humidity) + " % / " + thingSpeakLastUpdate();
@@ -405,6 +419,12 @@ void println(String str) {
 }
 
 void Println(String str) {
+  if (DEBUGGING) {
+    Serial.println(str);
+  }
+}
+
+void Print(String str) {
   if (DEBUGGING) {
     Serial.println(str);
   }
@@ -523,10 +543,16 @@ String getResponse() {
       if (temp_str.indexOf("<executed>") != -1)
         deleteMessage(newMessageNumber);
       else {
-        sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
-                "} message : > [ " +
-                temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
-                " ] from : " + senderNumber);
+        if (!companyMsg(senderNumber))
+          sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
+                  "} message : > [ " +
+                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                  " ] from : " + senderNumber);
+        else
+          sendSMS("<Unable to execute new sms no. {" + String(newMessageNumber) +
+                  "} message : > [ " +
+                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                  " ] from : " + senderNumber + ". deleting it...");
       }
     }
   } else if (response.indexOf("+CLIP:") != -1) {
@@ -728,13 +754,22 @@ void terminateLastMessage() {
     deleteMessage(currentTargetIndex);
     println("Message {" + String(currentTargetIndex) + "} deleted");
   } else { // if the message don't execute
+    String mobileNumber = getMobileNumberOfMsg(String(currentTargetIndex));
     if (!checkStack(currentTargetIndex)) {
-      sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
-              "} message : [ " +
-              temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
-              " ] from : " + getMobileNumberOfMsg(String(currentTargetIndex)) +
-              ", what to do ?");
-      Delay(2000);
+      if (!companyMsg(mobileNumber)) {
+        sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
+                "} message : [ " +
+                temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                " ] from : " + mobileNumber + ", what to do ?");
+        Delay(2000);
+      } else {
+        sendSMS("Unable to execute previous sms no. {" + String(currentTargetIndex) +
+                "} message : [ " +
+                temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                " ] from : " + mobileNumber + ". deleting it...");
+        Delay(2000);
+        deleteMessage(currentTargetIndex);
+      }
     }
   }
 }
@@ -746,7 +781,8 @@ bool checkStack(int messageNumber) {
         messageStack[i] = messageNumber;
         return true;
       }
-    println("\n#Error 495\n");
+    println("\n#Error 784\n");
+    errorCodes += "784 ";
     return false;
   } else {
     return false;
@@ -886,11 +922,11 @@ void updateThingSpeak(float temperature, int humidity) {
 
     int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
     if (updateStatus == 200) {
-      println("ThingSpeak update successful");
+      Println("ThingSpeak update successful");
       SUCCESS_MSG();
     } else {
-      print("Error updating ThingSpeak. Status: ");
-      println(String(updateStatus));
+      Print("Error updating ThingSpeak. Status: ");
+      Println(String(updateStatus));
       ERROR_MSG();
     }
   }
@@ -945,12 +981,21 @@ void lcd_print() {
   display.print(" ");
   display.print(String(RTC.hour) + ":" + String(RTC.minutes) + ":" +
                 String(RTC.seconds));
+  display.print(" ");
+  if ((((millis() / 60000) - wapdaInTime) < (batteryChargeTime * 2))) {
+    display.print(((millis() / 60000) - wapdaInTime));
+  }
 
-  display.setCursor(0, 20);
+  display.setCursor(0, 17);
   display.print(line_1);
 
-  display.setCursor(0, 35);
+  display.setCursor(0, 32);
   display.print(line_2);
+
+  if (errorCodes.length() > 0) {
+    display.setCursor(0, 47);
+    display.print(errorCodes);
+  }
 
   display.display();
   Delay(1000);
@@ -1007,7 +1052,9 @@ String getVariablesValues() {
       (String(displayWorking ? "Display on" : "Display off") + ", " +
        String(ultraSoundWorking ? "ultraSound on" : "ultraSound off") + ", " +
        String(wifiWorking ? "wifi on" : "wifi off")) +
-      " Termination time : " + String(terminationTime));
+      " Termination time : " + String(terminationTime) +
+      "sms allowed : " + String(smsAllowed) +
+      " Battery charge time : " + String(batteryChargeTime));
 }
 
 void updateVariablesValues(String str) {
@@ -1019,39 +1066,34 @@ void updateVariablesValues(String str) {
   } else {
     println("Updating " + String(newValues) + " values");
     if (str.indexOf("ultra") != -1) {
-      String forUltraSound =
-          str.substring(str.indexOf("<ultra sound alerts") + 20,
-                        str.indexOf("<ultra sound alerts") + 22);
-      if (forUltraSound.indexOf("0") != -1) {
+      int response = fetchNumber(getCompleteString(str, "ultra"));
+      if (response == 0) {
         ultraSoundWorking = false;
-      } else if (forUltraSound.indexOf("1") != -1) {
+      } else if (response == 1) {
         ultraSoundWorking = true;
       }
     }
     if (str.indexOf("display") != -1) {
-      String forDisplay = str.substring(str.indexOf("<display") + 9,
-                                        str.indexOf("<display") + 11);
-      if (forDisplay.indexOf("0") != -1) {
+      int response = fetchNumber(getCompleteString(str, "display"));
+      if (response == 0) {
         displayWorking = false;
-      } else if (forDisplay.indexOf("1") != -1) {
+      } else if (response == 1) {
         displayWorking = true;
       }
     }
     if (str.indexOf("sms") != -1) {
-      String forSms =
-          str.substring(str.indexOf("<sms") + 5, str.indexOf("<sms") + 7);
-      if (forSms.indexOf("0") != -1) {
+      int response = fetchNumber(getCompleteString(str, "sms"));
+      if (response == 0) {
         smsAllowed = false;
-      } else if (forSms.indexOf("1") != -1) {
+      } else if (response == 1) {
         smsAllowed = true;
       }
     }
     if (str.indexOf("wifi") != -1) {
-      String forWifi = str.substring(str.indexOf("<wifi connectivity") + 19,
-                                     str.indexOf("<wifi connectivity") + 21);
-      if (forWifi.indexOf("0") != -1) {
+      int response = fetchNumber(getCompleteString(str, "wifi"));
+      if (response == 0) {
         wifiWorking = false;
-      } else if (forWifi.indexOf("1") != -1) {
+      } else if (response == 1) {
         wifiWorking = true;
         if (ThingSpeakEnable && wifi_connected()) {
           Println("\nThinkSpeak initializing in loop...\n");
@@ -1060,12 +1102,10 @@ void updateVariablesValues(String str) {
       }
     }
     if (str.indexOf("termination") != -1) {
-      String forTerminator =
-          str.substring(str.indexOf("<termination time") + 18,
-                        str.indexOf("<termination time") + 20);
-      print("\nTermination time updated: " + String(terminationTime) + " -> ");
-      terminationTime = forTerminator.toInt() * 60;
-      println(String(terminationTime));
+      terminationTime = fetchNumber(getCompleteString(str, "termination"));
+    }
+    if (str.indexOf("battery") != -1) {
+      batteryChargeTime = fetchNumber(getCompleteString(str, "battery"));
     }
   }
   println("msg : " + str + "\nAfter  update : ");
@@ -1091,9 +1131,9 @@ void wait(unsigned int miliSeconds) {
     if ((millis() / 1000) % terminationTime == 0 &&
         terminationTime > 0) // after every 5 minutes
     {
-      println("before termination");
+      Println("before termination");
       terminateLastMessage();
-      println("after termination");
+      Println("after termination");
       condition = true;
     }
     if (displayWorking) {
@@ -1193,7 +1233,7 @@ void setTime() { // this function will set RTC struct using rtc string
 }
 
 void Delay(int milliseconds) {
-  for (int i = 0; i < milliseconds; i += 5) {
+  for (int i = 0; i < milliseconds; i++) {
     if (wapdaOn()) {   // charge batteries
       backup("WAPDA"); // shift backup to WAPDA
       if (wapdaInTime == 0) {
@@ -1201,16 +1241,16 @@ void Delay(int milliseconds) {
         println("Shifting router input Source to WAPDA");
       }
       chargeBatteries(true);
-    } else { // power on router from batteries
+    } else {               // power on router from batteries
+      backup("Batteries"); // shift backup to WAPDA
       if (wapdaInTime != 0) {
         println("Shifting router to Batteries");
         wapdaInTime = 0;
       }
       // convert milles to minutes>seconds
-      backup("Batteries"); // shift backup to WAPDA
       chargeBatteries(false);
     }
-    delay(5);
+    delay(1);
   }
 
   RTC.milliSeconds += milliseconds;
@@ -1272,9 +1312,9 @@ String fetchDetails(String str, String begin_end, int padding) {
 }
 
 String fetchDetails(String str, String begin, String end, int padding) {
-  // str is the string to fetch data using begin and end character or string and
-  // padding remove the data around the required data if padding is 1 then it
-  // will only remove the begin and end string/character
+  // str is the string to fetch data using begin and end character or string
+  // and padding remove the data around the required data if padding is 1 then
+  // it will only remove the begin and end string/character
   String beginOfTarget = str.substring(str.indexOf(begin) + 1, -1);
   Println("beginOfTarget : " + beginOfTarget);
   return beginOfTarget.substring(padding - 1,
@@ -1289,8 +1329,8 @@ void initBLE() {
   BLEService *pService = pServer->createService(
       BLEUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b")); // Custom service UUID
   pCharacteristic = pService->createCharacteristic(
-      BLEUUID(
-          "beb5483e-36e1-4688-b7f5-ea07361b26a8"), // Custom characteristic UUID
+      BLEUUID("beb5483e-36e1-4688-b7f5-ea07361b26a8"), // Custom
+                                                       // characteristic UUID
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
   pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
 
@@ -1303,6 +1343,99 @@ void initBLE() {
   BLEDevice::startAdvertising();
 
   Serial.println("Waiting for Bluetooth connection...");
+}
+
+bool isNum(String num) {
+  if (num.toInt() > -9999 && num.toInt() < 9999)
+    return true;
+  else
+    return false;
+}
+
+bool wapdaOn() {
+  if (digitalRead(WAPDA_STATE) == HIGH)
+    return true;
+  else
+    return false;
+}
+
+void backup(String state) {
+  if (state == "WAPDA") {
+    digitalWrite(POWER_OUTPUT_SELECTOR, LOW); // Relay module ON on low
+  } else if (state == "Batteries") {
+    digitalWrite(POWER_OUTPUT_SELECTOR, HIGH); // Relay module OFF on high
+  } else {
+    println("Error in backup function");
+    errorCodes += "1367 ";
+  }
+}
+
+void chargeBatteries(bool charge) {
+  if (!batteriesCharged && charge) {
+    if (((millis() / 60000) - wapdaInTime) < (batteryChargeTime * 2)) {
+      digitalWrite(BATTERY_CHARGER, LOW); // on
+      if (((millis() / 60000) - wapdaInTime) < batteryChargeTime) {
+        // charge first pair of batteries
+        digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+        chargingStatus = "C1";
+      } else {
+        // charge second pair of batteries
+        digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
+        chargingStatus = "C2";
+      }
+    } else {
+      digitalWrite(BATTERY_CHARGER, HIGH); // off
+      digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+      chargingStatus = "NC";
+    }
+  } else if (!charge) {
+    digitalWrite(BATTERY_CHARGER, HIGH); // on
+    digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+    chargingStatus = "CC";
+  } else {
+    println("unexpected error at chargeBatteries function");
+    errorCodes += "1385 ";
+  }
+}
+
+String getCompleteString(String str, String target) {
+  //" #setting <ultra sound alerts 0> <display 1>" , "ultra"
+  // return "ultra sound alerts 0"
+  String tempStr = "";
+  int i = str.indexOf(target);
+  if (i == -1) {
+    println("String is empty" + str);
+    return tempStr;
+  }
+  for (; i < str.length(); i++) {
+    if ((str[i] >= '0' && str[i] <= '9') || (str[i] >= 'a' && str[i] <= 'z') ||
+        (str[i] >= 'A' && str[i] <= 'Z') || (str[i] == ' '))
+      tempStr += str[i];
+    else {
+      //   println("Returning (complete string) 1: " + tempStr);
+      return tempStr;
+    }
+  }
+  //   println("Returning (complete string) 2: " + tempStr);
+  return tempStr;
+}
+
+int fetchNumber(String str) {
+  // chargeFor 30
+  //   println("fetchNumber function called with : " + str);
+  String number = "";
+  bool numberStart = false;
+  for (int i = 0; i < str.length(); i++) {
+    if (str[i] >= '0' && str[i] <= '9') {
+      number += str[i];
+      numberStart = true;
+    } else if (numberStart) {
+      //   println("Returning (fetchNumber) 1: " + number);
+      return number.toInt();
+    }
+  }
+  //   println("Returning (fetchNumber) 2: " + number);
+  return number.toInt();
 }
 
 void inputManager(String command, int inputFrom) {
@@ -1322,7 +1455,6 @@ void inputManager(String command, int inputFrom) {
     // fetch sms from input string, sample-> sms : msg here
     String sms = command.substring(command.indexOf("sms") + 4);
     println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
-
     sendSMS(sms);
   } else if (command.indexOf("all") != -1) {
     println("Reading all messages");
@@ -1333,17 +1465,13 @@ void inputManager(String command, int inputFrom) {
     println("Index before <" + command.substring(11, -1) + "> is : " +
             String(getMessageNumberBefore(command.substring(11, -1).toInt())));
   } else if (command.indexOf("read") != -1) {
-    if (messageExists(command.substring(command.indexOf("read") + 5).toInt()))
-      println(
-          "Message: " +
-          readMessage(command.substring(command.indexOf("read") + 5).toInt()));
+    int targetMsg = fetchNumber(command);
+    if (messageExists(targetMsg))
+      println("Message: " + readMessage(targetMsg));
     else
       println("Message not Exists");
   } else if (command.indexOf("delete") != -1) { // to delete message
     deleteMessages(command);
-    // println("Deleting message number : " +
-    //         String(command.substring(command.indexOf("delete") + 7)));
-    // deleteMessage(command.substring(command.indexOf("delete") + 7).toInt());
   } else if (command.indexOf("terminator") != -1) {
     terminateLastMessage();
   } else if (command.indexOf("hangUp") != -1) {
@@ -1392,54 +1520,38 @@ void inputManager(String command, int inputFrom) {
       digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
       delay(1000);
     }
+  } else if (command.indexOf("switch") != -1) {
+    if (command.indexOf("0") != -1)
+      digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+    else if (command.indexOf("1") != -1)
+      digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
+    else
+      println("Error in switch command");
+  } else if (command.indexOf("chargeFor") != -1) {
+    batteryChargeTime = fetchNumber(getCompleteString(command, "chargeFor"));
+    println("Battery charge time updated to : " + String(batteryChargeTime) +
+            " minutes");
+  } else if (command.indexOf("updateTime")) {
+    println("Updating time");
+    sendSMS("#setTime", "+923374888420");
   } else {
     println("Executing: " + command);
     say(command);
   }
 }
 
-bool isNum(String num) {
-  if (num.toInt() > -9999 && num.toInt() < 9999)
+bool companyMsg(String mobileNumber) {
+  if (mobileNumber.indexOf("Telenor") != -1)
+    return true;
+  else if (mobileNumber.indexOf("Jazz") == -1 ||
+           mobileNumber.indexOf("JAZZ") == -1)
+    return true;
+  else if (mobileNumber.indexOf("Zong") != -1)
+    return true;
+  else if (mobileNumber.indexOf("Ufone") != -1)
+    return true;
+  else if (mobileNumber.indexOf("Warid") != -1)
     return true;
   else
     return false;
-}
-
-bool wapdaOn() {
-  if (digitalRead(WAPDA_STATE) == HIGH)
-    return true;
-  else
-    return false;
-}
-
-void backup(String state) {
-  if (state == "WAPDA") {
-    digitalWrite(POWER_OUTPUT_SELECTOR, LOW); // Relay module ON on low
-  } else if (state == "Batteries") {
-    digitalWrite(POWER_OUTPUT_SELECTOR, HIGH); // Relay module OFF on high
-  } else {
-    println("Error in backup function");
-  }
-}
-
-void chargeBatteries(bool charge) {
-  if (!batteriesCharged && charge) {
-    if (((millis() / 60000) - wapdaInTime) < (batteryChargeTime * 2)) {
-      digitalWrite(BATTERY_CHARGER, LOW); // on
-      if (((millis() / 60000) - wapdaInTime) < batteryChargeTime) {
-        // charge first pair of batteries
-        digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-      } else {
-        // charge second pair of batteries
-        digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-      }
-    } else {
-      digitalWrite(BATTERY_CHARGER, HIGH); // off
-    }
-  } else if (!charge) {
-    digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-    digitalWrite(BATTERY_CHARGER, HIGH); // on
-  } else {
-    println("unexpected error at chargeBatteries function");
-  }
 }

@@ -129,6 +129,10 @@ int batteryChargeTime = 30 * 60; // 30 minutes
 unsigned int wapdaInTime = 0;    // when wapda is on it store the time stamp.
 bool batteriesCharged = false;
 
+String errorCodes = "";
+String chargingStatus = "";
+// these error codes will be moving in the last row of lcd
+
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
   int milliSeconds = 0;
@@ -206,6 +210,7 @@ void backup(String state);
 void chargeBatteries(bool charge);
 String getCompleteString(String str, String target);
 int fetchNumber(String str);
+bool companyMsg(String);
 // # ......... < functions .......
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -388,7 +393,7 @@ void loop() {
     Println("after DHT conversion");
 
     line_1 = line_1.substring(0, 6) + String(temperatureStr) + " C  " +
-             END_VALUES + " " + String((millis() / 1000) % 100);
+             END_VALUES + " " + chargingStatus;
     Println("after line 1");
 
     line_2 = "Hu: " + String(humidity) + " % / " + thingSpeakLastUpdate();
@@ -776,7 +781,8 @@ bool checkStack(int messageNumber) {
         messageStack[i] = messageNumber;
         return true;
       }
-    println("\n#Error 495\n");
+    println("\n#Error 784\n");
+    errorCodes += "784 ";
     return false;
   } else {
     return false;
@@ -985,6 +991,11 @@ void lcd_print() {
 
   display.setCursor(0, 32);
   display.print(line_2);
+
+  if (errorCodes.length() > 0) {
+    display.setCursor(0, 47);
+    display.print(errorCodes);
+  }
 
   display.display();
   Delay(1000);
@@ -1355,6 +1366,7 @@ void backup(String state) {
     digitalWrite(POWER_OUTPUT_SELECTOR, HIGH); // Relay module OFF on high
   } else {
     println("Error in backup function");
+    errorCodes += "1367 ";
   }
 }
 
@@ -1365,19 +1377,24 @@ void chargeBatteries(bool charge) {
       if (((millis() / 60000) - wapdaInTime) < batteryChargeTime) {
         // charge first pair of batteries
         digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+        chargingStatus = "C1";
       } else {
         // charge second pair of batteries
         digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
+        chargingStatus = "C2";
       }
     } else {
       digitalWrite(BATTERY_CHARGER, HIGH); // off
       digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+      chargingStatus = "NC";
     }
   } else if (!charge) {
     digitalWrite(BATTERY_CHARGER, HIGH); // on
     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+    chargingStatus = "CC";
   } else {
     println("unexpected error at chargeBatteries function");
+    errorCodes += "1385 ";
   }
 }
 
