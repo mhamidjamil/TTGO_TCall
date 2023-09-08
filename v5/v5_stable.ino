@@ -88,7 +88,7 @@ const unsigned long channelID = 2201589;
 const char *apiKey = "Q3TSTOM87EUBNOAE";
 
 int updateInterval = 2 * 60;
-unsigned int last_update = 1; // in minutes
+unsigned int last_update = 0; // in minutes
 WiFiClient client;
 
 String END_VALUES = "  ";
@@ -1390,6 +1390,7 @@ void chargeBatteries(bool charge) {
     }
   } else if (!charge) {
     digitalWrite(BATTERY_CHARGER, HIGH); // on
+    Delay(100);
     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
     chargingStatus = "CC";
   } else {
