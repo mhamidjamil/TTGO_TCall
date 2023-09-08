@@ -1,6 +1,6 @@
-//$ last work 7/Sep/23 [12:19 AM]
-// # version 5.3.5
-// # Release Note : Company messages will be deleted automatically
+//$ last work 9/Sep/23 [03:07 AM]
+// # version 5.3.6
+// # Release Note : < unable to boot > Bug fix
 
 const char simPIN[] = "";
 
@@ -549,8 +549,8 @@ String getResponse() {
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
         else
-          sendSMS("<Unable to execute new sms no. {" + String(newMessageNumber) +
-                  "} message : > [ " +
+          sendSMS("<Unable to execute new sms no. {" +
+                  String(newMessageNumber) + "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber + ". deleting it...");
       }
@@ -763,8 +763,8 @@ void terminateLastMessage() {
                 " ] from : " + mobileNumber + ", what to do ?");
         Delay(2000);
       } else {
-        sendSMS("Unable to execute previous sms no. {" + String(currentTargetIndex) +
-                "} message : [ " +
+        sendSMS("Unable to execute previous sms no. {" +
+                String(currentTargetIndex) + "} message : [ " +
                 temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                 " ] from : " + mobileNumber + ". deleting it...");
         Delay(2000);
@@ -1390,7 +1390,6 @@ void chargeBatteries(bool charge) {
     }
   } else if (!charge) {
     digitalWrite(BATTERY_CHARGER, HIGH); // on
-    Delay(100);
     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
     chargingStatus = "CC";
   } else {
