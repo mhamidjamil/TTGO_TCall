@@ -1,10 +1,22 @@
-//$ last work 9/Sep/23 [03:07 AM]
-// # version 5.3.6
-// # Release Note : < unable to boot > Bug fix
+//$ last work 10/Sep/23 [03:32 AM]
+// # version 5.3.7.1
+// # Release Note : Whatsapp messages implemented
 
 const char simPIN[] = "";
 
 String MOBILE_No = "+923354888420";
+
+#include <HTTPClient.h>
+
+String NUMBER[4] = {"+923354888420&text=", "+923331749710&text=",
+                    "+923114888420&text=", "+923374888420&text="};
+
+String API[4] = {"&apikey=518125", "&apikey=4026003", "&apikey=8699997",
+                 "&apikey=3123061"};
+
+// https://api.callmebot.com/whatsapp.php?phone=+923354888420&text=This+is+a+test&apikey=518125
+
+String server = "https://api.callmebot.com/whatsapp.php?phone=";
 
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
@@ -86,7 +98,9 @@ const char *ssid = "Archer 73";
 const char *password = "Archer@73_102#";
 const unsigned long channelID = 2201589;
 const char *apiKey = "Q3TSTOM87EUBNOAE";
-
+int messagesCounterID = 5;
+int lastMessageUpdateID = 6;
+int whatsappMessageNumber = -1;
 int updateInterval = 2 * 60;
 unsigned int last_update = 0; // in minutes
 WiFiClient client;
@@ -544,16 +558,18 @@ String getResponse() {
       if (temp_str.indexOf("<executed>") != -1)
         deleteMessage(newMessageNumber);
       else {
-        if (!companyMsg(senderNumber))
+        if (!companyMsg(senderNumber)) {
           sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
                   "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
-        else
+        } else {
           sendSMS("<Unable to execute new sms no. {" +
                   String(newMessageNumber) + "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber + ". deleting it...");
+          deleteMessage(newMessageNumber);
+        }
       }
     }
   } else if (response.indexOf("+CLIP:") != -1) {
@@ -1538,9 +1554,11 @@ void inputManager(String command, int inputFrom) {
     batteryChargeTime = fetchNumber(getCompleteString(command, "chargeFor"));
     println("Battery charge time updated to : " + String(batteryChargeTime) +
             " minutes");
-  } else if (command.indexOf("updateTime")) {
+  } else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
     sendSMS("#setTime", "+923374888420");
+  } else if (command.indexOf("whatsapp") != -1) {
+    sendWhatsappMsg("test_message_from_esp32");
   } else {
     println("Executing: " + command);
     say(command);
@@ -1561,4 +1579,97 @@ bool companyMsg(String mobileNumber) {
     return true;
   else
     return false;
+}
+
+void sendWhatsappMsg(String message) {
+  if (RTC.date == 0) {
+    println("RTC not updated yet so wait for it to avoid unexpected behaviour");
+    return;
+  }
+  HTTPClient http;
+  String serverPath = getServerPath(get_HTTP_string(message));
+  http.begin(serverPath);
+  int httpResponseCode = http.GET();
+  if (httpResponseCode > 0) {
+    print("HTTP Response code: ");
+    println(String(httpResponseCode));
+    String payload = http.getString();
+    println(payload);
+    updateWhatsappMessageCounter();
+  } else {
+    print("Error code: ");
+    println(String(httpResponseCode));
+  }
+  http.end();
+}
+
+String getServerPath(String message) {
+  String whatsappNumber;
+  String api;
+  if (whatsappMessageNumber == -1) {
+    whatsappMessageNumber = getMessagesCounter();
+    if (whatsappMessageNumber < 0 && whatsappMessageNumber > 100) {
+      println("Unexpected behaviour in getMessagesCounter()");
+      errorCodes += "1608";
+    }
+  } else {
+    whatsappNumber = NUMBER[whatsappMessageNumber / 25];
+    api = API[whatsappMessageNumber / 25];
+    println("Using " + whatsappNumber +
+            "for whatsapp message : " + String(whatsappMessageNumber));
+  }
+  String serverPath = server + whatsappNumber + get_HTTP_string(message) + api;
+  return serverPath;
+}
+
+int getMessagesCounter() {
+  int todayMessages = -1;
+  int lastUpdateOfThingSpeakMessageCounter =
+      getThingSpeakFieldData(lastMessageUpdateID);
+  if (lastUpdateOfThingSpeakMessageCounter != RTC.date) {
+    setThingSpeakFieldData(lastMessageUpdateID, RTC.date);
+    setThingSpeakFieldData(messagesCounterID, 1);
+  } else {
+    todayMessages = getThingSpeakFieldData(messagesCounterID);
+  }
+  return todayMessages;
+}
+
+int getThingSpeakFieldData(int fieldNumber) {
+  int data = ThingSpeak.readIntField(channelID, messagesCounterID);
+  int statusCode = ThingSpeak.getLastReadStatus();
+  if (statusCode == 200) {
+    println("Data fetched from field : " + String(fieldNumber));
+  } else {
+    println("Problem reading channel. HTTP error code " + String(statusCode));
+    data = -1;
+  }
+  return data;
+}
+
+void updateWhatsappMessageCounter() {
+  setThingSpeakFieldData(lastMessageUpdateID, RTC.date);
+  setThingSpeakFieldData(messagesCounterID, ++whatsappMessageNumber);
+}
+
+void setThingSpeakFieldData(int field, int data) {
+  ThingSpeak.setField(field, data); // Set humidity value
+  int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
+  if (updateStatus == 200) {
+    Println("ThingSpeak update successful...");
+  } else {
+    Print("Error updating ThingSpeak. Status: ");
+    Println(String(updateStatus));
+  }
+}
+
+String get_HTTP_string(String message) {
+  String tempStr = "";
+  for (int i = 0; i < message.length(); i++) {
+    if (message[i] == ' ')
+      tempStr += "_";
+    else
+      tempStr += message[i];
+  }
+  return tempStr;
 }
