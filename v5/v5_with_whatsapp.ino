@@ -102,7 +102,8 @@ const char *apiKey = "Q3TSTOM87EUBNOAE";
 int messagesCounterID = 5;
 int lastMessageUpdateID = 6;
 int whatsappMessageNumber = -1;
-int updateInterval = 5 * 60;
+unsigned int lastTsUpdate = 2; // will update when time reaches
+#define UPDATE_THING_SPEAK_TH_AFTER 5
 unsigned int last_update = 0; // in minutes
 WiFiClient client;
 
@@ -956,6 +957,16 @@ void updateThingSpeak(float temperature, int humidity) {
   if (humidity < 110) {
     ThingSpeak.setField(1, temperature); // Set temperature value
     ThingSpeak.setField(2, humidity);    // Set humidity value
+    Println(4, "After setting up fields");
+
+    int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
+    if (updateStatus == 200) {
+      Println(4, "ThingSpeak update successful");
+      SUCCESS_MSG();
+    } else {
+      Println(4, "Error updating ThingSpeak. Status: " + String(updateStatus));
+      ERROR_MSG();
+    }
   }
 }
 
@@ -964,18 +975,13 @@ void SUCCESS_MSG() {
   digitalWrite(LED, HIGH);
   END_VALUES.setCharAt(1, '+');
   last_update = (millis() / 1000);
-  if (updateInterval > 5 * 60)
-    updateInterval = 5 * 60;
 }
 
 void ERROR_MSG() {
   // set curser to first row, first last column and print "tick symbol"
   digitalWrite(LED, LOW);
   END_VALUES.setCharAt(1, '-');
-  if (updateInterval < 60 * 30)
-    updateInterval *= 2;
-  else
-    END_VALUES.setCharAt(1, 'e');
+  END_VALUES.setCharAt(1, 'e');
   connect_wifi();
 }
 
@@ -1178,13 +1184,13 @@ void wait(unsigned int miliSeconds) {
         Println(2, "after display status work in wait function");
       }
     }
-    if (ThingSpeakEnable && ((millis() / 1000) % updateInterval == 0)) {
+    if (ThingSpeakEnable && (getMint() > lastTsUpdate)) {
       if (wifi_connected()) {
         if (wifiWorking) {
-          Println("Before Temperature Update");
+          Println(4, "Before Temperature Update");
           updateThingSpeak(temperature, humidity);
-          writeThingSpeakData();
-          Println("After temperature update");
+          lastTsUpdate = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
+          Println(4, "After temperature update");
           condition = true;
         }
       } else { // comment it if you don't want to connect to wifi
@@ -1686,6 +1692,8 @@ void writeThingSpeakData() {
     Println(4, "Error updating ThingSpeak. Status: " + String(updateStatus));
   }
 }
+
+unsigned int getMint() { return ((millis() / 1000) / 60); }
 
 String get_HTTP_string(String message) {
   String tempStr = "";
