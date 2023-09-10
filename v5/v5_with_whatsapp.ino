@@ -1,5 +1,5 @@
-//$ last work 10/Sep/23 [06:19 PM]
-// # version 5.3.7.1
+//$ last work 10/Sep/23 [08:12 PM]
+// # version 5.3.8
 // # Release Note : Whatsapp messages implemented
 // # Module will now optimize all 4 Whatsapp API's
 

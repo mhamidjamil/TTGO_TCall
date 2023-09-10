@@ -1,10 +1,23 @@
-//$ last work 9/Sep/23 [03:07 AM]
-// # version 5.3.6
-// # Release Note : < unable to boot > Bug fix
+//$ last work 10/Sep/23 [08:12 PM]
+// # version 5.3.8
+// # Release Note : Whatsapp messages implemented
+// # Module will now optimize all 4 Whatsapp API's
 
 const char simPIN[] = "";
 
 String MOBILE_No = "+923354888420";
+
+#include <HTTPClient.h>
+
+String NUMBER[4] = {"+923354888420&text=", "+923331749710&text=",
+                    "+923114888420&text=", "+923374888420&text="};
+
+String API[4] = {"&apikey=518125", "&apikey=4026003", "&apikey=8699997",
+                 "&apikey=3123061"};
+
+// https://api.callmebot.com/whatsapp.php?phone=+923354888420&text=This+is+a+test&apikey=518125
+
+String server = "https://api.callmebot.com/whatsapp.php?phone=";
 
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
@@ -86,8 +99,11 @@ const char *ssid = "Archer 73";
 const char *password = "Archer@73_102#";
 const unsigned long channelID = 2201589;
 const char *apiKey = "Q3TSTOM87EUBNOAE";
-
-int updateInterval = 2 * 60;
+int messagesCounterID = 5;
+int lastMessageUpdateID = 6;
+int whatsappMessageNumber = -1;
+unsigned int lastTsUpdate = 2; // will update when time reaches
+#define UPDATE_THING_SPEAK_TH_AFTER 5
 unsigned int last_update = 0; // in minutes
 WiFiClient client;
 
@@ -110,6 +126,16 @@ float temperature;
 int humidity;
 
 bool DEBUGGING = false;
+// (debuggerID == 0)     // debugging WIFI functionality
+// (debuggerID == 1) // debugging LCD functionality
+// (debuggerID == 2) // debugging SIM800L functionality
+// (debuggerID == 3) // debugging thingSpeak functionality
+// (debuggerID == 4) // debugging Whatsapp functionality
+// (debuggerID == 5) // debugging functionality
+
+int allowedDebugging[7] = {0, 0, 0, 1,
+                           1, 0, 0}; // 0 means not allowed 1 means allowed
+
 int debugFor = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
 bool wifiWorking = true;
@@ -117,9 +143,9 @@ bool displayWorking = true;
 bool smsAllowed = true;
 bool timeVersion = false;
 
-String messageTemplate =
-    "#setting <ultra sound alerts 0> <display 1> <wifi "
-    "connectivity 1> <sms 1> <termination time 300> <battery charge time 1800>";
+String messageTemplate = "#setting <ultra sound alerts 0> <display 1> <wifi "
+                         "connectivity 1> <sms 1> <termination time 300> "
+                         "<battery charge time 1800>";
 
 int terminationTime = 60 * 5; // 5 minutes
 String rtc = "";              // real Time Clock
@@ -427,7 +453,17 @@ void Println(String str) {
 
 void Print(String str) {
   if (DEBUGGING) {
-    Serial.println(str);
+    Serial.print(str);
+  }
+}
+
+void Println(int debuggerID, String str) {
+  if (DEBUGGING) {
+    println(str);
+  } else if (allowedDebugging[debuggerID - 1]) { // debugging WIFI functionality
+    println(str);
+  } else if (debuggerID < 0 || debuggerID > 7) {
+    Serial.println("Debugger is not defined for this string : " + str);
   }
 }
 
@@ -527,13 +563,13 @@ void getLastMessageAndIndex(String response, String &lastMessage,
 }
 
 String getResponse() {
-  Println("entering getResponse");
+  Println(3, "entering getResponse");
   Delay(100);
   String response = "";
   if ((SerialAT.available() > 0)) {
     response += SerialAT.readString();
   }
-  Println("After while loop in get response");
+  Println(3, "After while loop in get response");
   if (response.indexOf("+CMTI:") != -1) {
     int newMessageNumber = getNewMessageNumber(response);
     String senderNumber = getMobileNumberOfMsg(newMessageNumber);
@@ -544,16 +580,18 @@ String getResponse() {
       if (temp_str.indexOf("<executed>") != -1)
         deleteMessage(newMessageNumber);
       else {
-        if (!companyMsg(senderNumber))
+        if (!companyMsg(senderNumber)) {
           sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
                   "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
-        else
+        } else {
           sendSMS("<Unable to execute new sms no. {" +
                   String(newMessageNumber) + "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber + ". deleting it...");
+          deleteMessage(newMessageNumber);
+        }
       }
     }
   } else if (response.indexOf("+CLIP:") != -1) {
@@ -562,7 +600,7 @@ String getResponse() {
     sendSMS(temp_str);
     // println(temp_str);
   }
-  Println("Leaving response function with response [" + response + "]");
+  Println(3, "Leaving response function with response [" + response + "]");
   return response;
 }
 
@@ -575,12 +613,12 @@ int getNewMessageNumber(String response) {
 String readMessage(int index) { // read the message of given index
   say("AT+CMGR=" + String(index));
   String tempStr = getResponse();
-  Println("message i read : " + tempStr);
+  Println(3, "message i read : " + tempStr);
   tempStr = tempStr.substring(tempStr.lastIndexOf("\"") + 2);
-  Println("message i convert in stage 1 : " + tempStr);
+  Println(3, "message i convert in stage 1 : " + tempStr);
   // remove "\n" from start of string
   tempStr = tempStr.substring(tempStr.indexOf("\n") + 1);
-  Println("message i convert in stage 2 : " + tempStr);
+  Println(3, "message i convert in stage 2 : " + tempStr);
   return tempStr;
 }
 
@@ -603,7 +641,8 @@ String removeOk(String str) {
 }
 
 String executeCommand(String str) {
-  //~ additional commands will be executed here so define new sms commands here
+  //~ additional commands will be executed here so define new sms commands
+  // here
   if (str.indexOf("<executed>") != -1 || str.indexOf("<not executed>") != -1) {
     println("-> Already executed <-");
     return str;
@@ -915,23 +954,20 @@ void connect_wifi() {
 }
 
 void updateThingSpeak(float temperature, int humidity) {
-  Println("entering thingspeak function");
   if (humidity < 110) {
     ThingSpeak.setField(1, temperature); // Set temperature value
     ThingSpeak.setField(2, humidity);    // Set humidity value
-    Println("After setting up fields");
+    Println(4, "After setting up fields");
 
     int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
     if (updateStatus == 200) {
-      Println("ThingSpeak update successful");
+      Println(4, "ThingSpeak update successful");
       SUCCESS_MSG();
     } else {
-      Print("Error updating ThingSpeak. Status: ");
-      Println(String(updateStatus));
+      Println(4, "Error updating ThingSpeak. Status: " + String(updateStatus));
       ERROR_MSG();
     }
   }
-  Println("leaving thingspeak function");
 }
 
 void SUCCESS_MSG() {
@@ -939,18 +975,13 @@ void SUCCESS_MSG() {
   digitalWrite(LED, HIGH);
   END_VALUES.setCharAt(1, '+');
   last_update = (millis() / 1000);
-  if (updateInterval > 2 * 60)
-    updateInterval = 2 * 60;
 }
 
 void ERROR_MSG() {
   // set curser to first row, first last column and print "tick symbol"
   digitalWrite(LED, LOW);
   END_VALUES.setCharAt(1, '-');
-  if (updateInterval < 60 * 30)
-    updateInterval *= 2;
-  else
-    END_VALUES.setCharAt(1, 'e');
+  END_VALUES.setCharAt(1, 'e');
   connect_wifi();
 }
 
@@ -963,15 +994,15 @@ bool wifi_connected() {
 }
 
 void lcd_print() {
-  Println("entering lcd function");
+  Println(2, "entering lcd function");
   display.clearDisplay();
-  Println("second line of lcd function");
+  Println(2, "second line of lcd function");
   display.setTextSize(1);
   display.setCursor(0, 0);
   // Display static text
-  Println("before checking wifi status lcd function");
+  Println(2, "before checking wifi status lcd function");
   drawWifiSymbol(wifi_connected());
-  Println("after checking wifi status lcd function");
+  Println(2, "after checking wifi status lcd function");
   display.print(" ");
   if (messages_in_inbox > 1) {
     display.print(String(messages_in_inbox));
@@ -1006,7 +1037,7 @@ void lcd_print() {
 
   display.display();
   Delay(1000);
-  Println("leaving lcd function");
+  Println(2, "leaving lcd function");
 }
 
 String thingSpeakLastUpdate() {
@@ -1103,7 +1134,7 @@ void updateVariablesValues(String str) {
       } else if (response == 1) {
         wifiWorking = true;
         if (ThingSpeakEnable && wifi_connected()) {
-          Println("\nThinkSpeak initializing in loop...\n");
+          Println(4, "\nThinkSpeak initializing in loop...\n");
           ThingSpeak.begin(client); // Initialize ThingSpeak
         }
       }
@@ -1138,27 +1169,28 @@ void wait(unsigned int miliSeconds) {
     if ((millis() / 1000) % terminationTime == 0 &&
         terminationTime > 0) // after every 5 minutes
     {
-      Println("before termination");
+      Println(3, "before termination");
       terminateLastMessage();
-      Println("after termination");
+      Println(3, "after termination");
       condition = true;
     }
     if (displayWorking) {
       if ((millis() / 1000) % 100 == 0) {
-        Println("before display status work in wait function");
+        Println(2, "before display status work in wait function");
         messages_in_inbox =
             totalUnreadMessages(); // ! will be depreciated in future versions
         updateBatteryParameters(updateBatteryStatus());
         condition = true;
-        Println("after display status work in wait function");
+        Println(2, "after display status work in wait function");
       }
     }
-    if (ThingSpeakEnable && ((millis() / 1000) % updateInterval == 0)) {
+    if (ThingSpeakEnable && (getMint() > lastTsUpdate)) {
       if (wifi_connected()) {
         if (wifiWorking) {
-          Println("before thingspeak update");
+          Println(4, "Before Temperature Update");
           updateThingSpeak(temperature, humidity);
-          Println("After thingspeak update");
+          lastTsUpdate = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
+          Println(4, "After temperature update");
           condition = true;
         }
       } else { // comment it if you don't want to connect to wifi
@@ -1177,9 +1209,9 @@ void wait(unsigned int miliSeconds) {
     if (((millis() / 1000) > (debugFor - 30)) &&
         (millis() / 1000) < (debugFor - 27)) {
       // it will just run at first time when system booted
-      Println("\nBefore updating values from message 1\n");
+      Println(3, "\nBefore updating values from message 1\n");
       updateVariablesValues(readMessage(1));
-      Println("\nValues are updated from message 1\n");
+      Println(3, "\nValues are updated from message 1\n");
       Delay(1000);
       sendSMS("#setTime", "+923374888420");
       Delay(1000);
@@ -1538,9 +1570,11 @@ void inputManager(String command, int inputFrom) {
     batteryChargeTime = fetchNumber(getCompleteString(command, "chargeFor"));
     println("Battery charge time updated to : " + String(batteryChargeTime) +
             " minutes");
-  } else if (command.indexOf("updateTime")) {
+  } else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
     sendSMS("#setTime", "+923374888420");
+  } else if (command.indexOf("whatsapp") != -1) {
+    sendWhatsappMsg("test_message_from_esp32");
   } else {
     println("Executing: " + command);
     say(command);
@@ -1561,4 +1595,113 @@ bool companyMsg(String mobileNumber) {
     return true;
   else
     return false;
+}
+
+void sendWhatsappMsg(String message) {
+  if (RTC.date == 0) {
+    println("RTC not updated yet so wait for it to avoid unexpected behaviour");
+    return;
+  }
+  HTTPClient http;
+  String serverPath = getServerPath(get_HTTP_string(message));
+  http.begin(serverPath);
+  int httpResponseCode = http.GET();
+  if (httpResponseCode > 0) {
+    print("HTTP Response code: ");
+    println(String(httpResponseCode));
+    String payload = http.getString();
+    println(payload);
+    updateWhatsappMessageCounter();
+  } else {
+    print("Error code: ");
+    println(String(httpResponseCode));
+  }
+  http.end();
+}
+
+String getServerPath(String message) {
+  String whatsappNumber;
+  String api;
+  if (whatsappMessageNumber == -1) {
+    whatsappMessageNumber = getMessagesCounter();
+    if (whatsappMessageNumber < 0 && whatsappMessageNumber > 100) {
+      println("Unexpected behaviour in getMessagesCounter()");
+      errorCodes += "1608";
+    }
+    whatsappNumber = NUMBER[whatsappMessageNumber / 25];
+    api = API[whatsappMessageNumber / 25];
+
+  } else {
+    whatsappNumber = NUMBER[whatsappMessageNumber / 25];
+    api = API[whatsappMessageNumber / 25];
+    println("Using " + whatsappNumber +
+            "for whatsapp message : " + String(whatsappMessageNumber));
+  }
+  String serverPath = server + whatsappNumber + get_HTTP_string(message) + api;
+  Println(5, "returning mobile number : " + String(whatsappNumber));
+  Println(5, "returning api : " + String(api));
+  return serverPath;
+}
+
+int getMessagesCounter() {
+  int todayMessages = -1;
+  int lastUpdateOfThingSpeakMessageCounter =
+      getThingSpeakFieldData(lastMessageUpdateID);
+  if (lastUpdateOfThingSpeakMessageCounter != RTC.date) {
+    Println(5, "Day changed initiating new counter");
+    setThingSpeakFieldData(lastMessageUpdateID, RTC.date);
+    setThingSpeakFieldData(messagesCounterID, 1);
+    writeThingSpeakData();
+    todayMessages = 1;
+  } else {
+    todayMessages = getThingSpeakFieldData(messagesCounterID);
+    Println(5, "Else: Fetched data : " + String(todayMessages));
+  }
+  Println(5, "Returning Counter : " + String(todayMessages));
+  return todayMessages;
+}
+
+int getThingSpeakFieldData(int fieldNumber) {
+  int data = ThingSpeak.readIntField(channelID, fieldNumber);
+  int statusCode = ThingSpeak.getLastReadStatus();
+  if (statusCode == 200) {
+    Println(5, "Data fetched from field : " + String(fieldNumber));
+  } else {
+    Println(5,
+            "Problem reading channel. HTTP error code " + String(statusCode));
+    data = -1;
+  }
+  return data;
+}
+
+void updateWhatsappMessageCounter() {
+  setThingSpeakFieldData(lastMessageUpdateID, RTC.date);
+  setThingSpeakFieldData(messagesCounterID, ++whatsappMessageNumber);
+  writeThingSpeakData();
+}
+
+void setThingSpeakFieldData(int field, int data) {
+  ThingSpeak.setField(field, data);
+}
+
+void writeThingSpeakData() {
+  int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
+  if (updateStatus == 200) {
+    Println(4, "ThingSpeak update successfully...");
+  } else {
+    Println(4, "Error updating ThingSpeak. Status: " + String(updateStatus));
+  }
+}
+
+unsigned int getMint() { return ((millis() / 1000) / 60); }
+
+String get_HTTP_string(String message) {
+  String tempStr = "";
+  for (int i = 0; i < message.length(); i++) {
+    if (message[i] == ' ')
+      tempStr += "_";
+    else
+      tempStr += message[i];
+  }
+  return tempStr;
 }
