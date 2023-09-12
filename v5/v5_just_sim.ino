@@ -12,9 +12,11 @@
 //` what if ran out of balance of package ? add this check so module will
 // not send any message if there is no package is subscribed
 
+#include <arduino_secrets.h>
+
 const char simPIN[] = "";
 
-String MOBILE_No = "+923354888420";
+String MOBILE_No = MY_Number;
 
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
@@ -70,10 +72,10 @@ bool setPowerBoostKeepOn(int en) {
 }
 
 // ThingSpeak parameters
-const char *ssid = "Archer 73";
-const char *password = "Archer@73_102#";
-const unsigned long channelID = 2201589;
-const char *apiKey = "Q3TSTOM87EUBNOAE";
+const char *ssid = MY_SSID;
+const char *password = MY_PASSWORD;
+const unsigned long channelID = MY_CHANNEL_ID;
+const char *apiKey = THINGSPEAK_API;
 
 WiFiClient client;
 

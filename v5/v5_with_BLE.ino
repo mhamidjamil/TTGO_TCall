@@ -2,9 +2,11 @@
 // # version 5.2.7
 // # Release Note : BLE input work (in office)
 
+#include <arduino_secrets.h>
+
 const char simPIN[] = "";
 
-String MOBILE_No = "+923354888420";
+String MOBILE_No = MY_Number;
 
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
@@ -74,10 +76,10 @@ bool setPowerBoostKeepOn(int en) {
 }
 
 // ThingSpeak parameters
-const char *ssid = "Archer 73";
-const char *password = "Archer@73_102#";
-const unsigned long channelID = 2201589;
-const char *apiKey = "Q3TSTOM87EUBNOAE";
+const char *ssid = MY_SSID;
+const char *password = MY_PASSWORD;
+const unsigned long channelID = MY_CHANNEL_ID;
+const char *apiKey = THINGSPEAK_API;
 
 unsigned long updateInterval = 2 * 60;
 unsigned int last_update = 0; // in seconds
@@ -179,7 +181,7 @@ void Delay(int milliSeconds);
 
 void initBLE();
 void BLE_inputManager(String input);
-void inputManager(String input,int inputFrom);
+void inputManager(String input, int inputFrom);
 // inputFrom will tell this function that input is from BLE, Serial or SMS
 // # ......... < functions .......
 #include <BLEDevice.h>
@@ -198,16 +200,17 @@ class MyServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
 };
 
-String BLE_String="";
+String BLE_String = "";
 void BLE_inputManager(String input) {
   if (input.indexOf("#") != -1) { // means string is now fetched completely
-    println("Executing (BLE input) : {"+BLE_String+"}")
-    inputManager(BLE_String, 1);
+    println("Executing (BLE input) : {" + BLE_String + "}")
+        inputManager(BLE_String, 1);
     BLE_String = "";
   } else {
-    BLE_String+=input;
-    if(BLE_String.length() > 50){
-      println("BLE input is geting to large , here is the current string ("+BLE_String+") flushing it...");
+    BLE_String += input;
+    if (BLE_String.length() > 50) {
+      println("BLE input is geting to large , here is the current string (" +
+              BLE_String + ") flushing it...");
       BLE_String = "";
     }
   }
@@ -333,7 +336,7 @@ void loop() {
   if (SerialMon.available()) {
     String command = SerialMon.readString();
     // make function for all these condition:
-    // inputManager(command,2) 
+    // inputManager(command,2)
     // 2 indicates that input is from serial terminal
     if (command.indexOf("smsTo") != -1) {
       String strSms =

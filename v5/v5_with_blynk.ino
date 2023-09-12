@@ -3,17 +3,19 @@
 // # Release Note : Whatsapp messages implemented
 // # Module will now optimize all 4 Whatsapp API's
 
+#include <arduino_secrets.h>
+
 const char simPIN[] = "";
 
-String MOBILE_No = "+923354888420";
+String MOBILE_No = MY_Number;
 
 #include <HTTPClient.h>
 
-String NUMBER[4] = {"+923354888420&text=", "+923331749710&text=",
-                    "+923114888420&text=", "+923374888420&text="};
+String NUMBER[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2, WHATSAPP_NUMBER_3,
+                    WHATSAPP_NUMBER_4};
 
-String API[4] = {"&apikey=518125", "&apikey=4026003", "&apikey=8699997",
-                 "&apikey=3123061"};
+String API[4] = {WHATSAPP_API_1, WHATSAPP_API_2, WHATSAPP_API_3,
+                 WHATSAPP_API_4};
 
 // https://api.callmebot.com/whatsapp.php?phone=+923354888420&text=This+is+a+test&apikey=518125
 
@@ -95,10 +97,11 @@ bool setPowerBoostKeepOn(int en) {
 }
 
 // ThingSpeak parameters
-const char *ssid = "Archer 73";
-const char *password = "Archer@73_102#";
-const unsigned long channelID = 2201589;
-const char *apiKey = "Q3TSTOM87EUBNOAE";
+const char *ssid = MY_SSID;
+const char *password = MY_PASSWORD;
+const unsigned long channelID = MY_CHANNEL_ID;
+const char *apiKey = THINGSPEAK_API;
+
 int messagesCounterID = 5;
 int lastMessageUpdateID = 6;
 int whatsappMessageNumber = -1;
