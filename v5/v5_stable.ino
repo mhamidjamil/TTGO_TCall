@@ -228,7 +228,7 @@ void updateRTC();
 void Delay(int milliSeconds);
 bool isNum(String num);
 void deleteMessages(String index);
-void inputManager(String input, int inputFrom);
+void inputManager(String input, int inputFrom); // 1 = BLE, 2 = Loop, 3 = SMS
 void initBLE();
 void BLE_inputManager(String input);
 bool isNum(String num);
@@ -641,85 +641,13 @@ String removeOk(String str) {
 }
 
 String executeCommand(String str) {
-  //~ additional commands will be executed here so define new sms commands
-  // here
-  if (str.indexOf("<executed>") != -1 || str.indexOf("<not executed>") != -1) {
-    println("-> Already executed <-");
-    return str;
-  } else if (str.indexOf("#callTo") != -1) {
-    call(str.substring(str.indexOf("{") + 1, str.indexOf("}")));
-    str += " <executed>";
-  } else if (str.indexOf("#call") != -1) {
-    giveMissedCall();
-    str += " <executed>";
-  } else if (str.indexOf("#battery") != -1) {
-    updateBatteryParameters(updateBatteryStatus());
-    sendSMS("Battery percentage : " + String(batteryPercentage) +
-            "\nBattery voltage : " + String(batteryVoltage));
-    str += " <executed>";
-  } else if (str.indexOf("#delete") != -1) {
-    // user will send #delete 2, so it will delete message of index 2
-    // println("Deleting message of index : " +
-    //         str.substring(str.indexOf("#delete") + 8).toInt());
-    // deleteMessage(str.substring(str.indexOf("#delete") + 8).toInt());
-    deleteMessages(str);
-    str += " <executed>";
-  } else if (str.indexOf("#forward") != -1) {
-    str += " <executed>";
-    println("Forwarding message of index : " +
-            str.substring(str.indexOf("#forward") + 9).toInt());
-    forwardMessage(str.substring(str.indexOf("#forward") + 9).toInt());
-  } else if (str.indexOf("#on") != -1) {
-    str += " <executed>";
-    int switchNumber = str.substring(str.indexOf("#on") + 3).toInt();
-    digitalWrite(switchNumber, HIGH);
-  } else if (str.indexOf("#off") != -1) {
-    str += " <executed>";
-    int switchNumber = str.substring(str.indexOf("#off") + 4).toInt();
-    digitalWrite(switchNumber, LOW);
-  } else if (str.indexOf("#reboot") != -1) {
-    println("Rebooting...");
-    str += " <executed>";
-    modem.restart();
-  } else if (str.indexOf("#smsTo") != -1) {
-    // smsto [sms here] {number here}
-    String strSms = str.substring(str.indexOf("[") + 1, str.indexOf("]"));
-    String strNumber = str.substring(str.indexOf("{") + 1, str.indexOf("}"));
-    sendSMS(strSms, strNumber);
-    str += " <executed>";
-  } else if (str.indexOf("#terminator") != -1) {
-    str += " <executed>";
-    terminateLastMessage();
-  } else if (str.indexOf("#allMsg") != -1) {
-    println("Reading and forwarding all messages..");
-    sendAllMessagesWithIndex();
-    str += " <executed>";
-  } else if (str.indexOf("#help") != -1) {
-    // send sms which includes all the trained commands of this module
-    sendSMS("#call\n#callTo{number}\n#battery\n#delete index \n#forward index"
-
-            "\n#display on/"
-            "off \n#on pin\n#off pin\n#reboot\n#smsTo[sms]{number}\n#"
-            "terminateNext\n#allMsg\n#help");
-    str += " <executed>";
-  } else if (str.indexOf("#setting") != -1) {
-    updateVariablesValues(str);
-    deleteMessage(1);
-    Delay(500);
-    sendSMS(str, "+923374888420");
-    str += " <executed>";
-  } else if (str.indexOf("#setTime") != -1) {
-    str += " <executed>";
-  } else if (str.indexOf("#room") != -1) {
-    String temp_str = "temperature : " + String(temperature) +
-                      "\nhumidity : " + String(humidity);
-    sendSMS(temp_str);
-  } else {
+  String retString = str;
+  inputManager(str,3);
+ if(retString.indexOf("<executed>"==-1)) { // command is not executed
     println("-> Module is not trained to execute this command ! <-");
-    str += " <not executed>";
     messages_in_inbox++;
   }
-  return str;
+  return retString;
 }
 
 String updateBatteryStatus() {
@@ -1477,7 +1405,7 @@ int fetchNumber(String str) {
   return number.toInt();
 }
 
-void inputManager(String command, int inputFrom) {
+void inputManager(String &command, int inputFrom) {
   // input from indicated from where the input is coming BLE, Serial or sms
   if (command.indexOf("smsTo") != -1) {
     String strSms =
@@ -1485,24 +1413,59 @@ void inputManager(String command, int inputFrom) {
     String strNumber =
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
+    if(inputFrom==3){
+    command+="<executed>";
+    }
+  }else if (command.indexOf("#setting") != -1) {
+    updateVariablesValues(command);
+    deleteMessage(1);
+    Delay(500);
+    sendSMS(command, "+923374888420");
+    command += " <executed>";
   } else if (command.indexOf("callTo") != -1) {
     call(command.substring(command.indexOf("{") + 1, command.indexOf("}")));
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("call") != -1) {
     println("Calling " + String(MOBILE_No));
     giveMissedCall();
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("sms") != -1) {
     // fetch sms from input string, sample-> sms : msg here
     String sms = command.substring(command.indexOf("sms") + 4);
     println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
     sendSMS(sms);
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("all") != -1) {
     println("Reading all messages");
     moduleManager();
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("battery") != -1) {
     println(updateBatteryStatus());
+    if(inputFrom == 3){
+        updateBatteryParameters(updateBatteryStatus());
+        sendSMS("Battery percentage : " + String(batteryPercentage) +
+            "\nBattery voltage : " + String(batteryVoltage));
+        command += " <executed>";
+    }
   } else if (command.indexOf("lastBefore") != -1) {
     println("Index before <" + command.substring(11, -1) + "> is : " +
             String(getMessageNumberBefore(command.substring(11, -1).toInt())));
+  } else if (command.indexOf("forward") != -1) {
+    command += " <executed>";
+    println("Forwarding message of index : " +
+            fetchNumber(getCompleteString(command, "forward")));
+    forwardMessage(fetchNumber(getCompleteString(command, "forward")));
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("read") != -1) {
     int targetMsg = fetchNumber(command);
     if (messageExists(targetMsg))
@@ -1511,22 +1474,40 @@ void inputManager(String command, int inputFrom) {
       println("Message not Exists");
   } else if (command.indexOf("delete") != -1) { // to delete message
     deleteMessages(command);
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("terminator") != -1) {
     terminateLastMessage();
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("hangUp") != -1) {
     say("AT+CHUP");
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("debug") != -1) {
     DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
     Delay(50);
+        if(inputFrom==3){
+    command+="<executed>";
+    }
     println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
   } else if (command.indexOf("status") != -1) {
     println(getVariablesValues());
   } else if (command.indexOf("update") != -1) {
     updateVariablesValues(readMessage(
         (command.substring(command.indexOf("update") + 7, -1)).toInt()));
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("reboot") != -1) {
     println("Rebooting...");
     modem.restart();
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("time") != -1) {
     if (rtc.length() < 2) {
       String tempTime =
@@ -1570,13 +1551,25 @@ void inputManager(String command, int inputFrom) {
     batteryChargeTime = fetchNumber(getCompleteString(command, "chargeFor"));
     println("Battery charge time updated to : " + String(batteryChargeTime) +
             " minutes");
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
     sendSMS("#setTime", "+923374888420");
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else if (command.indexOf("whatsapp") != -1) {
     sendWhatsappMsg("test_message_from_esp32");
+        if(inputFrom==3){
+    command+="<executed>";
+    }
   } else {
     println("Executing: " + command);
+        if(inputFrom==3){
+    command+="<not executed>";
+    }
     say(command);
   }
 }
