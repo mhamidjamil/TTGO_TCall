@@ -227,7 +227,7 @@ void updateRTC();
 void Delay(int milliSeconds);
 bool isNum(String num);
 void deleteMessages(String index);
-void inputManager(String input, int inputFrom);
+void inputManager(String input, int inputFrom); // 1 = BLE, 2 = Loop, 3 = SMS
 void initBLE();
 void BLE_inputManager(String input);
 bool isNum(String num);
@@ -1565,7 +1565,7 @@ void inputManager(String &command, int inputFrom) {
     command+="<executed>";
     }
   } // TODO: help command should return all executable commands 
-else {
+  else {
     println("Executing: " + command);
         if(inputFrom==3){
     command+="<not executed>";
