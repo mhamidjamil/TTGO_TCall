@@ -1569,7 +1569,7 @@ void inputManager(String &command, int inputFrom) {
     println("Executing: " + command);
         if(inputFrom==3){
     command+="<not executed>";
-    }
+    }else
     say(command);
   }
 }
