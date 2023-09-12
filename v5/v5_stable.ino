@@ -1,7 +1,6 @@
-//$ last work 10/Sep/23 [08:12 PM]
-// # version 5.3.8
-// # Release Note : Whatsapp messages implemented
-// # Module will now optimize all 4 Whatsapp API's
+//$ last work 12/Sep/23 [06:58 PM]
+// # version 5.3.9
+// # Release Note : executeCommand inherited inputManager
 
 const char simPIN[] = "";
 
@@ -1565,7 +1564,8 @@ void inputManager(String &command, int inputFrom) {
         if(inputFrom==3){
     command+="<executed>";
     }
-  } else {
+  } // TODO: help command should return all executable commands 
+  else {
     println("Executing: " + command);
         if(inputFrom==3){
     command+="<not executed>";
