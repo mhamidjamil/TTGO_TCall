@@ -1,8 +1,8 @@
-//$ last work 12/Sep/23 [10:25 PM]
-// # version 5.4.1
+//$ last work 13/Sep/23 [11:53 PM]
+// # version 5.4.2
 // # Release Note : Arduino Secrets concept added
 
-#include <arduino_secrets.h>
+#include "arduino_secrets.h"
 
 const char simPIN[] = "";
 
@@ -348,7 +348,7 @@ void setup() {
     int i = 0;
     while (WiFi.status() != WL_CONNECTED) {
       if (i > 10) {
-        println("Timeout: Unable to connect to WiFi");
+        println("\n!!!---Timeout: Unable to connect to WiFi---!!!");
         wifiWorking = false;
         break;
       }
@@ -1569,6 +1569,9 @@ bool companyMsg(String mobileNumber) {
 void sendWhatsappMsg(String message) {
   if (RTC.date == 0) {
     println("RTC not updated yet so wait for it to avoid unexpected behaviour");
+    return;
+  } else if (!wifi_connected()) {
+    println("Wifi not connected unable to send whatsapp message");
     return;
   }
   HTTPClient http;
