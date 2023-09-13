@@ -3,17 +3,19 @@
 // # Release Note : Whatsapp messages implemented
 // # Module will now optimize all 4 Whatsapp API's
 
+#include "arduino_secrets.h"
+
 const char simPIN[] = "";
 
-String MOBILE_No = "+923354888420";
+String MOBILE_No = MY_Number;
 
 #include <HTTPClient.h>
 
-String NUMBER[4] = {"+923354888420&text=", "+923331749710&text=",
-                    "+923114888420&text=", "+923374888420&text="};
+String NUMBER[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2, WHATSAPP_NUMBER_3,
+                    WHATSAPP_NUMBER_4};
 
-String API[4] = {"&apikey=518125", "&apikey=4026003", "&apikey=8699997",
-                 "&apikey=3123061"};
+String API[4] = {WHATSAPP_API_1, WHATSAPP_API_2, WHATSAPP_API_3,
+                 WHATSAPP_API_4};
 
 // https://api.callmebot.com/whatsapp.php?phone=+923354888420&text=This+is+a+test&apikey=518125
 
@@ -95,10 +97,11 @@ bool setPowerBoostKeepOn(int en) {
 }
 
 // ThingSpeak parameters
-const char *ssid = "Archer 73";
-const char *password = "Archer@73_102#";
-const unsigned long channelID = 2201589;
-const char *apiKey = "Q3TSTOM87EUBNOAE";
+const char *ssid = MY_SSID;
+const char *password = MY_PASSWORD;
+const unsigned long channelID = MY_CHANNEL_ID;
+const char *apiKey = THINGSPEAK_API;
+
 int messagesCounterID = 5;
 int lastMessageUpdateID = 6;
 int whatsappMessageNumber = -1;
@@ -131,7 +134,7 @@ bool DEBUGGING = false;
 // (debuggerID == 2) // debugging SIM800L functionality
 // (debuggerID == 3) // debugging thingSpeak functionality
 // (debuggerID == 4) // debugging Whatsapp functionality
-// (debuggerID == 5) // debugging functionality
+// (debuggerID == 5) // debugging blynk functionality
 
 int allowedDebugging[7] = {0, 0, 0, 1,
                            1, 0, 0}; // 0 means not allowed 1 means allowed
@@ -290,6 +293,35 @@ void BLE_inputManager(String input) {
 
 //! * # # # # # # # # # # # # * !
 
+#define BLYNK_TEMPLATE_ID "TMPL6oAF8teFi"
+#define BLYNK_TEMPLATE_NAME "ttgoTcall"
+#define BLYNK_AUTH_TOKEN "V0GUIMD1pXGciOfg6LUB7Xd6rhS4iRPp"
+
+/* Comment this out to disable prints and save space */
+#define BLYNK_PRINT Serial
+
+#include <BlynkSimpleEsp32.h>
+#include <WiFiClient.h>
+WidgetTerminal terminal(V1);
+
+BLYNK_WRITE(V1) {
+
+  // if you type "Marco" into Terminal Widget - it will respond: "Polo:"
+  if (String("Marco") == param.asStr()) {
+    terminal.println("You said: 'Marco'");
+    terminal.println("I said: 'Polo'");
+  } else {
+
+    // Send it back
+    terminal.print("You said:");
+    terminal.write(param.getBuffer(), param.getLength());
+    terminal.println();
+  }
+
+  // Ensure everything is sent
+  terminal.flush();
+}
+
 void setup() {
   SerialMon.begin(115200);
   initBLE();
@@ -335,6 +367,25 @@ void setup() {
   }
   Println("After display functionality");
   delay(500);
+
+  Println(5, "before blynk init");
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, password);
+  // You can also specify server:
+  // Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass, "blynk.cloud", 80);
+  // Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass, IPAddress(192,168,1,100), 8080);
+
+  // Clear the terminal content
+  terminal.clear();
+
+  // This will print Blynk Software version to the Terminal Widget when
+  // your hardware gets connected to Blynk Server
+  terminal.println(F("Blynk v" BLYNK_VERSION ": Device started"));
+  terminal.println(F("-------------"));
+  terminal.println(F("Type 'Marco' and get a reply, or type"));
+  terminal.println(F("anything else and get it printed back."));
+  terminal.flush();
+  Println(5, "After blynk init");
+
   dht.begin(); // Initialize the DHT11 sensor
   delay(1000);
   Println("Before wifi connection");
@@ -383,6 +434,7 @@ void setup() {
 }
 
 void loop() {
+  Blynk.run();
   Println("in loop");
 
   if (deviceConnected) {

@@ -2,9 +2,11 @@
 // # version 5.3.5
 // # Release Note : Company messages will be deleted automatically
 
+#include "arduino_secrets.h"
+
 const char simPIN[] = "";
 
-String MOBILE_No = "+923354888420";
+String MOBILE_No = MY_Number;
 
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
@@ -82,10 +84,10 @@ bool setPowerBoostKeepOn(int en) {
 }
 
 // ThingSpeak parameters
-const char *ssid = "Archer 73";
-const char *password = "Archer@73_102#";
-const unsigned long channelID = 2201589;
-const char *apiKey = "Q3TSTOM87EUBNOAE";
+const char *ssid = MY_SSID;
+const char *password = MY_PASSWORD;
+const unsigned long channelID = MY_CHANNEL_ID;
+const char *apiKey = THINGSPEAK_API;
 
 int updateInterval = 2 * 60;
 unsigned int last_update = 1; // in minutes
@@ -544,8 +546,8 @@ String getResponse() {
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
         else
-          sendSMS("<Unable to execute new sms no. {" + String(newMessageNumber) +
-                  "} message : > [ " +
+          sendSMS("<Unable to execute new sms no. {" +
+                  String(newMessageNumber) + "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber + ". deleting it...");
       }
@@ -758,8 +760,8 @@ void terminateLastMessage() {
                 " ] from : " + mobileNumber + ", what to do ?");
         Delay(2000);
       } else {
-        sendSMS("Unable to execute previous sms no. {" + String(currentTargetIndex) +
-                "} message : [ " +
+        sendSMS("Unable to execute previous sms no. {" +
+                String(currentTargetIndex) + "} message : [ " +
                 temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                 " ] from : " + mobileNumber + ". deleting it...");
         Delay(2000);

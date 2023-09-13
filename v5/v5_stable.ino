@@ -1,18 +1,20 @@
-//$ last work 12/Sep/23 [06:58 PM]
-// # version 5.3.9
-// # Release Note : executeCommand inherited inputManager
+//$ last work 13/Sep/23 [11:53 PM]
+// # version 5.4.2
+// # Release Note : Arduino Secrets concept added
+
+#include "arduino_secrets.h"
 
 const char simPIN[] = "";
 
-String MOBILE_No = "+923354888420";
+String MOBILE_No = MY_Number;
 
 #include <HTTPClient.h>
 
-String NUMBER[4] = {"+923354888420&text=", "+923331749710&text=",
-                    "+923114888420&text=", "+923374888420&text="};
+String NUMBER[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2, WHATSAPP_NUMBER_3,
+                    WHATSAPP_NUMBER_4};
 
-String API[4] = {"&apikey=518125", "&apikey=4026003", "&apikey=8699997",
-                 "&apikey=3123061"};
+String API[4] = {WHATSAPP_API_1, WHATSAPP_API_2, WHATSAPP_API_3,
+                 WHATSAPP_API_4};
 
 // https://api.callmebot.com/whatsapp.php?phone=+923354888420&text=This+is+a+test&apikey=518125
 
@@ -94,10 +96,11 @@ bool setPowerBoostKeepOn(int en) {
 }
 
 // ThingSpeak parameters
-const char *ssid = "Archer 73";
-const char *password = "Archer@73_102#";
-const unsigned long channelID = 2201589;
-const char *apiKey = "Q3TSTOM87EUBNOAE";
+const char *ssid = MY_SSID;
+const char *password = MY_PASSWORD;
+const unsigned long channelID = MY_CHANNEL_ID;
+const char *apiKey = THINGSPEAK_API;
+
 int messagesCounterID = 5;
 int lastMessageUpdateID = 6;
 int whatsappMessageNumber = -1;
@@ -154,6 +157,8 @@ String BLE_Output = "";
 int batteryChargeTime = 30;   // 30 minutes
 unsigned int wapdaInTime = 0; // when wapda is on it store the time stamp.
 bool batteriesCharged = false;
+
+String retString = "";
 
 String errorCodes = "";
 String chargingStatus = "";
@@ -343,7 +348,7 @@ void setup() {
     int i = 0;
     while (WiFi.status() != WL_CONNECTED) {
       if (i > 10) {
-        println("Timeout: Unable to connect to WiFi");
+        println("\n!!!---Timeout: Unable to connect to WiFi---!!!");
         wifiWorking = false;
         break;
       }
@@ -640,9 +645,9 @@ String removeOk(String str) {
 }
 
 String executeCommand(String str) {
-  String retString = str;
-  inputManager(str,3);
- if(retString.indexOf("<executed>"==-1)) { // command is not executed
+  retString = "";
+  inputManager(str, 3);
+  if (retString.indexOf("<executed>") == -1) { // command is not executed
     println("-> Module is not trained to execute this command ! <-");
     messages_in_inbox++;
   }
@@ -1404,7 +1409,7 @@ int fetchNumber(String str) {
   return number.toInt();
 }
 
-void inputManager(String &command, int inputFrom) {
+void inputManager(String command, int inputFrom) {
   // input from indicated from where the input is coming BLE, Serial or sms
   if (command.indexOf("smsTo") != -1) {
     String strSms =
@@ -1412,10 +1417,8 @@ void inputManager(String &command, int inputFrom) {
     String strNumber =
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
-    if(inputFrom==3){
-    command+="<executed>";
-    }
-  }else if (command.indexOf("#setting") != -1) {
+    inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("#setting") != -1) {
     updateVariablesValues(command);
     deleteMessage(1);
     Delay(500);
@@ -1423,36 +1426,28 @@ void inputManager(String &command, int inputFrom) {
     command += " <executed>";
   } else if (command.indexOf("callTo") != -1) {
     call(command.substring(command.indexOf("{") + 1, command.indexOf("}")));
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("call") != -1) {
     println("Calling " + String(MOBILE_No));
     giveMissedCall();
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("sms") != -1) {
     // fetch sms from input string, sample-> sms : msg here
     String sms = command.substring(command.indexOf("sms") + 4);
     println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
     sendSMS(sms);
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("all") != -1) {
     println("Reading all messages");
     moduleManager();
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("battery") != -1) {
     println(updateBatteryStatus());
-    if(inputFrom == 3){
-        updateBatteryParameters(updateBatteryStatus());
-        sendSMS("Battery percentage : " + String(batteryPercentage) +
-            "\nBattery voltage : " + String(batteryVoltage));
-        command += " <executed>";
+    if (inputFrom == 3) {
+      updateBatteryParameters(updateBatteryStatus());
+      sendSMS("Battery percentage : " + String(batteryPercentage) +
+              "\nBattery voltage : " + String(batteryVoltage));
+      command += " <executed>";
     }
   } else if (command.indexOf("lastBefore") != -1) {
     println("Index before <" + command.substring(11, -1) + "> is : " +
@@ -1462,9 +1457,7 @@ void inputManager(String &command, int inputFrom) {
     println("Forwarding message of index : " +
             fetchNumber(getCompleteString(command, "forward")));
     forwardMessage(fetchNumber(getCompleteString(command, "forward")));
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("read") != -1) {
     int targetMsg = fetchNumber(command);
     if (messageExists(targetMsg))
@@ -1473,40 +1466,28 @@ void inputManager(String &command, int inputFrom) {
       println("Message not Exists");
   } else if (command.indexOf("delete") != -1) { // to delete message
     deleteMessages(command);
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("terminator") != -1) {
     terminateLastMessage();
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("hangUp") != -1) {
     say("AT+CHUP");
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("debug") != -1) {
     DEBUGGING ? DEBUGGING = false : DEBUGGING = true;
     Delay(50);
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
     println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
   } else if (command.indexOf("status") != -1) {
     println(getVariablesValues());
   } else if (command.indexOf("update") != -1) {
     updateVariablesValues(readMessage(
         (command.substring(command.indexOf("update") + 7, -1)).toInt()));
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("reboot") != -1) {
     println("Rebooting...");
     modem.restart();
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("time") != -1) {
     if (rtc.length() < 2) {
       String tempTime =
@@ -1550,28 +1531,23 @@ void inputManager(String &command, int inputFrom) {
     batteryChargeTime = fetchNumber(getCompleteString(command, "chargeFor"));
     println("Battery charge time updated to : " + String(batteryChargeTime) +
             " minutes");
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
     sendSMS("#setTime", "+923374888420");
-        if(inputFrom==3){
-    command+="<executed>";
-    }
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("whatsapp") != -1) {
     sendWhatsappMsg("test_message_from_esp32");
-        if(inputFrom==3){
-    command+="<executed>";
-    }
-  } // TODO: help command should return all executable commands 
+    inputFrom == 3 ? command += "<executed>" : "";
+  } // TODO: help command should return all executable commands
   else {
     println("Executing: " + command);
-        if(inputFrom==3){
-    command+="<not executed>";
-    }else
-    say(command);
+    if (inputFrom == 3) {
+      command += "<not executed>";
+    } else
+      say(command);
   }
+  retString = command;
 }
 
 bool companyMsg(String mobileNumber) {
@@ -1593,6 +1569,9 @@ bool companyMsg(String mobileNumber) {
 void sendWhatsappMsg(String message) {
   if (RTC.date == 0) {
     println("RTC not updated yet so wait for it to avoid unexpected behaviour");
+    return;
+  } else if (!wifi_connected()) {
+    println("Wifi not connected unable to send whatsapp message");
     return;
   }
   HTTPClient http;
