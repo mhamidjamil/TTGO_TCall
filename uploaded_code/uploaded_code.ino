@@ -1,6 +1,6 @@
-//$ last work 13/Sep/23 [01:02 AM]
-// # version 5.4.2
-// # Release Note : Arduino Secrets concept added
+//$ last work 14/Sep/23 [10:45 PM]
+// # version 5.4.3
+// # Release Note : Power backup part removed
 
 #include "arduino_secrets.h"
 
@@ -51,13 +51,13 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #define I2C_SCL 22
 #define LED 13
 
-#define WAPDA_STATE 15 // Check if wapda is on or off
-// Magenta  R1:
-#define BATTERY_PAIR_SELECTOR 32 // Select which battery pair is to be charge
-// Blue R2-A:
-#define BATTERY_CHARGER 14 // Battery should charge or not
-// Green R2-B:
-#define POWER_OUTPUT_SELECTOR 0 // Router input source selector
+// #define WAPDA_STATE 15 // Check if wapda is on or off
+// // Magenta  R1:
+// #define BATTERY_PAIR_SELECTOR 32 // Select which battery pair is to be charge
+// // Blue R2-A:
+// #define BATTERY_CHARGER 14 // Battery should charge or not
+// // Green R2-B:
+// #define POWER_OUTPUT_SELECTOR 0 // Router input source selector
 
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
@@ -154,14 +154,14 @@ String rtc = "";              // real Time Clock
 String BLE_Input = "";
 String BLE_Output = "";
 
-int batteryChargeTime = 30;   // 30 minutes
-unsigned int wapdaInTime = 0; // when wapda is on it store the time stamp.
-bool batteriesCharged = false;
+// int batteryChargeTime = 30;   // 30 minutes
+// unsigned int wapdaInTime = 0; // when wapda is on it store the time stamp.
+// bool batteriesCharged = false;
 
 String retString = "";
 
 String errorCodes = "";
-String chargingStatus = "";
+// String chargingStatus = "";
 // these error codes will be moving in the last row of lcd
 
 struct RTC {
@@ -348,7 +348,7 @@ void setup() {
     int i = 0;
     while (WiFi.status() != WL_CONNECTED) {
       if (i > 10) {
-        println("Timeout: Unable to connect to WiFi");
+        println("\n!!!---Timeout: Unable to connect to WiFi---!!!");
         wifiWorking = false;
         break;
       }
@@ -376,14 +376,14 @@ void setup() {
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
 
-  pinMode(WAPDA_STATE, INPUT);            // Check if wapda is on or off
-  pinMode(BATTERY_PAIR_SELECTOR, OUTPUT); // Pair selector
-  pinMode(BATTERY_CHARGER, OUTPUT);       // Charge battery or not
-  pinMode(POWER_OUTPUT_SELECTOR, OUTPUT); // router INPUT selector
+  // pinMode(WAPDA_STATE, INPUT);            // Check if wapda is on or off
+  // pinMode(BATTERY_PAIR_SELECTOR, OUTPUT); // Pair selector
+  // pinMode(BATTERY_CHARGER, OUTPUT);       // Charge battery or not
+  // pinMode(POWER_OUTPUT_SELECTOR, OUTPUT); // router INPUT selector
 
-  digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-  digitalWrite(BATTERY_CHARGER, HIGH);
-  digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
+  // digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+  // digitalWrite(BATTERY_CHARGER, HIGH);
+  // digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
 }
 
 void loop() {
@@ -424,7 +424,7 @@ void loop() {
     Println("after DHT conversion");
 
     line_1 = line_1.substring(0, 6) + String(temperatureStr) + " C  " +
-             END_VALUES + " " + chargingStatus;
+             END_VALUES + " ";
     Println("after line 1");
 
     line_2 = "Hu: " + String(humidity) + " % / " + thingSpeakLastUpdate();
@@ -945,16 +945,16 @@ void lcd_print() {
   display.print(" ");
   display.print(String(RTC.hour) + ":" + String(RTC.minutes) + ":" +
                 String(RTC.seconds));
-  display.print(" ");
-  if (timeVersion) {
-    if ((((millis() / 60000) - wapdaInTime) < (batteryChargeTime * 2))) {
-      display.print(((((millis() / 1000)) / 60) - wapdaInTime));
-    }
-    timeVersion = false;
-  } else {
-    display.print("B:" + String(batteryChargeTime) + "," + wapdaInTime);
-    timeVersion = true;
-  }
+  // display.print(" ");
+  // if (timeVersion) {
+  //   if ((((millis() / 60000) - wapdaInTime) < (batteryChargeTime * 2))) {
+  //     display.print(((((millis() / 1000)) / 60) - wapdaInTime));
+  //   }
+  //   timeVersion = false;
+  // } else {
+  //   display.print("B:" + String(batteryChargeTime) + "," + wapdaInTime);
+  //   timeVersion = true;
+  // }
 
   display.setCursor(0, 17);
   display.print(line_1);
@@ -1023,8 +1023,7 @@ String getVariablesValues() {
        String(ultraSoundWorking ? "ultraSound on" : "ultraSound off") + ", " +
        String(wifiWorking ? "wifi on" : "wifi off")) +
       " Termination time : " + String(terminationTime) +
-      "sms allowed : " + String(smsAllowed) +
-      " Battery charge time : " + String(batteryChargeTime));
+      "sms allowed : " + String(smsAllowed));
 }
 
 void updateVariablesValues(String str) {
@@ -1074,9 +1073,9 @@ void updateVariablesValues(String str) {
     if (str.indexOf("termination") != -1) {
       terminationTime = fetchNumber(getCompleteString(str, "termination"));
     }
-    if (str.indexOf("battery") != -1) {
-      batteryChargeTime = fetchNumber(getCompleteString(str, "battery"));
-    }
+    // if (str.indexOf("battery") != -1) {
+    //   batteryChargeTime = fetchNumber(getCompleteString(str, "battery"));
+    // }
   }
   println("msg : " + str + "\nAfter  update : ");
   println(getVariablesValues());
@@ -1205,22 +1204,22 @@ void setTime() { // this function will set RTC struct using rtc string
 
 void Delay(int milliseconds) {
   for (int i = 0; i < milliseconds; i++) {
-    if (wapdaOn()) {   // charge batteries
-      backup("WAPDA"); // shift backup to WAPDA
-      if (wapdaInTime == 0) {
-        wapdaInTime = ((millis() / 1000) / 60);
-        println("Shifting router input Source to WAPDA");
-      }
-      chargeBatteries(true);
-    } else {               // power on router from batteries
-      backup("Batteries"); // shift backup to WAPDA
-      if (wapdaInTime != 0) {
-        println("Shifting router to Batteries");
-        wapdaInTime = 0;
-      }
-      // convert milles to minutes>seconds
-      chargeBatteries(false);
-    }
+    // if (wapdaOn()) {   // charge batteries
+    //   backup("WAPDA"); // shift backup to WAPDA
+    //   if (wapdaInTime == 0) {
+    //     wapdaInTime = ((millis() / 1000) / 60);
+    //     println("Shifting router input Source to WAPDA");
+    //   }
+    //   chargeBatteries(true);
+    // } else {               // power on router from batteries
+    //   backup("Batteries"); // shift backup to WAPDA
+    //   if (wapdaInTime != 0) {
+    //     println("Shifting router to Batteries");
+    //     wapdaInTime = 0;
+    //   }
+    //   // convert milles to minutes>seconds
+    //   chargeBatteries(false);
+    // }
     delay(1);
   }
 
@@ -1323,51 +1322,51 @@ bool isNum(String num) {
     return false;
 }
 
-bool wapdaOn() {
-  if (digitalRead(WAPDA_STATE) == HIGH)
-    return true;
-  else
-    return false;
-}
+// bool wapdaOn() {
+//   if (digitalRead(WAPDA_STATE) == HIGH)
+//     return true;
+//   else
+//     return false;
+// }
 
-void backup(String state) {
-  if (state == "WAPDA") {
-    digitalWrite(POWER_OUTPUT_SELECTOR, LOW); // Relay module ON on low
-  } else if (state == "Batteries") {
-    digitalWrite(POWER_OUTPUT_SELECTOR, HIGH); // Relay module OFF on high
-  } else {
-    println("Error in backup function");
-    errorCodes += "1367 ";
-  }
-}
+// void backup(String state) {
+//   if (state == "WAPDA") {
+//     digitalWrite(POWER_OUTPUT_SELECTOR, LOW); // Relay module ON on low
+//   } else if (state == "Batteries") {
+//     digitalWrite(POWER_OUTPUT_SELECTOR, HIGH); // Relay module OFF on high
+//   } else {
+//     println("Error in backup function");
+//     errorCodes += "1367 ";
+//   }
+// }
 
-void chargeBatteries(bool charge) {
-  if (!batteriesCharged && charge) {
-    if ((((millis() / 1000) / 60) - wapdaInTime) < (batteryChargeTime * 2)) {
-      digitalWrite(BATTERY_CHARGER, LOW); // on
-      if ((((millis() / 1000) / 60) - wapdaInTime) < batteryChargeTime) {
-        // charge first pair of batteries
-        digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-        chargingStatus = "C1";
-      } else {
-        // charge second pair of batteries
-        digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-        chargingStatus = "C2";
-      }
-    } else {
-      digitalWrite(BATTERY_CHARGER, HIGH); // off
-      digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-      chargingStatus = "NC";
-    }
-  } else if (!charge) {
-    digitalWrite(BATTERY_CHARGER, HIGH); // on
-    digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-    chargingStatus = "CC";
-  } else {
-    println("unexpected error at chargeBatteries function");
-    errorCodes += "1385 ";
-  }
-}
+// void chargeBatteries(bool charge) {
+//   if (!batteriesCharged && charge) {
+//     if ((((millis() / 1000) / 60) - wapdaInTime) < (batteryChargeTime * 2)) {
+//       digitalWrite(BATTERY_CHARGER, LOW); // on
+//       if ((((millis() / 1000) / 60) - wapdaInTime) < batteryChargeTime) {
+//         // charge first pair of batteries
+//         digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+//         chargingStatus = "C1";
+//       } else {
+//         // charge second pair of batteries
+//         digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
+//         chargingStatus = "C2";
+//       }
+//     } else {
+//       digitalWrite(BATTERY_CHARGER, HIGH); // off
+//       digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+//       chargingStatus = "NC";
+//     }
+//   } else if (!charge) {
+//     digitalWrite(BATTERY_CHARGER, HIGH); // on
+//     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+//     chargingStatus = "CC";
+//   } else {
+//     println("unexpected error at chargeBatteries function");
+//     errorCodes += "1385 ";
+//   }
+// }
 
 String getCompleteString(String str, String target) {
   //" #setting <ultra sound alerts 0> <display 1>" , "ultra"
@@ -1500,39 +1499,42 @@ void inputManager(String command, int inputFrom) {
     // println(Time.Date);
     // println(Time.hour);
     // println(Time.minutes);
-  } else if (command.indexOf("!") != -1) {
-    if (command.indexOf("r11") != -1) {
-      digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-      delay(1000);
-    } else if (command.indexOf("r10") != -1) {
-      digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-      delay(1000);
-    } else if (command.indexOf("r2a1") != -1) {
-      digitalWrite(BATTERY_CHARGER, LOW);
-      delay(1000);
-    } else if (command.indexOf("r2a0") != -1) {
-      digitalWrite(BATTERY_CHARGER, HIGH);
-      delay(1000);
-    } else if (command.indexOf("r2b1") != -1) {
-      digitalWrite(POWER_OUTPUT_SELECTOR, LOW);
-      delay(1000);
-    } else if (command.indexOf("r2b0") != -1) {
-      digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
-      delay(1000);
-    }
-  } else if (command.indexOf("switch") != -1) {
-    if (command.indexOf("0") != -1)
-      digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-    else if (command.indexOf("1") != -1)
-      digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-    else
-      println("Error in switch command");
-  } else if (command.indexOf("chargeFor") != -1) {
-    batteryChargeTime = fetchNumber(getCompleteString(command, "chargeFor"));
-    println("Battery charge time updated to : " + String(batteryChargeTime) +
-            " minutes");
-    inputFrom == 3 ? command += "<executed>" : "";
-  } else if (command.indexOf("updateTime") != -1) {
+  }
+  // else if (command.indexOf("!") != -1) {
+  //   if (command.indexOf("r11") != -1) {
+  //     digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
+  //     delay(1000);
+  //   } else if (command.indexOf("r10") != -1) {
+  //     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+  //     delay(1000);
+  //   } else if (command.indexOf("r2a1") != -1) {
+  //     digitalWrite(BATTERY_CHARGER, LOW);
+  //     delay(1000);
+  //   } else if (command.indexOf("r2a0") != -1) {
+  //     digitalWrite(BATTERY_CHARGER, HIGH);
+  //     delay(1000);
+  //   } else if (command.indexOf("r2b1") != -1) {
+  //     digitalWrite(POWER_OUTPUT_SELECTOR, LOW);
+  //     delay(1000);
+  //   } else if (command.indexOf("r2b0") != -1) {
+  //     digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
+  //     delay(1000);
+  //   }
+  // }
+  // else if (command.indexOf("switch") != -1) {
+  //   if (command.indexOf("0") != -1)
+  //     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
+  //   else if (command.indexOf("1") != -1)
+  //     digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
+  //   else
+  //     println("Error in switch command");
+  // } else if (command.indexOf("chargeFor") != -1) {
+  //   batteryChargeTime = fetchNumber(getCompleteString(command, "chargeFor"));
+  //   println("Battery charge time updated to : " + String(batteryChargeTime) +
+  //           " minutes");
+  //   inputFrom == 3 ? command += "<executed>" : "";
+  // }
+  else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
     sendSMS("#setTime", "+923374888420");
     inputFrom == 3 ? command += "<executed>" : "";
