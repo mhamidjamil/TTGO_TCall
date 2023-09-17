@@ -242,6 +242,16 @@ void chargeBatteries(bool charge);
 String getCompleteString(String str, String target);
 int fetchNumber(String str);
 bool companyMsg(String);
+void sendWhatsappMsg(String message);
+String getServerPath(String message);
+int getMessagesCounter();
+int getThingSpeakFieldData(int fieldNumber);
+void updateWhatsappMessageCounter();
+void setThingSpeakFieldData(int field, int data);
+void writeThingSpeakData();
+unsigned int getMint();
+String get_HTTP_string(String message);
+
 // # ......... < functions .......
 #include <BLEDevice.h>
 #include <BLEServer.h>
