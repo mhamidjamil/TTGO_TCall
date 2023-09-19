@@ -1,6 +1,7 @@
-//$ last work 14/Sep/23 [10:45 PM]
-// # version 5.4.3
-// # Release Note : Power backup part removed
+//$ last work 20/Sep/23 [01:57 AM]
+// # version 5.4.4
+// # Release Note : Debugging part improved for sim800l part
+// issue was not related to code sim ran out of balance
 
 #include "arduino_secrets.h"
 
@@ -127,7 +128,7 @@ int distance = 0; // variable for the distance measurement
 float temperature;
 int humidity;
 
-bool DEBUGGING = false;
+bool DEBUGGING = true;
 // (debuggerID == 0)     // debugging WIFI functionality
 // (debuggerID == 1) // debugging LCD functionality
 // (debuggerID == 2) // debugging SIM800L functionality
@@ -135,7 +136,7 @@ bool DEBUGGING = false;
 // (debuggerID == 4) // debugging Whatsapp functionality
 // (debuggerID == 5) // debugging functionality
 
-int allowedDebugging[7] = {0, 0, 0, 1,
+int allowedDebugging[7] = {0, 0, 1, 0,
                            1, 0, 0}; // 0 means not allowed 1 means allowed
 
 int debugFor = 130; // mentioned in seconds
@@ -242,6 +243,16 @@ void chargeBatteries(bool charge);
 String getCompleteString(String str, String target);
 int fetchNumber(String str);
 bool companyMsg(String);
+void sendWhatsappMsg(String message);
+String getServerPath(String message);
+int getMessagesCounter();
+int getThingSpeakFieldData(int fieldNumber);
+void updateWhatsappMessageCounter();
+void setThingSpeakFieldData(int field, int data);
+void writeThingSpeakData();
+unsigned int getMint();
+String get_HTTP_string(String message);
+
 // # ......... < functions .......
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -590,6 +601,7 @@ String getResponse() {
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
         } else {
+          Println(3, "Company message received deleting it...");
           sendSMS("<Unable to execute new sms no. {" +
                   String(newMessageNumber) + "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
@@ -597,6 +609,8 @@ String getResponse() {
           deleteMessage(newMessageNumber);
         }
       }
+    } else {
+      Println(3, "skipping message from : " + senderNumber);
     }
   } else if (response.indexOf("+CLIP:") != -1) {
     //+CLIP: "03354888420",161,"",0,"",0
@@ -646,6 +660,7 @@ String removeOk(String str) {
 
 String executeCommand(String str) {
   retString = "";
+  Println(3, "working on msg : " + str);
   inputManager(str, 3);
   if (retString.indexOf("<executed>") == -1) { // command is not executed
     println("-> Module is not trained to execute this command ! <-");
@@ -1417,6 +1432,43 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("debug:") != -1) {
+    if (command.indexOf("0") != -1)
+      allowedDebugging[0] ? allowedDebugging[0] = 0 : allowedDebugging[0] = 1;
+    else if (command.indexOf("1") != -1)
+      allowedDebugging[1] ? allowedDebugging[1] = 0 : allowedDebugging[1] = 1;
+    else if (command.indexOf("2") != -1)
+      allowedDebugging[2] ? allowedDebugging[2] = 0 : allowedDebugging[2] = 1;
+    else if (command.indexOf("3") != -1)
+      allowedDebugging[3] ? allowedDebugging[3] = 0 : allowedDebugging[3] = 1;
+    else if (command.indexOf("4") != -1)
+      allowedDebugging[4] ? allowedDebugging[4] = 0 : allowedDebugging[4] = 1;
+    else if (command.indexOf("5") != -1)
+      allowedDebugging[5] ? allowedDebugging[5] = 0 : allowedDebugging[5] = 1;
+    else
+      println("Error in debug command");
+    println("\nUpdated debugging status : ");
+    Serial.println(
+        "Debugging : " + String(allowedDebugging[0] ? "0: Wifi" : " ") +
+        String(allowedDebugging[1] ? "1: LCD" : " ") +
+        String(allowedDebugging[2] ? "2: SIM800L" : " ") +
+        String(allowedDebugging[3] ? "3: ThingSpeak" : " ") +
+        String(allowedDebugging[4] ? "4: Whatsapp" : " ") +
+        String(allowedDebugging[5] ? "5: BLE" : " "));
+  } else if ((command.indexOf("debug") != -1) &&
+             (command.indexOf("option") != -1)) {
+    println("Here the the debugging index :\n\t-> Wifi : 0, LCD : 1, SIM800L "
+            ": 2, "
+            "ThingSpeak : 3, Whatsapp : 4, BLE : 5");
+  } else if (command.indexOf("debug?") != -1) {
+    println("Here is the debugging status: ");
+    Serial.println(
+        "Debugging : " + String(allowedDebugging[0] ? "0: Wifi" : " ") +
+        String(allowedDebugging[1] ? "1: LCD" : " ") +
+        String(allowedDebugging[2] ? "2: SIM800L" : " ") +
+        String(allowedDebugging[3] ? "3: ThingSpeak" : " ") +
+        String(allowedDebugging[4] ? "4: Whatsapp" : " ") +
+        String(allowedDebugging[5] ? "5: BLE" : " "));
   } else if (command.indexOf("#setting") != -1) {
     updateVariablesValues(command);
     deleteMessage(1);
@@ -1541,7 +1593,8 @@ void inputManager(String command, int inputFrom) {
   } else if (command.indexOf("whatsapp") != -1) {
     sendWhatsappMsg("test_message_from_esp32");
     inputFrom == 3 ? command += "<executed>" : "";
-  } // TODO: help command should return all executable commands
+  }
+  // TODO: help command should return all executable commands
   else {
     println("Executing: " + command);
     if (inputFrom == 3) {
