@@ -127,7 +127,7 @@ int distance = 0; // variable for the distance measurement
 float temperature;
 int humidity;
 
-bool DEBUGGING = true;
+bool DEBUGGING = false;
 // (debuggerID == 0)     // debugging WIFI functionality
 // (debuggerID == 1) // debugging LCD functionality
 // (debuggerID == 2) // debugging SIM800L functionality
