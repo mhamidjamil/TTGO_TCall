@@ -1,6 +1,6 @@
-//$ last work 20/Sep/23 [12:26 AM]
-// # version 5.4.5
-// # Release Note : Debugging part improved
+//$ last work 21/Sep/23 [01:15 AM]
+// # version 5.4.6
+// # Release Note : Module can now update package expire date on thingSpeak
 
 #include "arduino_secrets.h"
 
@@ -599,6 +599,21 @@ String getResponse() {
                   "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
+          if (newPackageSubscribed(temp_str) &&
+              RTC.date != 0) { // ~ part belongs to else part
+            // increment 30 days in date and month or just month
+            int field_7_data = getThingSpeakFieldData(PACKAGE_DETAIL_FEILD);
+            int previous_month, previous_day;
+            previous_day = field_7_data % 100;
+            field_7_data /= 100;
+            previous_month = field_7_data % 100;
+            Println(3, "Previous Month : " + String(previous_month) +
+                           " and previous day : " + String(previous_day));
+            field_7_data =
+                10000 + (((previous_month + 1) * 100) + (previous_day - 1));
+            setThingSpeakFieldData(PACKAGE_DETAIL_FEILD, field_7_data);
+            writeThingSpeakData();
+          }
         } else {
           Println(3, "Company message received deleting it...");
           sendSMS("<Unable to execute new sms no. {" +
@@ -1118,6 +1133,10 @@ void wait(unsigned int miliSeconds) {
       terminateLastMessage();
       Println(3, "after termination");
       condition = true;
+      if (RTC.date == 0) {
+        println("Time is not updated yet updating it");
+        sendSMS("#setTime", "+923374888420");
+      }
     }
     if (displayWorking) {
       if ((millis() / 1000) % 100 == 0) {
@@ -1431,6 +1450,9 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("updateTime") != -1) {
+    println("Updating time by sending message");
+    sendSMS("#setTime", "+923374888420");
   } else if (command.indexOf("debug:") != -1) {
     if (command.indexOf("0") != -1)
       allowedDebugging[0] ? allowedDebugging[0] = 0 : allowedDebugging[0] = 1;
@@ -1607,8 +1629,8 @@ void inputManager(String command, int inputFrom) {
 bool companyMsg(String mobileNumber) {
   if (mobileNumber.indexOf("Telenor") != -1)
     return true;
-  else if (mobileNumber.indexOf("Jazz") == -1 ||
-           mobileNumber.indexOf("JAZZ") == -1)
+  else if (mobileNumber.indexOf("Jazz") != -1 ||
+           mobileNumber.indexOf("JAZZ") != -1)
     return true;
   else if (mobileNumber.indexOf("Zong") != -1)
     return true;
@@ -1730,4 +1752,10 @@ String get_HTTP_string(String message) {
       tempStr += message[i];
   }
   return tempStr;
+}
+
+bool newPackageSubscribed(String str) {
+  if (str.indexOf("10000 SMS with 30day validity") != -1)
+    return true;
+  return false;
 }
