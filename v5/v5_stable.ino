@@ -1,6 +1,6 @@
-//$ last work 21/Sep/23 [01:15 AM]
-// # version 5.4.6
-// # Release Note : Module can now update package expire date on thingSpeak
+//$ last work 21/Sep/23 [01:37 AM]
+// # version 5.4.7
+// # Release Note : Module can now use SIPFFS to store data
 
 #include "arduino_secrets.h"
 
@@ -32,6 +32,7 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #include <WiFi.h>
 #include <random>
 
+#include "SPIFFS.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
@@ -386,14 +387,22 @@ void setup() {
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
 
-  // pinMode(WAPDA_STATE, INPUT);            // Check if wapda is on or off
-  // pinMode(BATTERY_PAIR_SELECTOR, OUTPUT); // Pair selector
-  // pinMode(BATTERY_CHARGER, OUTPUT);       // Charge battery or not
-  // pinMode(POWER_OUTPUT_SELECTOR, OUTPUT); // router INPUT selector
+  if (!SPIFFS.begin(true)) {
+    Serial.println("An Error has occurred while mounting SPIFFS");
+    return;
+  }
 
-  // digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-  // digitalWrite(BATTERY_CHARGER, HIGH);
-  // digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
+  File file = SPIFFS.open("/config.txt");
+  if (!file) {
+    Serial.println("Failed to open file for reading");
+    return;
+  }
+
+  Serial.println("File Content:");
+  while (file.available()) {
+    Serial.write(file.read());
+  }
+  file.close();
 }
 
 void loop() {

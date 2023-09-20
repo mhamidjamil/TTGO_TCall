@@ -1,6 +1,6 @@
-//$ last work 20/Sep/23 [12:26 AM]
-// # version 5.4.5
-// # Release Note : Debugging part improved
+//$ last work 21/Sep/23 [01:15 AM]
+// # version 5.4.6
+// # Release Note : Module can now update package expire date on thingSpeak
 
 #include "arduino_secrets.h"
 
@@ -32,13 +32,9 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #include <WiFi.h>
 #include <random>
 
+#include "SPIFFS.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-
-#include <NTPClient.h>
-#include <WiFiUdp.h>
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP);
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -391,28 +387,27 @@ void setup() {
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
 
-  // pinMode(WAPDA_STATE, INPUT);            // Check if wapda is on or off
-  // pinMode(BATTERY_PAIR_SELECTOR, OUTPUT); // Pair selector
-  // pinMode(BATTERY_CHARGER, OUTPUT);       // Charge battery or not
-  // pinMode(POWER_OUTPUT_SELECTOR, OUTPUT); // router INPUT selector
+  if (!SPIFFS.begin(true)) {
+    Serial.println("An Error has occurred while mounting SPIFFS");
+    return;
+  }
 
-  // digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-  // digitalWrite(BATTERY_CHARGER, HIGH);
-  // digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
-  WiFiUDP ntpUDP;
-  NTPClient timeClient(ntpUDP);
+  File file = SPIFFS.open("/config.txt");
+  if (!file) {
+    Serial.println("Failed to open file for reading");
+    return;
+  }
+
+  Serial.println("File Content:");
+  while (file.available()) {
+    Serial.write(file.read());
+  }
+  file.close();
 }
 
 void loop() {
   Println("in loop");
-  timeClient.update();
 
-  // Get current date and time
-  String formattedTime = timeClient.getFormattedTime();
-
-  // Print date and time on Serial Monitor
-  Serial.print("Date and Time: ");
-  Serial.println(formattedTime);
   if (deviceConnected) {
     if (!oldDeviceConnected) {
       Serial.println("Connected to device");
