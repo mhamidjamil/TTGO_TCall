@@ -1,6 +1,6 @@
-//$ last work 21/Sep/23 [01:15 AM]
-// # version 5.4.6
-// # Release Note : Module can now update package expire date on thingSpeak
+//$ last work 21/Sep/23 [01:37 AM]
+// # version 5.4.7
+// # Release Note : Module can now use SIPFFS to store data
 
 #include "arduino_secrets.h"
 
@@ -134,10 +134,11 @@ bool DEBUGGING = false;
 // (debuggerID == 2) // debugging SIM800L functionality
 // (debuggerID == 3) // debugging thingSpeak functionality
 // (debuggerID == 4) // debugging Whatsapp functionality
-// (debuggerID == 5) // debugging functionality
+// (debuggerID == 5) // debugging BLE functionality
+// (debuggerID == 6) // debugging SPIFFS functionality
 
 int allowedDebugging[7] = {0, 0, 1, 0,
-                           1, 0, 0}; // 0 means not allowed 1 means allowed
+                           1, 0, 1}; // 0 means not allowed 1 means allowed
 
 int debugFor = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
@@ -386,23 +387,6 @@ void setup() {
   Println("\nAfter ThingSpeak");
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
-
-  if (!SPIFFS.begin(true)) {
-    Serial.println("An Error has occurred while mounting SPIFFS");
-    return;
-  }
-
-  File file = SPIFFS.open("/config.txt");
-  if (!file) {
-    Serial.println("Failed to open file for reading");
-    return;
-  }
-
-  Serial.println("File Content:");
-  while (file.available()) {
-    Serial.write(file.read());
-  }
-  file.close();
 }
 
 void loop() {
@@ -1364,72 +1348,48 @@ bool isNum(String num) {
     return false;
 }
 
-// bool wapdaOn() {
-//   if (digitalRead(WAPDA_STATE) == HIGH)
-//     return true;
-//   else
-//     return false;
-// }
-
-// void backup(String state) {
-//   if (state == "WAPDA") {
-//     digitalWrite(POWER_OUTPUT_SELECTOR, LOW); // Relay module ON on low
-//   } else if (state == "Batteries") {
-//     digitalWrite(POWER_OUTPUT_SELECTOR, HIGH); // Relay module OFF on high
-//   } else {
-//     println("Error in backup function");
-//     errorCodes += "1367 ";
-//   }
-// }
-
-// void chargeBatteries(bool charge) {
-//   if (!batteriesCharged && charge) {
-//     if ((((millis() / 1000) / 60) - wapdaInTime) < (batteryChargeTime * 2)) {
-//       digitalWrite(BATTERY_CHARGER, LOW); // on
-//       if ((((millis() / 1000) / 60) - wapdaInTime) < batteryChargeTime) {
-//         // charge first pair of batteries
-//         digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-//         chargingStatus = "C1";
-//       } else {
-//         // charge second pair of batteries
-//         digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-//         chargingStatus = "C2";
-//       }
-//     } else {
-//       digitalWrite(BATTERY_CHARGER, HIGH); // off
-//       digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-//       chargingStatus = "NC";
-//     }
-//   } else if (!charge) {
-//     digitalWrite(BATTERY_CHARGER, HIGH); // on
-//     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-//     chargingStatus = "CC";
-//   } else {
-//     println("unexpected error at chargeBatteries function");
-//     errorCodes += "1385 ";
-//   }
-// }
-
 String getCompleteString(String str, String target) {
   //" #setting <ultra sound alerts 0> <display 1>" , "ultra"
   // return "ultra sound alerts 0"
   String tempStr = "";
   int i = str.indexOf(target);
   if (i == -1) {
-    println("String is empty" + str);
+    Println("String is empty" + str);
     return tempStr;
+  } else {
+    Println(7, "@--> Working on : " + str + " finding : " + target);
   }
   for (; i < str.length(); i++) {
     if ((str[i] >= '0' && str[i] <= '9') || (str[i] >= 'a' && str[i] <= 'z') ||
-        (str[i] >= 'A' && str[i] <= 'Z') || (str[i] == ' '))
+        (str[i] >= 'A' && str[i] <= 'Z') || (str[i] == ' ') ||
+        (str[i] == '.') && (str[i] != '>') && (str[i] != '\n') ||
+        (str[i] == ':') || (str[i] == '='))
       tempStr += str[i];
     else {
-      //   println("Returning (complete string) 1: " + tempStr);
+      Println(7, "Returning (complete string) 1: " + tempStr);
       return tempStr;
     }
   }
-  //   println("Returning (complete string) 2: " + tempStr);
+  Println(7, "Returning (complete string) 2: " + tempStr);
   return tempStr;
+}
+
+String fetchNumber(String str, char charToInclude) {
+  String number = "";
+  Println(7, "Fetching number from : " + str);
+  bool numberStart = false;
+  for (int i = 0; i < str.length(); i++) {
+    if (str[i] >= '0' && str[i] <= '9' ||
+        (str[i] == charToInclude && numberStart)) {
+      number += str[i];
+      numberStart = true;
+    } else if (numberStart) {
+      Println(7, "Returning (fetchNumber) 1: " + number);
+      return number;
+    }
+  }
+  Println(7, "Returning (fetchNumber) 2: " + number);
+  return number;
 }
 
 int fetchNumber(String str) {
@@ -1475,6 +1435,8 @@ void inputManager(String command, int inputFrom) {
       allowedDebugging[4] ? allowedDebugging[4] = 0 : allowedDebugging[4] = 1;
     else if (command.indexOf("5") != -1)
       allowedDebugging[5] ? allowedDebugging[5] = 0 : allowedDebugging[5] = 1;
+    else if (command.indexOf("6") != -1)
+      allowedDebugging[6] ? allowedDebugging[6] = 0 : allowedDebugging[6] = 1;
     else
       println("Error in debug command");
     println("\nUpdated debugging status : ");
@@ -1484,12 +1446,12 @@ void inputManager(String command, int inputFrom) {
         String(allowedDebugging[2] ? "2: SIM800L" : " ") +
         String(allowedDebugging[3] ? "3: ThingSpeak" : " ") +
         String(allowedDebugging[4] ? "4: Whatsapp" : " ") +
-        String(allowedDebugging[5] ? "5: BLE" : " "));
+        String(allowedDebugging[5] ? "5: BLE" : " ") +
+        String(allowedDebugging[6] ? "6: SPIFFS" : " "));
   } else if ((command.indexOf("debug") != -1) &&
              (command.indexOf("option") != -1)) {
     println("Here the the debugging index :\n\t-> Wifi : 0, LCD : 1, SIM800L "
-            ": 2, "
-            "ThingSpeak : 3, Whatsapp : 4, BLE : 5");
+            ": 2, ThingSpeak : 3, Whatsapp : 4, BLE : 5, SPIFFS : 6");
   } else if (command.indexOf("debug?") != -1) {
     println("Here is the debugging status: ");
     Serial.println(
@@ -1498,7 +1460,8 @@ void inputManager(String command, int inputFrom) {
         String(allowedDebugging[2] ? "2: SIM800L" : " ") +
         String(allowedDebugging[3] ? "3: ThingSpeak" : " ") +
         String(allowedDebugging[4] ? "4: Whatsapp" : " ") +
-        String(allowedDebugging[5] ? "5: BLE" : " "));
+        String(allowedDebugging[5] ? "5: BLE" : " ") +
+        String(allowedDebugging[6] ? "6: SPIFFS" : " "));
   } else if (command.indexOf("#setting") != -1) {
     updateVariablesValues(command);
     deleteMessage(1);
@@ -1539,12 +1502,6 @@ void inputManager(String command, int inputFrom) {
             fetchNumber(getCompleteString(command, "forward")));
     forwardMessage(fetchNumber(getCompleteString(command, "forward")));
     inputFrom == 3 ? command += "<executed>" : "";
-  } else if (command.indexOf("read") != -1) {
-    int targetMsg = fetchNumber(command);
-    if (messageExists(targetMsg))
-      println("Message: " + readMessage(targetMsg));
-    else
-      println("Message not Exists");
   } else if (command.indexOf("delete") != -1) { // to delete message
     deleteMessages(command);
     inputFrom == 3 ? command += "<executed>" : "";
@@ -1578,51 +1535,30 @@ void inputManager(String command, int inputFrom) {
       setTime(tempTime);
     }
     println("Time String : " + rtc);
-    // println(Time.Date);
-    // println(Time.hour);
-    // println(Time.minutes);
-  }
-  // else if (command.indexOf("!") != -1) {
-  //   if (command.indexOf("r11") != -1) {
-  //     digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-  //     delay(1000);
-  //   } else if (command.indexOf("r10") != -1) {
-  //     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-  //     delay(1000);
-  //   } else if (command.indexOf("r2a1") != -1) {
-  //     digitalWrite(BATTERY_CHARGER, LOW);
-  //     delay(1000);
-  //   } else if (command.indexOf("r2a0") != -1) {
-  //     digitalWrite(BATTERY_CHARGER, HIGH);
-  //     delay(1000);
-  //   } else if (command.indexOf("r2b1") != -1) {
-  //     digitalWrite(POWER_OUTPUT_SELECTOR, LOW);
-  //     delay(1000);
-  //   } else if (command.indexOf("r2b0") != -1) {
-  //     digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
-  //     delay(1000);
-  //   }
-  // }
-  // else if (command.indexOf("switch") != -1) {
-  //   if (command.indexOf("0") != -1)
-  //     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-  //   else if (command.indexOf("1") != -1)
-  //     digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-  //   else
-  //     println("Error in switch command");
-  // } else if (command.indexOf("chargeFor") != -1) {
-  //   batteryChargeTime = fetchNumber(getCompleteString(command, "chargeFor"));
-  //   println("Battery charge time updated to : " + String(batteryChargeTime) +
-  //           " minutes");
-  //   inputFrom == 3 ? command += "<executed>" : "";
-  // }
-  else if (command.indexOf("updateTime") != -1) {
+  } else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
     sendSMS("#setTime", "+923374888420");
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("whatsapp") != -1) {
     sendWhatsappMsg("test_message_from_esp32");
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("readSPIFFS") != -1) {
+    println("Data in SPIFFS : " + readSPIFFS());
+  } else if (command.indexOf("value of:") != -1) {
+    String varName =
+        getVariableName(command.substring(command.indexOf(":")), ":");
+    String targetLine = getCompleteString(readSPIFFS(), varName);
+    Println(7, "now trying to fetch data from line : " + targetLine);
+    String targetValue = targetLine.substring(varName.length(), -1);
+    Println("Trying to fetch data from : " + targetValue);
+    println("Value of : " + varName + " is : " + fetchNumber(targetValue, '.'));
+    Println(7, "\t\t ###leaving else part #### \n");
+  } else if (command.indexOf("read") != -1) {
+    int targetMsg = fetchNumber(command);
+    if (messageExists(targetMsg))
+      println("Message: " + readMessage(targetMsg));
+    else
+      println("Message not Exists");
   }
   // TODO: help command should return all executable commands
   else {
@@ -1767,4 +1703,58 @@ bool newPackageSubscribed(String str) {
   if (str.indexOf("10000 SMS with 30day validity") != -1)
     return true;
   return false;
+}
+
+String readSPIFFS() {
+  String tempStr = "";
+  if (!SPIFFS.begin(true)) {
+    println("An Error has occurred while mounting SPIFFS");
+    Delay(100);
+    return "";
+  }
+
+  File file = SPIFFS.open("/config.txt");
+  if (!file) {
+    println("Failed to open file for reading");
+    Delay(100);
+    return "";
+  }
+  Println(7, "Reading file ...");
+  Serial.println("File Content:");
+  while (file.available()) {
+    char character = file.read();
+    tempStr += character; // Append the character to the string
+  }
+  Println(7, tempStr);
+  file.close();
+
+  return tempStr;
+}
+
+String getFirstLine(String str) {
+  String newStr = "";
+  for (int i = 0; i < str.length(); i++) {
+    if (str[i] != '\n' || str[i] != '\r')
+      newStr += str[i];
+    else
+      break;
+  }
+  return newStr;
+}
+
+String getVariableName(String str, String startFrom) {
+  String newStr = "";
+  str = getFirstLine(str);
+  bool found = false;
+  for (int i = str.indexOf(startFrom) + startFrom.length(); i < str.length();
+       i++) {
+    if ((str[i] >= 'a' && str[i] <= 'z') || (str[i] >= 'A' && str[i] <= 'Z') ||
+        (found && str[i] >= '0' && str[i] <= '9') || (str[i] == '_')) {
+      newStr += str[i];
+      found = true;
+    } else if (found) {
+      break;
+    }
+  }
+  return newStr;
 }
