@@ -1,6 +1,6 @@
-//$ last work 22/Sep/23 [02:23 AM]
-// # version 5.4.8
-// # Release Note : Module can now read value of variable in SPIFFS
+//$ last work 23/Sep/23 [12:42 AM]
+// # version 5.4.9
+// # Release Note : Module can now read/write variables in SPIFFS
 
 #include "arduino_secrets.h"
 
@@ -10,8 +10,8 @@ String my_number = MY_Number;
 
 #include <HTTPClient.h>
 
-String whatsapp_numbers[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2, WHATSAPP_NUMBER_3,
-                    WHATSAPP_NUMBER_4};
+String whatsapp_numbers[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2,
+                              WHATSAPP_NUMBER_3, WHATSAPP_NUMBER_4};
 
 String API[4] = {WHATSAPP_API_1, WHATSAPP_API_2, WHATSAPP_API_3,
                  WHATSAPP_API_4};
@@ -85,6 +85,7 @@ TinyGsm modem(SerialAT);
 #define MAX_MESSAGES 15
 #define UPDATE_THING_SPEAK_TH_AFTER 5
 #define ALLOW_CREATING_NEW_VARIABLE_FILE true
+#define CONFIG_FILE "/config.txt"
 
 bool setPowerBoostKeepOn(int en) {
   Wire.beginTransmission(IP5306_ADDR);
@@ -106,7 +107,8 @@ const char *ts_api_key = THINGSPEAK_API;
 #define TS_MSG_COUNTER_FIELD 5
 #define TS_MSG_SEND_DATE_FIELD 6
 int whatsapp_message_number = -1;
-unsigned int last_ts_update_time = 2; // TS will update when current time == this variable
+unsigned int last_ts_update_time =
+    2; // TS will update when current time == this variable
 unsigned int last_update = 0; // in minutes
 WiFiClient client;
 
@@ -150,7 +152,7 @@ String messageTemplate = "#setting <ultra sound alerts 0> <display 1> <wifi "
                          "<battery charge time 1800>";
 
 int termination_time = 60 * 5; // 5 minutes
-String rtc = "";              // real Time Clock
+String rtc = "";               // real Time Clock
 String BLE_Input = "";
 String BLE_Output = "";
 
@@ -465,7 +467,8 @@ void Print(String str) {
 void Println(int debuggerID, String str) {
   if (DEBUGGING) {
     println(str);
-  } else if (allowed_debugging[debuggerID - 1]) { // debugging WIFI functionality
+  } else if (allowed_debugging[debuggerID -
+                               1]) { // debugging WIFI functionality
     println(str);
   } else if (debuggerID < 0 || debuggerID > 7) {
     Serial.println("Debugger is not defined for this string : " + str);
@@ -1397,19 +1400,26 @@ void inputManager(String command, int inputFrom) {
     sendSMS("#setTime", "+923374888420");
   } else if (command.indexOf("debug:") != -1) {
     if (command.indexOf("0") != -1)
-      allowed_debugging[0] ? allowed_debugging[0] = 0 : allowed_debugging[0] = 1;
+      allowed_debugging[0] ? allowed_debugging[0] = 0
+                           : allowed_debugging[0] = 1;
     else if (command.indexOf("1") != -1)
-      allowed_debugging[1] ? allowed_debugging[1] = 0 : allowed_debugging[1] = 1;
+      allowed_debugging[1] ? allowed_debugging[1] = 0
+                           : allowed_debugging[1] = 1;
     else if (command.indexOf("2") != -1)
-      allowed_debugging[2] ? allowed_debugging[2] = 0 : allowed_debugging[2] = 1;
+      allowed_debugging[2] ? allowed_debugging[2] = 0
+                           : allowed_debugging[2] = 1;
     else if (command.indexOf("3") != -1)
-      allowed_debugging[3] ? allowed_debugging[3] = 0 : allowed_debugging[3] = 1;
+      allowed_debugging[3] ? allowed_debugging[3] = 0
+                           : allowed_debugging[3] = 1;
     else if (command.indexOf("4") != -1)
-      allowed_debugging[4] ? allowed_debugging[4] = 0 : allowed_debugging[4] = 1;
+      allowed_debugging[4] ? allowed_debugging[4] = 0
+                           : allowed_debugging[4] = 1;
     else if (command.indexOf("5") != -1)
-      allowed_debugging[5] ? allowed_debugging[5] = 0 : allowed_debugging[5] = 1;
+      allowed_debugging[5] ? allowed_debugging[5] = 0
+                           : allowed_debugging[5] = 1;
     else if (command.indexOf("6") != -1)
-      allowed_debugging[6] ? allowed_debugging[6] = 0 : allowed_debugging[6] = 1;
+      allowed_debugging[6] ? allowed_debugging[6] = 0
+                           : allowed_debugging[6] = 1;
     else
       println("Error in debug command");
     println("\nUpdated debugging status : ");
@@ -1513,7 +1523,10 @@ void inputManager(String command, int inputFrom) {
     sendSMS("#setTime", "+923374888420");
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("whatsapp") != -1) {
-    sendWhatsappMsg("test_message_from_esp32");
+    if (command.length() <= 8)
+      sendWhatsappMsg("test_message_from_esp32");
+    else
+      sendWhatsappMsg(command.substring(8, -1));
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("readSPIFFS") != -1) {
     println("Data in SPIFFS : " + readSPIFFS());
@@ -1523,8 +1536,13 @@ void inputManager(String command, int inputFrom) {
     String targetLine = getCompleteString(readSPIFFS(), varName);
     Println(7, "now trying to fetch data from line : " + targetLine);
     String targetValue = targetLine.substring(varName.length(), -1);
-    Println("Trying to fetch data from : " + targetValue);
+    Println(7, "Trying to fetch data from : " + targetValue);
     println("Value of : " + varName + " is : " + fetchNumber(targetValue, '.'));
+    if (command.indexOf("to") != -1) {
+      String newValue = command.substring(command.indexOf("to") + 2, -1);
+      Println(7, "Updating value to : " + newValue);
+      updateSPIFFS(varName, newValue);
+    }
     Println(7, "\t\t ###leaving else part #### \n");
   } else if (command.indexOf("read") != -1) {
     int targetMsg = fetchNumber(command);
@@ -1686,7 +1704,7 @@ String readSPIFFS() {
     return "";
   }
 
-  File file = SPIFFS.open("/config.txt");
+  File file = SPIFFS.open(CONFIG_FILE);
   if (!file) {
     println("Failed to open file for reading");
     Delay(100);
@@ -1732,26 +1750,27 @@ String getVariableName(String str, String startFrom) {
   return newStr;
 }
 
-String getFileVariableValue(String varName){
-    String targetLine = getCompleteString(readSPIFFS(), varName);
-    Println(7, "Trying to fetch data from line : " + targetLine);
-    String targetValue = targetLine.substring(varName.length(), -1);
-    Println(7, "Trying to fetch data from : " + targetValue);
+String getFileVariableValue(String varName) {
+  String targetLine = getCompleteString(readSPIFFS(), varName);
+  Println(7, "Trying to fetch data from line : " + targetLine);
+  String targetValue = targetLine.substring(varName.length(), -1);
+  Println(7, "Trying to fetch data from : " + targetValue);
   String variableValue = fetchNumber(targetValue, '.');
-    Println(7, "Returning value of {" + varName + "} : " + variableValue);
-  return 
+  Println(7, "Returning value of {" + varName + "} : " + variableValue);
+  return variableValue;
 }
 
-void changeVariableValue(String variableName, String newValue){
-if (!SPIFFS.begin()) {
+void updateSPIFFS(String variableName, String newValue) {
+  if (!SPIFFS.begin()) {
     println("Failed to mount file system");
     return;
   }
 
   String previousValue = getFileVariableValue(variableName);
-  Println(7,"@ Replacing previous value : ->"+previousValue+"<- with new value : ->"+newValue+"<-");
+  Println(7, "@ Replacing previous value : ->" + previousValue +
+                 "<- with new value : ->" + newValue + "<-");
   // Open the file for reading
-  File file = SPIFFS.open("/config.txt", "r");
+  File file = SPIFFS.open(CONFIG_FILE, "r");
   if (!file) {
     println("Failed to open file for reading");
     return;
@@ -1767,7 +1786,7 @@ if (!SPIFFS.begin()) {
       line.replace(previousValue, newValue);
       valueReplaced = true;
     }
-    updatedContent += line;
+    updatedContent += line + "\n";
   }
 
   // Close the file
@@ -1776,18 +1795,17 @@ if (!SPIFFS.begin()) {
   Println(7, "Updated content : " + updatedContent);
 
   // Reopen the file for writing, which will erase the previous content
-  file = SPIFFS.open("/config.txt", "w");
+  file = SPIFFS.open(CONFIG_FILE, "w");
   if (!file) {
     println("Failed to open file for writing");
     return;
   }
 
-  if (!valueReplaced && ALLOW_CREATING_NEW_VARIABLE_FILE){
+  if (!valueReplaced && ALLOW_CREATING_NEW_VARIABLE_FILE) {
     println("Variable not found in file, creating new variable");
-    updatedContent += ("\n" + variableName ": " + newValue + "\n");
+    updatedContent += ("\n" + variableName + ": " + newValue + "\n");
   }
-    
-  
+
   // Write the modified content back to the file
   file.print(updatedContent);
   file.close();
