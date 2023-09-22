@@ -1,6 +1,6 @@
-//$ last work 22/Sep/23 [02:23 AM]
-// # version 5.4.8
-// # Release Note : Module can now read value of variable in SPIFFS
+//$ last work 23/Sep/23 [12:42 AM]
+// # version 5.4.9
+// # Release Note : Module can now read/write variables in SPIFFS
 
 #include "arduino_secrets.h"
 
@@ -1786,7 +1786,7 @@ void updateSPIFFS(String variableName, String newValue) {
       line.replace(previousValue, newValue);
       valueReplaced = true;
     }
-    updatedContent += line;
+    updatedContent += line + "\n";
   }
 
   // Close the file
