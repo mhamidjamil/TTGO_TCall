@@ -145,7 +145,8 @@ int debug_for = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
 bool wifi_working = true;
 bool display_working = true;
-bool sms_allowed = true;
+bool sms_allowed = false;
+int package_expiry_date = 0;
 
 String messageTemplate = "#setting <ultra sound alerts 0> <display 1> <wifi "
                          "connectivity 1> <sms 1> <termination time 300> "
@@ -605,7 +606,9 @@ String getResponse() {
                            " and previous day : " + String(previous_day));
             field_7_data =
                 10000 + (((previous_month + 1) * 100) + (previous_day - 1));
+            updateSPIFFS(packageExpiryDate, field_7_data);
             setThingSpeakFieldData(PACKAGE_DETAIL_FEILD, field_7_data);
+            package_expiry_date = field_7_data;
             writeThingSpeakData();
           }
         } else {
@@ -1810,4 +1813,19 @@ void updateSPIFFS(String variableName, String newValue) {
   file.print(updatedContent);
   file.close();
   Println(7, "Variable {" + variableName + "} has been updated.");
+}
+
+bool hasPackage() {
+  if (RTC.date != 0) {
+    if (package_expiry_date == 0)
+      package_expiry_date = getFileVariableValue("packageExpiryDate").toInt();
+    Println(7, "Package expiry date fetched from file: " +
+                   String(package_expiry_date));
+    if (RTC.month <= expiryMonth && RTC.date <= expiryDate)
+      return true;
+    else
+      return false;
+  } else {
+    return false;
+  }
 }
