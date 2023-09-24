@@ -1,17 +1,17 @@
-//$ last work 20/Sep/23 [12:26 AM]
-// # version 5.4.5
-// # Release Note : Debugging part improved
-
+//$ last work 24/Sep/23 [08:45 AM]
+// # version 5.5.0
+// # Release Note : Module can now use and update variables of SPIFFS
+// Whatsapp functionality improved
 #include "arduino_secrets.h"
 
 const char simPIN[] = "";
 
-String MOBILE_No = MY_Number;
+String my_number = MY_Number;
 
 #include <HTTPClient.h>
 
-String NUMBER[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2, WHATSAPP_NUMBER_3,
-                    WHATSAPP_NUMBER_4};
+String whatsapp_numbers[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2,
+                              WHATSAPP_NUMBER_3, WHATSAPP_NUMBER_4};
 
 String API[4] = {WHATSAPP_API_1, WHATSAPP_API_2, WHATSAPP_API_3,
                  WHATSAPP_API_4};
@@ -32,6 +32,7 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #include <WiFi.h>
 #include <random>
 
+#include "SPIFFS.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
@@ -80,9 +81,11 @@ TinyGsm modem(SerialAT);
 #define IP5306_ADDR 0x75
 #define IP5306_REG_SYS_CTL0 0x00
 
-#define ThingSpeakEnable true
+#define THINGSPEAK_ENABLE true
 #define MAX_MESSAGES 15
-#define YEAR 23
+#define UPDATE_THING_SPEAK_TH_AFTER 5
+#define ALLOW_CREATING_NEW_VARIABLE_FILE true
+#define CONFIG_FILE "/config.txt"
 
 bool setPowerBoostKeepOn(int en) {
   Wire.beginTransmission(IP5306_ADDR);
@@ -98,28 +101,29 @@ bool setPowerBoostKeepOn(int en) {
 // ThingSpeak parameters
 const char *ssid = MY_SSID;
 const char *password = MY_PASSWORD;
-const unsigned long channelID = MY_CHANNEL_ID;
-const char *apiKey = THINGSPEAK_API;
+const unsigned long ts_channel_id = MY_CHANNEL_ID;
+const char *ts_api_key = THINGSPEAK_API;
 
-int messagesCounterID = 5;
-int lastMessageUpdateID = 6;
-int whatsappMessageNumber = -1;
-unsigned int lastTsUpdate = 2; // will update when time reaches
-#define UPDATE_THING_SPEAK_TH_AFTER 5
+#define TS_MSG_COUNTER_FIELD 5
+#define TS_MSG_SEND_DATE_FIELD 6
+#define TS_PACKAGE_EXPIRY_DATE 7
+int whatsapp_message_number = -1;
+unsigned int last_ts_update_time =
+    2; // TS will update when current time == this variable
 unsigned int last_update = 0; // in minutes
 WiFiClient client;
 
-String END_VALUES = "  ";
+String end_value = "  ";
 String line_1 = "Temp: 00.0 C";
 String line_2 = "                ";
 
-String receivedMessage = ""; // Global variable to store received SMS message
-double batteryVoltage = 0;
-int batteryPercentage = 0;
+String received_message = ""; // Global variable to store received message
+double battery_voltage = 0;
+int battery_percentage = 0;
 // another variable to store time in millis
 int messages_in_inbox = 0;
 int messageStack[MAX_MESSAGES] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-int currentTargetIndex = 0;
+int current_target_index = 0;
 
 long duration;    // variable for the duration of sound wave travel
 int distance = 0; // variable for the distance measurement
@@ -128,29 +132,30 @@ float temperature;
 int humidity;
 
 bool DEBUGGING = false;
+int allowed_debugging[7] = {0, 0, 1, 0, 1, 0, 1};
+// 0 => allowed, 1 => not allowed
 // (debuggerID == 0)     // debugging WIFI functionality
 // (debuggerID == 1) // debugging LCD functionality
 // (debuggerID == 2) // debugging SIM800L functionality
 // (debuggerID == 3) // debugging thingSpeak functionality
 // (debuggerID == 4) // debugging Whatsapp functionality
-// (debuggerID == 5) // debugging functionality
+// (debuggerID == 5) // debugging BLE functionality
+// (debuggerID == 6) // debugging SPIFFS functionality
 
-int allowedDebugging[7] = {0, 0, 1, 0,
-                           1, 0, 0}; // 0 means not allowed 1 means allowed
-
-int debugFor = 130; // mentioned in seconds
+int debug_for = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
-bool wifiWorking = true;
-bool displayWorking = true;
-bool smsAllowed = true;
-bool timeVersion = false;
+bool wifi_working = true;
+bool display_working = true;
+bool sms_allowed = false;
+int package_expiry_date = 0;
+// 10921 => 09 = month, 21 = day
 
 String messageTemplate = "#setting <ultra sound alerts 0> <display 1> <wifi "
                          "connectivity 1> <sms 1> <termination time 300> "
                          "<battery charge time 1800>";
 
-int terminationTime = 60 * 5; // 5 minutes
-String rtc = "";              // real Time Clock
+int termination_time = 60 * 5; // 5 minutes
+String rtc = "";               // real Time Clock
 String BLE_Input = "";
 String BLE_Output = "";
 
@@ -158,17 +163,17 @@ String BLE_Output = "";
 // unsigned int wapdaInTime = 0; // when wapda is on it store the time stamp.
 // bool batteriesCharged = false;
 
-String retString = "";
+String ret_string = "";
 
-String errorCodes = "";
+String error_codes = "";
 // String chargingStatus = "";
 // these error codes will be moving in the last row of lcd
 
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
   int milliSeconds = 0;
-  int month = 0;
-  int date = 0;
+  int month = 0;   // month will be 08
+  int date = 0;    // date will be 26
   int hour = 0;    // hour will be 05
   int minutes = 0; // minutes will be 38
   int seconds = 0; // seconds will be 34
@@ -213,14 +218,14 @@ String sendAllMessagesWithIndex();
 bool messageExists(int index);
 void connect_wifi();
 void updateThingSpeak(float temperature, int humidity);
-void SUCCESS_MSG();
-void ERROR_MSG();
-bool wifi_connected();
-void lcd_print();
+void successMsg();
+void errorMsg();
+bool wifiConnected();
+void lcdPrint();
 String thingSpeakLastUpdate();
 void drawWifiSymbol(bool isConnected);
-void update_distance();
-bool change_Detector(int newValue, int previousValue, int margin);
+void updateDistance();
+bool changeDetector(int newValue, int previousValue, int margin);
 String getVariablesValues();
 void updateVariablesValues(String str);
 int findOccurrences(String str, String target);
@@ -250,7 +255,7 @@ void updateWhatsappMessageCounter();
 void setThingSpeakFieldData(int field, int data);
 void writeThingSpeakData();
 unsigned int getMint();
-String get_HTTP_string(String message);
+String getHTTPString(String message);
 
 // # ......... < functions .......
 #include <BLEDevice.h>
@@ -331,10 +336,10 @@ void setup() {
   Println("Before Display functionality");
   //`...............................
   delay(2000);
-  if (displayWorking) {
+  if (display_working) {
     if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
       Serial.println(F("SSD1306 allocation failed"));
-      displayWorking = false;
+      display_working = false;
     } else {
       delay(300);
       display.clearDisplay();
@@ -352,14 +357,14 @@ void setup() {
   dht.begin(); // Initialize the DHT11 sensor
   delay(1000);
   Println("Before wifi connection");
-  if (wifiWorking) {
+  if (wifi_working) {
     WiFi.begin(ssid, password);
     println("Connecting");
     int i = 0;
     while (WiFi.status() != WL_CONNECTED) {
       if (i > 10) {
         println("\n!!!---Timeout: Unable to connect to WiFi---!!!");
-        wifiWorking = false;
+        wifi_working = false;
         break;
       }
       delay(500);
@@ -376,7 +381,7 @@ void setup() {
   Println("after wifi connection");
   pinMode(LED, OUTPUT);
   delay(100);
-  if (ThingSpeakEnable && wifiWorking) {
+  if (THINGSPEAK_ENABLE && wifi_working) {
     Println("\nThinkSpeak initializing...\n");
     ThingSpeak.begin(client); // Initialize ThingSpeak
     delay(500);
@@ -385,15 +390,7 @@ void setup() {
   Println("\nAfter ThingSpeak");
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
-
-  // pinMode(WAPDA_STATE, INPUT);            // Check if wapda is on or off
-  // pinMode(BATTERY_PAIR_SELECTOR, OUTPUT); // Pair selector
-  // pinMode(BATTERY_CHARGER, OUTPUT);       // Charge battery or not
-  // pinMode(POWER_OUTPUT_SELECTOR, OUTPUT); // router INPUT selector
-
-  // digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-  // digitalWrite(BATTERY_CHARGER, HIGH);
-  // digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
+  sms_allowed = hasPackage();
 }
 
 void loop() {
@@ -428,19 +425,19 @@ void loop() {
   temperature = dht.readTemperature();
   humidity = dht.readHumidity();
   Println("after DHT reading");
-  if (displayWorking) {
+  if (display_working) {
     char temperatureStr[5];
     dtostrf(temperature, 4, 1, temperatureStr);
     Println("after DHT conversion");
 
     line_1 = line_1.substring(0, 6) + String(temperatureStr) + " C  " +
-             END_VALUES + " ";
+             end_value + " ";
     Println("after line 1");
 
     line_2 = "Hu: " + String(humidity) + " % / " + thingSpeakLastUpdate();
     Println("before lcd call");
     Delay(100);
-    lcd_print();
+    lcdPrint();
   }
   Println("after lcd update");
   wait(100);
@@ -474,7 +471,8 @@ void Print(String str) {
 void Println(int debuggerID, String str) {
   if (DEBUGGING) {
     println(str);
-  } else if (allowedDebugging[debuggerID - 1]) { // debugging WIFI functionality
+  } else if (allowed_debugging[debuggerID -
+                               1]) { // debugging WIFI functionality
     println(str);
   } else if (debuggerID < 0 || debuggerID > 7) {
     Serial.println("Debugger is not defined for this string : " + str);
@@ -492,7 +490,7 @@ void print(String str) {
 void say(String str) { SerialAT.println(str); }
 
 void giveMissedCall() {
-  say("ATD+ " + MOBILE_No + ";");
+  say("ATD+ " + my_number + ";");
   updateSerial();
   // Delay(20000);            // wait for 20 seconds...
   // say("ATH"); // hang up
@@ -505,8 +503,8 @@ void call(String number) {
 }
 
 void sendSMS(String sms) {
-  if (smsAllowed) {
-    if (modem.sendSMS(MOBILE_No, sms)) {
+  if (sms_allowed) {
+    if (modem.sendSMS(my_number, sms)) {
       println("$send{" + sms + "}");
     } else {
       println("SMS failed to send");
@@ -519,7 +517,7 @@ void sendSMS(String sms) {
 }
 
 void sendSMS(String sms, String number) {
-  if (smsAllowed) {
+  if (sms_allowed) {
     if (modem.sendSMS(number, sms)) {
       println("sending : [" + sms + "] to : " + String(number));
     } else {
@@ -599,6 +597,22 @@ String getResponse() {
                   "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
+          if (newPackageSubscribed(temp_str) &&
+              RTC.date != 0) { // ~ part belongs to else part
+            // increment 30 days in date and month or just month
+            int field_7_data = getThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE);
+            int previous_month = 0, previous_day = 0;
+            setField_MonthAndDate(field_7_data, previous_month, previous_day);
+            // TODO: what if field's value is 0
+            Println(3, "Previous Month : " + String(previous_month) +
+                           " and previous day : " + String(previous_day));
+            field_7_data =
+                10000 + (((previous_month + 1) * 100) + (previous_day - 1));
+            updateSPIFFS("packageExpiryDate", String(field_7_data));
+            setThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE, field_7_data);
+            package_expiry_date = field_7_data;
+            writeThingSpeakData();
+          }
         } else {
           Println(3, "Company message received deleting it...");
           sendSMS("<Unable to execute new sms no. {" +
@@ -658,14 +672,14 @@ String removeOk(String str) {
 }
 
 String executeCommand(String str) {
-  retString = "";
+  ret_string = "";
   Println(3, "working on msg : " + str);
   inputManager(str, 3);
-  if (retString.indexOf("<executed>") == -1) { // command is not executed
+  if (ret_string.indexOf("<executed>") == -1) { // command is not executed
     println("-> Module is not trained to execute this command ! <-");
     messages_in_inbox++;
   }
-  return retString;
+  return ret_string;
 }
 
 String updateBatteryStatus() {
@@ -675,12 +689,12 @@ String updateBatteryStatus() {
 
 void updateBatteryParameters(String response) {
   // get +CBC: 0,81,4049 in response
-  batteryPercentage =
+  battery_percentage =
       response.substring(response.indexOf(",") + 1, response.lastIndexOf(","))
           .toInt();
   int milliBatteryVoltage =
       response.substring(response.lastIndexOf(",") + 1, -1).toInt();
-  batteryVoltage =
+  battery_voltage =
       milliBatteryVoltage / pow(10, (String(milliBatteryVoltage).length() - 1));
 }
 
@@ -730,31 +744,31 @@ int totalUnreadMessages() {
 }
 
 void terminateLastMessage() {
-  currentTargetIndex = getLastIndexToTerminate();
-  if (currentTargetIndex == firstMessageIndex() || currentTargetIndex <= 1)
+  current_target_index = getLastIndexToTerminate();
+  if (current_target_index == firstMessageIndex() || current_target_index <= 1)
     return;
-  println("work index : " + String(currentTargetIndex));
-  String temp_str = executeCommand(removeOk(readMessage(currentTargetIndex)));
+  println("work index : " + String(current_target_index));
+  String temp_str = executeCommand(removeOk(readMessage(current_target_index)));
   println("Last message [ " + temp_str + "]");
   if (temp_str.indexOf("<executed>") != -1) {
-    deleteMessage(currentTargetIndex);
-    println("Message {" + String(currentTargetIndex) + "} deleted");
+    deleteMessage(current_target_index);
+    println("Message {" + String(current_target_index) + "} deleted");
   } else { // if the message don't execute
-    String mobileNumber = getMobileNumberOfMsg(String(currentTargetIndex));
-    if (!checkStack(currentTargetIndex)) {
+    String mobileNumber = getMobileNumberOfMsg(String(current_target_index));
+    if (!checkStack(current_target_index)) {
       if (!companyMsg(mobileNumber)) {
-        sendSMS("Unable to execute sms no. {" + String(currentTargetIndex) +
+        sendSMS("Unable to execute sms no. {" + String(current_target_index) +
                 "} message : [ " +
                 temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                 " ] from : " + mobileNumber + ", what to do ?");
         Delay(2000);
       } else {
         sendSMS("Unable to execute previous sms no. {" +
-                String(currentTargetIndex) + "} message : [ " +
+                String(current_target_index) + "} message : [ " +
                 temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                 " ] from : " + mobileNumber + ". deleting it...");
         Delay(2000);
-        deleteMessage(currentTargetIndex);
+        deleteMessage(current_target_index);
       }
     }
   }
@@ -768,7 +782,7 @@ bool checkStack(int messageNumber) {
         return true;
       }
     println("\n#Error 784\n");
-    errorCodes += "784 ";
+    error_codes += "784 ";
     return false;
   } else {
     return false;
@@ -800,7 +814,7 @@ void deleteIndexFromStack(int messageNumber) {
 
 int getLastIndexToTerminate() {
   arrangeStack();
-  if (currentTargetIndex == 0) {
+  if (current_target_index == 0) {
     // mean this function is runing first time lets read all messages and get
     // the last message number
     messageStack[0] = lastMessageIndex();
@@ -875,26 +889,26 @@ bool messageExists(int index) {
 
 //`..................................
 void connect_wifi() {
-  if (String(ssid).indexOf("skip") != -1 && wifiWorking) {
-    END_VALUES.setCharAt(0, 'Z');
+  if (String(ssid).indexOf("skip") != -1 && wifi_working) {
+    end_value.setCharAt(0, 'Z');
     return;
   }
   WiFi.begin(ssid, password); // Connect to Wi-Fi
-  for (int i = 0; !wifi_connected(); i++) {
+  for (int i = 0; !wifiConnected(); i++) {
     if (i > 10) {
       println("Timeout: Unable to connect to WiFi");
       break;
     }
     Delay(500);
-    END_VALUES.setCharAt(0, '?');
+    end_value.setCharAt(0, '?');
     Delay(500);
-    END_VALUES.setCharAt(0, ' ');
+    end_value.setCharAt(0, ' ');
   }
-  if (wifi_connected()) {
-    END_VALUES.setCharAt(0, '*');
+  if (wifiConnected()) {
+    end_value.setCharAt(0, '*');
     println("Wi-Fi connected successfully");
   } else {
-    END_VALUES.setCharAt(0, '!');
+    end_value.setCharAt(0, '!');
     digitalWrite(LED, LOW);
   }
 }
@@ -905,33 +919,33 @@ void updateThingSpeak(float temperature, int humidity) {
     ThingSpeak.setField(2, humidity);    // Set humidity value
     Println(4, "After setting up fields");
 
-    int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
+    int updateStatus = ThingSpeak.writeFields(ts_channel_id, ts_api_key);
     if (updateStatus == 200) {
       Println(4, "ThingSpeak update successful");
-      SUCCESS_MSG();
+      successMsg();
     } else {
       Println(4, "Error updating ThingSpeak. Status: " + String(updateStatus));
-      ERROR_MSG();
+      errorMsg();
     }
   }
 }
 
-void SUCCESS_MSG() {
+void successMsg() {
   // set curser to first row, first last column and print "tick symbol"
   digitalWrite(LED, HIGH);
-  END_VALUES.setCharAt(1, '+');
+  end_value.setCharAt(1, '+');
   last_update = (millis() / 1000);
 }
 
-void ERROR_MSG() {
+void errorMsg() {
   // set curser to first row, first last column and print "tick symbol"
   digitalWrite(LED, LOW);
-  END_VALUES.setCharAt(1, '-');
-  END_VALUES.setCharAt(1, 'e');
+  end_value.setCharAt(1, '-');
+  end_value.setCharAt(1, 'e');
   connect_wifi();
 }
 
-bool wifi_connected() {
+bool wifiConnected() {
   if (WiFi.status() == WL_CONNECTED) {
     return true;
   } else {
@@ -939,7 +953,7 @@ bool wifi_connected() {
   }
 }
 
-void lcd_print() {
+void lcdPrint() {
   Println(2, "entering lcd function");
   display.clearDisplay();
   Println(2, "second line of lcd function");
@@ -947,28 +961,18 @@ void lcd_print() {
   display.setCursor(0, 0);
   // Display static text
   Println(2, "before checking wifi status lcd function");
-  drawWifiSymbol(wifi_connected());
+  drawWifiSymbol(wifiConnected());
   Println(2, "after checking wifi status lcd function");
   display.print(" ");
   if (messages_in_inbox > 1) {
     display.print(String(messages_in_inbox));
     display.print(" ");
   }
-  display.print(batteryPercentage);
+  display.print(battery_percentage);
   display.print("%");
   display.print(" ");
   display.print(String(RTC.hour) + ":" + String(RTC.minutes) + ":" +
                 String(RTC.seconds));
-  // display.print(" ");
-  // if (timeVersion) {
-  //   if ((((millis() / 60000) - wapdaInTime) < (batteryChargeTime * 2))) {
-  //     display.print(((((millis() / 1000)) / 60) - wapdaInTime));
-  //   }
-  //   timeVersion = false;
-  // } else {
-  //   display.print("B:" + String(batteryChargeTime) + "," + wapdaInTime);
-  //   timeVersion = true;
-  // }
 
   display.setCursor(0, 17);
   display.print(line_1);
@@ -976,9 +980,9 @@ void lcd_print() {
   display.setCursor(0, 32);
   display.print(line_2);
 
-  if (errorCodes.length() > 0) {
+  if (error_codes.length() > 0) {
     display.setCursor(0, 47);
-    display.print(errorCodes);
+    display.print(error_codes);
   }
 
   display.display();
@@ -1011,7 +1015,7 @@ String thingSpeakLastUpdate() {
 void drawWifiSymbol(bool isConnected) {
   if (!isConnected) {
     display.setCursor(0, 0);
-    if (!wifiWorking)
+    if (!wifi_working)
       display.print("D");
     else
       display.print("X");
@@ -1022,7 +1026,7 @@ void drawWifiSymbol(bool isConnected) {
 }
 //`..................................
 
-bool change_Detector(int newValue, int previousValue, int margin) {
+bool changeDetector(int newValue, int previousValue, int margin) {
   if ((newValue >= previousValue - margin) &&
       (newValue <= previousValue + margin)) {
     return false;
@@ -1033,11 +1037,11 @@ bool change_Detector(int newValue, int previousValue, int margin) {
 
 String getVariablesValues() {
   return String(
-      (String(displayWorking ? "Display on" : "Display off") + ", " +
+      (String(display_working ? "Display on" : "Display off") + ", " +
        String(ultraSoundWorking ? "ultraSound on" : "ultraSound off") + ", " +
-       String(wifiWorking ? "wifi on" : "wifi off")) +
-      " Termination time : " + String(terminationTime) +
-      "sms allowed : " + String(smsAllowed));
+       String(wifi_working ? "wifi on" : "wifi off")) +
+      " Termination time : " + String(termination_time) +
+      "sms allowed : " + String(sms_allowed));
 }
 
 void updateVariablesValues(String str) {
@@ -1059,33 +1063,33 @@ void updateVariablesValues(String str) {
     if (str.indexOf("display") != -1) {
       int response = fetchNumber(getCompleteString(str, "display"));
       if (response == 0) {
-        displayWorking = false;
+        display_working = false;
       } else if (response == 1) {
-        displayWorking = true;
+        display_working = true;
       }
     }
     if (str.indexOf("sms") != -1) {
       int response = fetchNumber(getCompleteString(str, "sms"));
       if (response == 0) {
-        smsAllowed = false;
+        sms_allowed = false;
       } else if (response == 1) {
-        smsAllowed = true;
+        sms_allowed = true;
       }
     }
     if (str.indexOf("wifi") != -1) {
       int response = fetchNumber(getCompleteString(str, "wifi"));
       if (response == 0) {
-        wifiWorking = false;
+        wifi_working = false;
       } else if (response == 1) {
-        wifiWorking = true;
-        if (ThingSpeakEnable && wifi_connected()) {
+        wifi_working = true;
+        if (THINGSPEAK_ENABLE && wifiConnected()) {
           Println(4, "\nThinkSpeak initializing in loop...\n");
           ThingSpeak.begin(client); // Initialize ThingSpeak
         }
       }
     }
     if (str.indexOf("termination") != -1) {
-      terminationTime = fetchNumber(getCompleteString(str, "termination"));
+      termination_time = fetchNumber(getCompleteString(str, "termination"));
     }
     // if (str.indexOf("battery") != -1) {
     //   batteryChargeTime = fetchNumber(getCompleteString(str, "battery"));
@@ -1111,15 +1115,19 @@ void wait(unsigned int miliSeconds) {
   bool condition = false;
   Println("Entering wait function...");
   for (int i = 0; (miliSeconds > (i * 5)); i++) {
-    if ((millis() / 1000) % terminationTime == 0 &&
-        terminationTime > 0) // after every 5 minutes
+    if ((millis() / 1000) % termination_time == 0 &&
+        termination_time > 0) // after every 5 minutes
     {
       Println(3, "before termination");
       terminateLastMessage();
       Println(3, "after termination");
       condition = true;
+      if (RTC.date == 0) {
+        println("Time is not updated yet updating it");
+        sendSMS("#setTime", "+923374888420");
+      }
     }
-    if (displayWorking) {
+    if (display_working) {
       if ((millis() / 1000) % 100 == 0) {
         Println(2, "before display status work in wait function");
         messages_in_inbox =
@@ -1129,30 +1137,30 @@ void wait(unsigned int miliSeconds) {
         Println(2, "after display status work in wait function");
       }
     }
-    if (ThingSpeakEnable && (getMint() > lastTsUpdate)) {
-      if (wifi_connected()) {
-        if (wifiWorking) {
+    if (THINGSPEAK_ENABLE && (getMint() > last_ts_update_time)) {
+      if (wifiConnected()) {
+        if (wifi_working) {
           Println(4, "Before Temperature Update");
           updateThingSpeak(temperature, humidity);
-          lastTsUpdate = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
+          last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
           Println(4, "After temperature update");
           condition = true;
         }
       } else { // comment it if you don't want to connect to wifi
         connect_wifi();
-        if (wifi_connected()) {
-          wifiWorking = true;
+        if (wifiConnected()) {
+          wifi_working = true;
           ThingSpeak.begin(client);               // Initialize ThingSpeak
           ThingSpeak.setField(4, random(52, 99)); // set any random value.
         }
       }
     }
-    if ((millis() / 1000) > debugFor && DEBUGGING) {
+    if ((millis() / 1000) > debug_for && DEBUGGING) {
       Println("Disabling DEBUGGING...");
       DEBUGGING = false;
     }
-    if (((millis() / 1000) > (debugFor - 30)) &&
-        (millis() / 1000) < (debugFor - 27)) {
+    if (((millis() / 1000) > (debug_for - 30)) &&
+        (millis() / 1000) < (debug_for - 27)) {
       // it will just run at first time when system booted
       Println(3, "\nBefore updating values from message 1\n");
       updateVariablesValues(readMessage(1));
@@ -1214,26 +1222,14 @@ void setTime() { // this function will set RTC struct using rtc string
         String(RTC.date) + "/" + String(RTC.month);
     sendSMS(bootMessage);
   }
+  Println(2, "Before allowing sms");
+  sms_allowed = hasPackage();
+  Println(2, "After allowing sms");
 }
 
 void Delay(int milliseconds) {
   for (int i = 0; i < milliseconds; i++) {
-    // if (wapdaOn()) {   // charge batteries
-    //   backup("WAPDA"); // shift backup to WAPDA
-    //   if (wapdaInTime == 0) {
-    //     wapdaInTime = ((millis() / 1000) / 60);
-    //     println("Shifting router input Source to WAPDA");
-    //   }
-    //   chargeBatteries(true);
-    // } else {               // power on router from batteries
-    //   backup("Batteries"); // shift backup to WAPDA
-    //   if (wapdaInTime != 0) {
-    //     println("Shifting router to Batteries");
-    //     wapdaInTime = 0;
-    //   }
-    //   // convert milles to minutes>seconds
-    //   chargeBatteries(false);
-    // }
+    // most important task will be executed here
     delay(1);
   }
 
@@ -1336,72 +1332,48 @@ bool isNum(String num) {
     return false;
 }
 
-// bool wapdaOn() {
-//   if (digitalRead(WAPDA_STATE) == HIGH)
-//     return true;
-//   else
-//     return false;
-// }
-
-// void backup(String state) {
-//   if (state == "WAPDA") {
-//     digitalWrite(POWER_OUTPUT_SELECTOR, LOW); // Relay module ON on low
-//   } else if (state == "Batteries") {
-//     digitalWrite(POWER_OUTPUT_SELECTOR, HIGH); // Relay module OFF on high
-//   } else {
-//     println("Error in backup function");
-//     errorCodes += "1367 ";
-//   }
-// }
-
-// void chargeBatteries(bool charge) {
-//   if (!batteriesCharged && charge) {
-//     if ((((millis() / 1000) / 60) - wapdaInTime) < (batteryChargeTime * 2)) {
-//       digitalWrite(BATTERY_CHARGER, LOW); // on
-//       if ((((millis() / 1000) / 60) - wapdaInTime) < batteryChargeTime) {
-//         // charge first pair of batteries
-//         digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-//         chargingStatus = "C1";
-//       } else {
-//         // charge second pair of batteries
-//         digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-//         chargingStatus = "C2";
-//       }
-//     } else {
-//       digitalWrite(BATTERY_CHARGER, HIGH); // off
-//       digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-//       chargingStatus = "NC";
-//     }
-//   } else if (!charge) {
-//     digitalWrite(BATTERY_CHARGER, HIGH); // on
-//     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-//     chargingStatus = "CC";
-//   } else {
-//     println("unexpected error at chargeBatteries function");
-//     errorCodes += "1385 ";
-//   }
-// }
-
 String getCompleteString(String str, String target) {
   //" #setting <ultra sound alerts 0> <display 1>" , "ultra"
   // return "ultra sound alerts 0"
   String tempStr = "";
   int i = str.indexOf(target);
   if (i == -1) {
-    println("String is empty" + str);
+    Println("String is empty" + str);
     return tempStr;
+  } else {
+    Println(7, "@--> Working on : " + str + " finding : " + target);
   }
   for (; i < str.length(); i++) {
     if ((str[i] >= '0' && str[i] <= '9') || (str[i] >= 'a' && str[i] <= 'z') ||
-        (str[i] >= 'A' && str[i] <= 'Z') || (str[i] == ' '))
+        (str[i] >= 'A' && str[i] <= 'Z') || (str[i] == ' ') ||
+        (str[i] == '.') && (str[i] != '>') && (str[i] != '\n') ||
+        (str[i] == ':') || (str[i] == '='))
       tempStr += str[i];
     else {
-      //   println("Returning (complete string) 1: " + tempStr);
+      Println(7, "Returning (complete string) 1: " + tempStr);
       return tempStr;
     }
   }
-  //   println("Returning (complete string) 2: " + tempStr);
+  Println(7, "Returning (complete string) 2: " + tempStr);
   return tempStr;
+}
+
+String fetchNumber(String str, char charToInclude) {
+  String number = "";
+  Println(7, "Fetching number from : " + str);
+  bool numberStart = false;
+  for (int i = 0; i < str.length(); i++) {
+    if (str[i] >= '0' && str[i] <= '9' ||
+        (str[i] == charToInclude && numberStart)) {
+      number += str[i];
+      numberStart = true;
+    } else if (numberStart) {
+      Println(7, "Returning (fetchNumber) 1: " + number);
+      return number;
+    }
+  }
+  Println(7, "Returning (fetchNumber) 2: " + number);
+  return number;
 }
 
 int fetchNumber(String str) {
@@ -1431,43 +1403,56 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("updateTime") != -1) {
+    println("Updating time by sending message");
+    sendSMS("#setTime", "+923374888420");
   } else if (command.indexOf("debug:") != -1) {
     if (command.indexOf("0") != -1)
-      allowedDebugging[0] ? allowedDebugging[0] = 0 : allowedDebugging[0] = 1;
+      allowed_debugging[0] ? allowed_debugging[0] = 0
+                           : allowed_debugging[0] = 1;
     else if (command.indexOf("1") != -1)
-      allowedDebugging[1] ? allowedDebugging[1] = 0 : allowedDebugging[1] = 1;
+      allowed_debugging[1] ? allowed_debugging[1] = 0
+                           : allowed_debugging[1] = 1;
     else if (command.indexOf("2") != -1)
-      allowedDebugging[2] ? allowedDebugging[2] = 0 : allowedDebugging[2] = 1;
+      allowed_debugging[2] ? allowed_debugging[2] = 0
+                           : allowed_debugging[2] = 1;
     else if (command.indexOf("3") != -1)
-      allowedDebugging[3] ? allowedDebugging[3] = 0 : allowedDebugging[3] = 1;
+      allowed_debugging[3] ? allowed_debugging[3] = 0
+                           : allowed_debugging[3] = 1;
     else if (command.indexOf("4") != -1)
-      allowedDebugging[4] ? allowedDebugging[4] = 0 : allowedDebugging[4] = 1;
+      allowed_debugging[4] ? allowed_debugging[4] = 0
+                           : allowed_debugging[4] = 1;
     else if (command.indexOf("5") != -1)
-      allowedDebugging[5] ? allowedDebugging[5] = 0 : allowedDebugging[5] = 1;
+      allowed_debugging[5] ? allowed_debugging[5] = 0
+                           : allowed_debugging[5] = 1;
+    else if (command.indexOf("6") != -1)
+      allowed_debugging[6] ? allowed_debugging[6] = 0
+                           : allowed_debugging[6] = 1;
     else
       println("Error in debug command");
     println("\nUpdated debugging status : ");
     Serial.println(
-        "Debugging : " + String(allowedDebugging[0] ? "0: Wifi" : " ") +
-        String(allowedDebugging[1] ? "1: LCD" : " ") +
-        String(allowedDebugging[2] ? "2: SIM800L" : " ") +
-        String(allowedDebugging[3] ? "3: ThingSpeak" : " ") +
-        String(allowedDebugging[4] ? "4: Whatsapp" : " ") +
-        String(allowedDebugging[5] ? "5: BLE" : " "));
+        "Debugging : " + String(allowed_debugging[0] ? "0: Wifi" : " ") +
+        String(allowed_debugging[1] ? "1: LCD" : " ") +
+        String(allowed_debugging[2] ? "2: SIM800L" : " ") +
+        String(allowed_debugging[3] ? "3: ThingSpeak" : " ") +
+        String(allowed_debugging[4] ? "4: Whatsapp" : " ") +
+        String(allowed_debugging[5] ? "5: BLE" : " ") +
+        String(allowed_debugging[6] ? "6: SPIFFS" : " "));
   } else if ((command.indexOf("debug") != -1) &&
              (command.indexOf("option") != -1)) {
     println("Here the the debugging index :\n\t-> Wifi : 0, LCD : 1, SIM800L "
-            ": 2, "
-            "ThingSpeak : 3, Whatsapp : 4, BLE : 5");
+            ": 2, ThingSpeak : 3, Whatsapp : 4, BLE : 5, SPIFFS : 6");
   } else if (command.indexOf("debug?") != -1) {
     println("Here is the debugging status: ");
     Serial.println(
-        "Debugging : " + String(allowedDebugging[0] ? "0: Wifi" : " ") +
-        String(allowedDebugging[1] ? "1: LCD" : " ") +
-        String(allowedDebugging[2] ? "2: SIM800L" : " ") +
-        String(allowedDebugging[3] ? "3: ThingSpeak" : " ") +
-        String(allowedDebugging[4] ? "4: Whatsapp" : " ") +
-        String(allowedDebugging[5] ? "5: BLE" : " "));
+        "Debugging : " + String(allowed_debugging[0] ? "0: Wifi" : " ") +
+        String(allowed_debugging[1] ? "1: LCD" : " ") +
+        String(allowed_debugging[2] ? "2: SIM800L" : " ") +
+        String(allowed_debugging[3] ? "3: ThingSpeak" : " ") +
+        String(allowed_debugging[4] ? "4: Whatsapp" : " ") +
+        String(allowed_debugging[5] ? "5: BLE" : " ") +
+        String(allowed_debugging[6] ? "6: SPIFFS" : " "));
   } else if (command.indexOf("#setting") != -1) {
     updateVariablesValues(command);
     deleteMessage(1);
@@ -1478,13 +1463,13 @@ void inputManager(String command, int inputFrom) {
     call(command.substring(command.indexOf("{") + 1, command.indexOf("}")));
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("call") != -1) {
-    println("Calling " + String(MOBILE_No));
+    println("Calling " + String(my_number));
     giveMissedCall();
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("sms") != -1) {
     // fetch sms from input string, sample-> sms : msg here
     String sms = command.substring(command.indexOf("sms") + 4);
-    println("Sending SMS : " + sms + " to : " + String(MOBILE_No));
+    println("Sending SMS : " + sms + " to : " + String(my_number));
     sendSMS(sms);
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("all") != -1) {
@@ -1495,8 +1480,8 @@ void inputManager(String command, int inputFrom) {
     println(updateBatteryStatus());
     if (inputFrom == 3) {
       updateBatteryParameters(updateBatteryStatus());
-      sendSMS("Battery percentage : " + String(batteryPercentage) +
-              "\nBattery voltage : " + String(batteryVoltage));
+      sendSMS("Battery percentage : " + String(battery_percentage) +
+              "\nBattery voltage : " + String(battery_voltage));
       command += " <executed>";
     }
   } else if (command.indexOf("lastBefore") != -1) {
@@ -1508,12 +1493,6 @@ void inputManager(String command, int inputFrom) {
             fetchNumber(getCompleteString(command, "forward")));
     forwardMessage(fetchNumber(getCompleteString(command, "forward")));
     inputFrom == 3 ? command += "<executed>" : "";
-  } else if (command.indexOf("read") != -1) {
-    int targetMsg = fetchNumber(command);
-    if (messageExists(targetMsg))
-      println("Message: " + readMessage(targetMsg));
-    else
-      println("Message not Exists");
   } else if (command.indexOf("delete") != -1) { // to delete message
     deleteMessages(command);
     inputFrom == 3 ? command += "<executed>" : "";
@@ -1547,51 +1526,50 @@ void inputManager(String command, int inputFrom) {
       setTime(tempTime);
     }
     println("Time String : " + rtc);
-    // println(Time.Date);
-    // println(Time.hour);
-    // println(Time.minutes);
-  }
-  // else if (command.indexOf("!") != -1) {
-  //   if (command.indexOf("r11") != -1) {
-  //     digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-  //     delay(1000);
-  //   } else if (command.indexOf("r10") != -1) {
-  //     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-  //     delay(1000);
-  //   } else if (command.indexOf("r2a1") != -1) {
-  //     digitalWrite(BATTERY_CHARGER, LOW);
-  //     delay(1000);
-  //   } else if (command.indexOf("r2a0") != -1) {
-  //     digitalWrite(BATTERY_CHARGER, HIGH);
-  //     delay(1000);
-  //   } else if (command.indexOf("r2b1") != -1) {
-  //     digitalWrite(POWER_OUTPUT_SELECTOR, LOW);
-  //     delay(1000);
-  //   } else if (command.indexOf("r2b0") != -1) {
-  //     digitalWrite(POWER_OUTPUT_SELECTOR, HIGH);
-  //     delay(1000);
-  //   }
-  // }
-  // else if (command.indexOf("switch") != -1) {
-  //   if (command.indexOf("0") != -1)
-  //     digitalWrite(BATTERY_PAIR_SELECTOR, HIGH);
-  //   else if (command.indexOf("1") != -1)
-  //     digitalWrite(BATTERY_PAIR_SELECTOR, LOW);
-  //   else
-  //     println("Error in switch command");
-  // } else if (command.indexOf("chargeFor") != -1) {
-  //   batteryChargeTime = fetchNumber(getCompleteString(command, "chargeFor"));
-  //   println("Battery charge time updated to : " + String(batteryChargeTime) +
-  //           " minutes");
-  //   inputFrom == 3 ? command += "<executed>" : "";
-  // }
-  else if (command.indexOf("updateTime") != -1) {
+  } else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
     sendSMS("#setTime", "+923374888420");
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("whatsapp") != -1) {
-    sendWhatsappMsg("test_message_from_esp32");
+    if (command.length() <= 10) {
+      Println(5, "Sending test message from esp32");
+      sendWhatsappMsg("test_message_from_esp32");
+    } else {
+      Println(5, "-> [" + String(command.length()) + "]Sending message : " +
+                     command.substring(command.indexOf("whatsapp") + 9, -1));
+      sendWhatsappMsg(command.substring(command.indexOf("whatsapp") + 9, -1));
+    }
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("readSPIFFS") != -1) {
+    println("Data in SPIFFS : " + readSPIFFS());
+  } else if (command.indexOf("value of:") != -1) {
+    String varName =
+        getVariableName(command.substring(command.indexOf(":")), ":");
+    String targetLine = getCompleteString(readSPIFFS(), varName);
+    if (targetLine.indexOf(varName) == -1) {
+      println("Variable not found in file creating new one");
+      updateSPIFFS(varName, "0");
+    }
+    Println(7, "now trying to fetch data from line : " + targetLine);
+    String targetValue = targetLine.substring(varName.length(), -1);
+    Println(7, "Trying to fetch data from : " + targetValue);
+    println("Value of : " + varName + " is : " + fetchNumber(targetValue, '.'));
+    if (command.indexOf("to") != -1) {
+      String newValue = command.substring(command.indexOf("to") + 2, -1);
+      Println(7, "Updating value to : " + newValue);
+      updateSPIFFS(varName, newValue);
+    }
+    Println(7, "\t\t ###leaving else part #### \n");
+  } else if (command.indexOf("setTime") != -1) {
+    String tempStr =
+        "+CMGL: 1,\"REC READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
+    setTime(tempStr);
+  } else if (command.indexOf("read") != -1) {
+    int targetMsg = fetchNumber(command);
+    if (messageExists(targetMsg))
+      println("Message: " + readMessage(targetMsg));
+    else
+      println("Message not Exists");
   }
   // TODO: help command should return all executable commands
   else {
@@ -1601,14 +1579,14 @@ void inputManager(String command, int inputFrom) {
     } else
       say(command);
   }
-  retString = command;
+  ret_string = command;
 }
 
 bool companyMsg(String mobileNumber) {
   if (mobileNumber.indexOf("Telenor") != -1)
     return true;
-  else if (mobileNumber.indexOf("Jazz") == -1 ||
-           mobileNumber.indexOf("JAZZ") == -1)
+  else if (mobileNumber.indexOf("Jazz") != -1 ||
+           mobileNumber.indexOf("JAZZ") != -1)
     return true;
   else if (mobileNumber.indexOf("Zong") != -1)
     return true;
@@ -1624,12 +1602,14 @@ void sendWhatsappMsg(String message) {
   if (RTC.date == 0) {
     println("RTC not updated yet so wait for it to avoid unexpected behaviour");
     return;
-  } else if (!wifi_connected()) {
+  } else if (!wifiConnected()) {
     println("Wifi not connected unable to send whatsapp message");
     return;
   }
+  Println(5, "########_______________________________#########");
   HTTPClient http;
-  String serverPath = getServerPath(get_HTTP_string(message));
+  String serverPath = getServerPath(getHTTPString(message));
+  Println(5, "Working on this HTTP: " + serverPath);
   http.begin(serverPath);
   int httpResponseCode = http.GET();
   if (httpResponseCode > 0) {
@@ -1643,27 +1623,28 @@ void sendWhatsappMsg(String message) {
     println(String(httpResponseCode));
   }
   http.end();
+  Println(5, "########_______________________________#########");
 }
 
 String getServerPath(String message) {
   String whatsappNumber;
   String api;
-  if (whatsappMessageNumber == -1) {
-    whatsappMessageNumber = getMessagesCounter();
-    if (whatsappMessageNumber < 0 && whatsappMessageNumber > 100) {
+  if (whatsapp_message_number == -1) {
+    whatsapp_message_number = getMessagesCounter();
+    if (whatsapp_message_number < 0 && whatsapp_message_number > 100) {
       println("Unexpected behaviour in getMessagesCounter()");
-      errorCodes += "1608";
+      error_codes += "1608";
     }
-    whatsappNumber = NUMBER[whatsappMessageNumber / 25];
-    api = API[whatsappMessageNumber / 25];
+    whatsappNumber = whatsapp_numbers[whatsapp_message_number / 25];
+    api = API[whatsapp_message_number / 25];
 
   } else {
-    whatsappNumber = NUMBER[whatsappMessageNumber / 25];
-    api = API[whatsappMessageNumber / 25];
-    println("Using " + whatsappNumber +
-            "for whatsapp message : " + String(whatsappMessageNumber));
+    whatsappNumber = whatsapp_numbers[whatsapp_message_number / 25];
+    api = API[whatsapp_message_number / 25];
+    Println(5, "Using " + whatsappNumber +
+                   "for whatsapp message : " + String(whatsapp_message_number));
   }
-  String serverPath = server + whatsappNumber + get_HTTP_string(message) + api;
+  String serverPath = server + whatsappNumber + getHTTPString(message) + api;
   Println(5, "returning mobile number : " + String(whatsappNumber));
   Println(5, "returning api : " + String(api));
   return serverPath;
@@ -1672,15 +1653,15 @@ String getServerPath(String message) {
 int getMessagesCounter() {
   int todayMessages = -1;
   int lastUpdateOfThingSpeakMessageCounter =
-      getThingSpeakFieldData(lastMessageUpdateID);
+      getThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD);
   if (lastUpdateOfThingSpeakMessageCounter != RTC.date) {
     Println(5, "Day changed initiating new counter");
-    setThingSpeakFieldData(lastMessageUpdateID, RTC.date);
-    setThingSpeakFieldData(messagesCounterID, 1);
+    setThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD, RTC.date);
+    setThingSpeakFieldData(TS_MSG_COUNTER_FIELD, 1);
     writeThingSpeakData();
     todayMessages = 1;
   } else {
-    todayMessages = getThingSpeakFieldData(messagesCounterID);
+    todayMessages = getThingSpeakFieldData(TS_MSG_COUNTER_FIELD);
     Println(5, "Else: Fetched data : " + String(todayMessages));
   }
   Println(5, "Returning Counter : " + String(todayMessages));
@@ -1688,7 +1669,7 @@ int getMessagesCounter() {
 }
 
 int getThingSpeakFieldData(int fieldNumber) {
-  int data = ThingSpeak.readIntField(channelID, fieldNumber);
+  int data = ThingSpeak.readIntField(ts_channel_id, fieldNumber);
   int statusCode = ThingSpeak.getLastReadStatus();
   if (statusCode == 200) {
     Println(5, "Data fetched from field : " + String(fieldNumber));
@@ -1701,8 +1682,8 @@ int getThingSpeakFieldData(int fieldNumber) {
 }
 
 void updateWhatsappMessageCounter() {
-  setThingSpeakFieldData(lastMessageUpdateID, RTC.date);
-  setThingSpeakFieldData(messagesCounterID, ++whatsappMessageNumber);
+  setThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD, RTC.date);
+  setThingSpeakFieldData(TS_MSG_COUNTER_FIELD, ++whatsapp_message_number);
   writeThingSpeakData();
 }
 
@@ -1711,7 +1692,7 @@ void setThingSpeakFieldData(int field, int data) {
 }
 
 void writeThingSpeakData() {
-  int updateStatus = ThingSpeak.writeFields(channelID, apiKey);
+  int updateStatus = ThingSpeak.writeFields(ts_channel_id, ts_api_key);
   if (updateStatus == 200) {
     Println(4, "ThingSpeak update successfully...");
   } else {
@@ -1721,13 +1702,195 @@ void writeThingSpeakData() {
 
 unsigned int getMint() { return ((millis() / 1000) / 60); }
 
-String get_HTTP_string(String message) {
+String getHTTPString(String message) {
   String tempStr = "";
   for (int i = 0; i < message.length(); i++) {
-    if (message[i] == ' ')
+    if (message[i] == ' ' || message[i] == '\n' || message[i] == '\r')
       tempStr += "_";
-    else
+    else if ((message[i] >= '0' && message[i] <= '9') ||
+             (message[i] >= 'A' && message[i] <= 'Z') ||
+             (message[i] >= 'a' && message[i] <= 'z') || (message[i]) == '_' ||
+             (message[i]) == '@' || (message[i]) == '%' ||
+             (message[i]) == '*' || (message[i]) == '-' || (message[i]) == '#')
       tempStr += message[i];
+    else
+      println("Invalid character {" + String(message[i]) +
+              "} in whatsapp message ignoring it");
   }
   return tempStr;
+  // TODO:remove all other characters which can cause any issue in http request
+}
+
+bool newPackageSubscribed(String str) {
+  if (str.indexOf("10000 SMS with 30day validity") != -1)
+    return true;
+  return false;
+}
+
+String readSPIFFS() {
+  String tempStr = "";
+  if (!SPIFFS.begin(true)) {
+    println("An Error has occurred while mounting SPIFFS");
+    Delay(100);
+    return "";
+  }
+
+  File file = SPIFFS.open(CONFIG_FILE);
+  if (!file) {
+    println("Failed to open file for reading");
+    Delay(100);
+    return "";
+  }
+  Println(7, "Reading file ...");
+  Serial.println("File Content:");
+  while (file.available()) {
+    char character = file.read();
+    tempStr += character; // Append the character to the string
+  }
+  Println(7, tempStr);
+  file.close();
+
+  return tempStr;
+}
+
+String getFirstLine(String str) {
+  String newStr = "";
+  for (int i = 0; i < str.length(); i++) {
+    if (str[i] != '\n' || str[i] != '\r')
+      newStr += str[i];
+    else
+      break;
+  }
+  return newStr;
+}
+
+String getVariableName(String str, String startFrom) {
+  String newStr = "";
+  str = getFirstLine(str);
+  bool found = false;
+  for (int i = str.indexOf(startFrom) + startFrom.length(); i < str.length();
+       i++) {
+    if ((str[i] >= 'a' && str[i] <= 'z') || (str[i] >= 'A' && str[i] <= 'Z') ||
+        (found && str[i] >= '0' && str[i] <= '9') || (str[i] == '_')) {
+      newStr += str[i];
+      found = true;
+    } else if (found) {
+      break;
+    }
+  }
+  return newStr;
+}
+
+String getFileVariableValue(String varName) {
+  String targetLine = getCompleteString(readSPIFFS(), varName);
+  Println(7, "Trying to fetch data from line : " + targetLine);
+  if (targetLine.indexOf(varName) == -1) {
+    Println(7, "Variable not found in file returning null");
+    return "-1";
+  }
+  String targetValue = targetLine.substring(varName.length(), -1);
+  Println(7, "Trying to fetch data from : " + targetValue);
+  String variableValue = fetchNumber(targetValue, '.');
+  Println(7, "Returning value of {" + varName + "} : " + variableValue);
+  return variableValue;
+}
+
+void updateSPIFFS(String variableName, String newValue) {
+  if (!SPIFFS.begin()) {
+    println("Failed to mount file system");
+    return;
+  }
+
+  String previousValue = getFileVariableValue(variableName);
+  Println(7, "@ Replacing previous value : ->" + previousValue +
+                 "<- with new value : ->" + newValue + "<-");
+  // Open the file for reading
+  File file = SPIFFS.open(CONFIG_FILE, "r");
+  if (!file) {
+    println("Failed to open file for reading");
+    return;
+  }
+
+  // Create a temporary buffer to store the modified content
+  String updatedContent = "";
+  bool valueReplaced = false;
+  // Read and modify the content line by line
+  while (file.available()) {
+    String line = file.readStringUntil('\n');
+    if (line.indexOf(variableName) != -1) {
+      line.replace(previousValue, newValue);
+      valueReplaced = true;
+    }
+    updatedContent += line + "\n";
+  }
+
+  // Close the file
+  file.close();
+
+  Println(7, "Updated content : " + updatedContent);
+
+  // Reopen the file for writing, which will erase the previous content
+  file = SPIFFS.open(CONFIG_FILE, "w");
+  if (!file) {
+    println("Failed to open file for writing");
+    return;
+  }
+
+  if (!valueReplaced) {
+    println("Variable not found in file, creating new variable");
+    updatedContent += ("\n" + variableName + ": " + newValue + "\n");
+  }
+
+  // Write the modified content back to the file
+  file.print(updatedContent);
+  file.close();
+  Println(7, "Variable {" + variableName + "} has been updated.");
+}
+
+bool hasPackage() {
+  int expiryDate = 0, expiryMonth = 0;
+  if (RTC.date != 0) {
+    if (package_expiry_date == 0)
+      package_expiry_date = getFileVariableValue("packageExpiryDate").toInt();
+    Println(7, "Package expiry date fetched from file: " +
+                   String(package_expiry_date));
+    if (package_expiry_date <= 0) {
+      Println(7, "Package expiry date not initialized in file yet, trying to "
+                 "fetch from ThingSpeak");
+      package_expiry_date = getThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE);
+      if (package_expiry_date <= 10000) {
+        Println(7,
+                "\t!!!--> Package expiry date is not defined on thingSpeak too"
+                "<---!!!");
+        return false;
+      }
+    }
+  } else {
+    Println(7, "Set Time First!");
+  }
+  setField_MonthAndDate(package_expiry_date, expiryDate, expiryMonth);
+  if (RTC.month <= expiryMonth)
+    return true;
+  else if (RTC.month == expiryMonth && RTC.date <= expiryDate)
+    return true;
+  else
+    return false;
+}
+
+void setField_MonthAndDate(int &field, int &month, int &date) {
+  if (field > 0 && month == 0 && date == 0) {
+    month = (field / 100) % 100;
+    date = field % 100;
+    Println(7, "From field " + String(field) + " => Month : " + String(month) +
+                   " Date : " + String(date));
+  } else if (field == 0 && month != 0 && date != 0) {
+    field = 10000 + month * 100 + date;
+    Println(7, "From Month : " + String(month) + " & Date : " + String(date) +
+                   " => field : " + String(field));
+  } else {
+    Println(7, "\tError in setField_MonthAndDate function!");
+    Println(7, "Recived data => field: " + String(field) +
+                   " month: " + String(month) + " date: " + String(date));
+    error_codes += "1855";
+  }
 }
