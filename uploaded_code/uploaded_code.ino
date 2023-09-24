@@ -106,6 +106,7 @@ const char *ts_api_key = THINGSPEAK_API;
 
 #define TS_MSG_COUNTER_FIELD 5
 #define TS_MSG_SEND_DATE_FIELD 6
+#define TS_PACKAGE_EXPIRY_DATE 7
 int whatsapp_message_number = -1;
 unsigned int last_ts_update_time =
     2; // TS will update when current time == this variable
@@ -145,7 +146,9 @@ int debug_for = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
 bool wifi_working = true;
 bool display_working = true;
-bool sms_allowed = true;
+bool sms_allowed = false;
+int package_expiry_date = 0;
+// 10921 => 09 = month, 21 = day
 
 String messageTemplate = "#setting <ultra sound alerts 0> <display 1> <wifi "
                          "connectivity 1> <sms 1> <termination time 300> "
@@ -169,8 +172,8 @@ String error_codes = "";
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
   int milliSeconds = 0;
-  int month = 0;
-  int date = 0;
+  int month = 0;   // month will be 08
+  int date = 0;    // date will be 26
   int hour = 0;    // hour will be 05
   int minutes = 0; // minutes will be 38
   int seconds = 0; // seconds will be 34
@@ -387,6 +390,7 @@ void setup() {
   Println("\nAfter ThingSpeak");
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
+  sms_allowed = hasPackage();
 }
 
 void loop() {
@@ -596,16 +600,17 @@ String getResponse() {
           if (newPackageSubscribed(temp_str) &&
               RTC.date != 0) { // ~ part belongs to else part
             // increment 30 days in date and month or just month
-            int field_7_data = getThingSpeakFieldData(PACKAGE_DETAIL_FEILD);
-            int previous_month, previous_day;
-            previous_day = field_7_data % 100;
-            field_7_data /= 100;
-            previous_month = field_7_data % 100;
+            int field_7_data = getThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE);
+            int previous_month = 0, previous_day = 0;
+            setField_MonthAndDate(field_7_data, previous_month, previous_day);
+            // TODO: what if field's value is 0
             Println(3, "Previous Month : " + String(previous_month) +
                            " and previous day : " + String(previous_day));
             field_7_data =
                 10000 + (((previous_month + 1) * 100) + (previous_day - 1));
-            setThingSpeakFieldData(PACKAGE_DETAIL_FEILD, field_7_data);
+            updateSPIFFS("packageExpiryDate", String(field_7_data));
+            setThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE, field_7_data);
+            package_expiry_date = field_7_data;
             writeThingSpeakData();
           }
         } else {
@@ -1217,6 +1222,9 @@ void setTime() { // this function will set RTC struct using rtc string
         String(RTC.date) + "/" + String(RTC.month);
     sendSMS(bootMessage);
   }
+  Println(2, "Before allowing sms");
+  sms_allowed = hasPackage();
+  Println(2, "After allowing sms");
 }
 
 void Delay(int milliseconds) {
@@ -1523,10 +1531,14 @@ void inputManager(String command, int inputFrom) {
     sendSMS("#setTime", "+923374888420");
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("whatsapp") != -1) {
-    if (command.length() <= 8)
+    if (command.length() <= 10) {
+      Println(5, "Sending test message from esp32");
       sendWhatsappMsg("test_message_from_esp32");
-    else
-      sendWhatsappMsg(command.substring(8, -1));
+    } else {
+      Println(5, "-> [" + String(command.length()) + "]Sending message : " +
+                     command.substring(command.indexOf("whatsapp") + 9, -1));
+      sendWhatsappMsg(command.substring(command.indexOf("whatsapp") + 9, -1));
+    }
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("readSPIFFS") != -1) {
     println("Data in SPIFFS : " + readSPIFFS());
@@ -1534,6 +1546,10 @@ void inputManager(String command, int inputFrom) {
     String varName =
         getVariableName(command.substring(command.indexOf(":")), ":");
     String targetLine = getCompleteString(readSPIFFS(), varName);
+    if (targetLine.indexOf(varName) == -1) {
+      println("Variable not found in file creating new one");
+      updateSPIFFS(varName, "0");
+    }
     Println(7, "now trying to fetch data from line : " + targetLine);
     String targetValue = targetLine.substring(varName.length(), -1);
     Println(7, "Trying to fetch data from : " + targetValue);
@@ -1544,6 +1560,10 @@ void inputManager(String command, int inputFrom) {
       updateSPIFFS(varName, newValue);
     }
     Println(7, "\t\t ###leaving else part #### \n");
+  } else if (command.indexOf("setTime") != -1) {
+    String tempStr =
+        "+CMGL: 1,\"REC READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
+    setTime(tempStr);
   } else if (command.indexOf("read") != -1) {
     int targetMsg = fetchNumber(command);
     if (messageExists(targetMsg))
@@ -1586,8 +1606,10 @@ void sendWhatsappMsg(String message) {
     println("Wifi not connected unable to send whatsapp message");
     return;
   }
+  Println(5, "########_______________________________#########");
   HTTPClient http;
   String serverPath = getServerPath(getHTTPString(message));
+  Println(5, "Working on this HTTP: " + serverPath);
   http.begin(serverPath);
   int httpResponseCode = http.GET();
   if (httpResponseCode > 0) {
@@ -1601,6 +1623,7 @@ void sendWhatsappMsg(String message) {
     println(String(httpResponseCode));
   }
   http.end();
+  Println(5, "########_______________________________#########");
 }
 
 String getServerPath(String message) {
@@ -1618,8 +1641,8 @@ String getServerPath(String message) {
   } else {
     whatsappNumber = whatsapp_numbers[whatsapp_message_number / 25];
     api = API[whatsapp_message_number / 25];
-    println("Using " + whatsappNumber +
-            "for whatsapp message : " + String(whatsapp_message_number));
+    Println(5, "Using " + whatsappNumber +
+                   "for whatsapp message : " + String(whatsapp_message_number));
   }
   String serverPath = server + whatsappNumber + getHTTPString(message) + api;
   Println(5, "returning mobile number : " + String(whatsappNumber));
@@ -1682,12 +1705,20 @@ unsigned int getMint() { return ((millis() / 1000) / 60); }
 String getHTTPString(String message) {
   String tempStr = "";
   for (int i = 0; i < message.length(); i++) {
-    if (message[i] == ' ')
+    if (message[i] == ' ' || message[i] == '\n' || message[i] == '\r')
       tempStr += "_";
-    else
+    else if ((message[i] >= '0' && message[i] <= '9') ||
+             (message[i] >= 'A' && message[i] <= 'Z') ||
+             (message[i] >= 'a' && message[i] <= 'z') || (message[i]) == '_' ||
+             (message[i]) == '@' || (message[i]) == '%' ||
+             (message[i]) == '*' || (message[i]) == '-' || (message[i]) == '#')
       tempStr += message[i];
+    else
+      println("Invalid character {" + String(message[i]) +
+              "} in whatsapp message ignoring it");
   }
   return tempStr;
+  // TODO:remove all other characters which can cause any issue in http request
 }
 
 bool newPackageSubscribed(String str) {
@@ -1753,6 +1784,10 @@ String getVariableName(String str, String startFrom) {
 String getFileVariableValue(String varName) {
   String targetLine = getCompleteString(readSPIFFS(), varName);
   Println(7, "Trying to fetch data from line : " + targetLine);
+  if (targetLine.indexOf(varName) == -1) {
+    Println(7, "Variable not found in file returning null");
+    return "-1";
+  }
   String targetValue = targetLine.substring(varName.length(), -1);
   Println(7, "Trying to fetch data from : " + targetValue);
   String variableValue = fetchNumber(targetValue, '.');
@@ -1801,7 +1836,7 @@ void updateSPIFFS(String variableName, String newValue) {
     return;
   }
 
-  if (!valueReplaced && ALLOW_CREATING_NEW_VARIABLE_FILE) {
+  if (!valueReplaced) {
     println("Variable not found in file, creating new variable");
     updatedContent += ("\n" + variableName + ": " + newValue + "\n");
   }
@@ -1810,4 +1845,52 @@ void updateSPIFFS(String variableName, String newValue) {
   file.print(updatedContent);
   file.close();
   Println(7, "Variable {" + variableName + "} has been updated.");
+}
+
+bool hasPackage() {
+  int expiryDate = 0, expiryMonth = 0;
+  if (RTC.date != 0) {
+    if (package_expiry_date == 0)
+      package_expiry_date = getFileVariableValue("packageExpiryDate").toInt();
+    Println(7, "Package expiry date fetched from file: " +
+                   String(package_expiry_date));
+    if (package_expiry_date <= 0) {
+      Println(7, "Package expiry date not initialized in file yet, trying to "
+                 "fetch from ThingSpeak");
+      package_expiry_date = getThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE);
+      if (package_expiry_date <= 10000) {
+        Println(7,
+                "\t!!!--> Package expiry date is not defined on thingSpeak too"
+                "<---!!!");
+        return false;
+      }
+    }
+  } else {
+    Println(7, "Set Time First!");
+  }
+  setField_MonthAndDate(package_expiry_date, expiryDate, expiryMonth);
+  if (RTC.month <= expiryMonth)
+    return true;
+  else if (RTC.month == expiryMonth && RTC.date <= expiryDate)
+    return true;
+  else
+    return false;
+}
+
+void setField_MonthAndDate(int &field, int &month, int &date) {
+  if (field > 0 && month == 0 && date == 0) {
+    month = (field / 100) % 100;
+    date = field % 100;
+    Println(7, "From field " + String(field) + " => Month : " + String(month) +
+                   " Date : " + String(date));
+  } else if (field == 0 && month != 0 && date != 0) {
+    field = 10000 + month * 100 + date;
+    Println(7, "From Month : " + String(month) + " & Date : " + String(date) +
+                   " => field : " + String(field));
+  } else {
+    Println(7, "\tError in setField_MonthAndDate function!");
+    Println(7, "Recived data => field: " + String(field) +
+                   " month: " + String(month) + " date: " + String(date));
+    error_codes += "1855";
+  }
 }
