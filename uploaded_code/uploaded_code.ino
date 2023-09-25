@@ -1895,9 +1895,8 @@ void setField_MonthAndDate(int &field, int &month, int &date) {
     field = 10000 + month * 100 + date;
     Println(7, "From Month : " + String(month) + " & Date : " + String(date) +
                    " => field : " + String(field));
-  } else if (millis() > 20000) {
-    Println(7, "\tError in setField_MonthAndDate function!" +
-                   String(millis() / 1000));
+  } else {
+    Println(7, "\tError in setField_MonthAndDate function!");
     Println(7, "Recived data => field: " + String(field) +
                    " month: " + String(month) + " date: " + String(date));
     error_codes += "1855";
