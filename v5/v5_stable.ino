@@ -1,7 +1,8 @@
-//$ last work 24/Sep/23 [08:45 AM]
-// # version 5.5.0
-// # Release Note : Module can now use and update variables of SPIFFS
-// Whatsapp functionality improved
+//$ last work 26/Sep/23 [01:30 AM]
+// # version 5.5.1
+// # Release Note : SMS bug fix
+// module was sending sms by setting sms_allowed to true it self: logic issue
+
 #include "arduino_secrets.h"
 
 const char simPIN[] = "";
@@ -646,10 +647,10 @@ String readMessage(int index) { // read the message of given index
   String tempStr = getResponse();
   Println(3, "message i read : " + tempStr);
   tempStr = tempStr.substring(tempStr.lastIndexOf("\"") + 2);
-  Println(3, "message i convert in stage 1 : " + tempStr);
+  println("message i convert in stage 1 : " + tempStr);
   // remove "\n" from start of string
   tempStr = tempStr.substring(tempStr.indexOf("\n") + 1);
-  Println(3, "message i convert in stage 2 : " + tempStr);
+  Println("message i convert in stage 2 : " + tempStr);
   return tempStr;
 }
 
@@ -1122,7 +1123,7 @@ void wait(unsigned int miliSeconds) {
       terminateLastMessage();
       Println(3, "after termination");
       condition = true;
-      if (RTC.date == 0) {
+      if (RTC.date == 0 && sms_allowed) {
         println("Time is not updated yet updating it");
         sendSMS("#setTime", "+923374888420");
       }
@@ -1215,16 +1216,15 @@ void setTime() { // this function will set RTC struct using rtc string
           " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
           " Month : " + String(RTC.month));
   println("--------------------------------");
-  if (tempDate == 0 && RTC.date != 0) { // it should be run at fist time.
-    String bootMessage =
-        "System rebooted, Time stamp is : " + String(RTC.hour) + " : " +
-        String(RTC.minutes) + " : " + String(RTC.seconds) + "_" +
-        String(RTC.date) + "/" + String(RTC.month);
+  if (tempDate == 0 && RTC.date != 0 && ((millis() / 1000) < 30)) {
+    // it will run if system is rebooted and time is set within 30 seconds
+    String bootMessage = "System rebooted, Time stamp is : [ " +
+                         String(RTC.hour) + ":" + String(RTC.minutes) + ":" +
+                         String(RTC.seconds) + " ] " + String(RTC.date) + "/" +
+                         String(RTC.month);
     sendSMS(bootMessage);
   }
-  Println(2, "Before allowing sms");
   sms_allowed = hasPackage();
-  Println(2, "After allowing sms");
 }
 
 void Delay(int milliseconds) {
@@ -1403,9 +1403,10 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
-  } else if (command.indexOf("updateTime") != -1) {
-    println("Updating time by sending message");
-    sendSMS("#setTime", "+923374888420");
+  } else if (command.indexOf("time?") != -1) {
+    println("Hour : " + String(RTC.hour) + " Minutes : " + String(RTC.minutes) +
+            " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
+            " Month : " + String(RTC.month));
   } else if (command.indexOf("debug:") != -1) {
     if (command.indexOf("0") != -1)
       allowed_debugging[0] ? allowed_debugging[0] = 0
@@ -1868,12 +1869,19 @@ bool hasPackage() {
   } else {
     Println(7, "Set Time First!");
   }
-  setField_MonthAndDate(package_expiry_date, expiryDate, expiryMonth);
-  if (RTC.month <= expiryMonth)
+  setField_MonthAndDate(package_expiry_date, expiryMonth, expiryDate);
+  if (RTC.month <= expiryMonth && RTC.month != 0) {
+    Println(7,
+            "\n\n\t $$$ 1:Package is valid RTC value : " + String(RTC.month) +
+                " and expiryMonth value : " + String(expiryMonth));
     return true;
-  else if (RTC.month == expiryMonth && RTC.date <= expiryDate)
+  } else if (RTC.month == expiryMonth && RTC.date <= expiryDate &&
+             RTC.month != 0) {
+    Println(7,
+            "\n\n\t $$$ 2: Package is valid RTC value : " + String(RTC.date) +
+                " and expiryDate value : " + String(expiryDate));
     return true;
-  else
+  } else
     return false;
 }
 
@@ -1887,8 +1895,9 @@ void setField_MonthAndDate(int &field, int &month, int &date) {
     field = 10000 + month * 100 + date;
     Println(7, "From Month : " + String(month) + " & Date : " + String(date) +
                    " => field : " + String(field));
-  } else {
-    Println(7, "\tError in setField_MonthAndDate function!");
+  } else if (millis() > 20000) {
+    Println(7, "\tError in setField_MonthAndDate function!" +
+                   String(millis() / 1000));
     Println(7, "Recived data => field: " + String(field) +
                    " month: " + String(month) + " date: " + String(date));
     error_codes += "1855";
