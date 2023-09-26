@@ -1,7 +1,7 @@
-//$ last work 26/Sep/23 [01:30 AM]
-// # version 5.5.1
-// # Release Note : SMS bug fix
-// module was sending sms by setting sms_allowed to true it self: logic issue
+//$ last work 26/Sep/23 [01:09 PM]
+// # version 5.5.2
+// # Release Note : Code optimized, a function was being called after 100 seconds
+// now totalUnreadMessages() will called once, Not tested might cause miss calculation
 
 #include "arduino_secrets.h"
 
@@ -194,7 +194,6 @@ String updateBatteryStatus();
 void updateBatteryParameters(String response);
 bool timeOut(unsigned int sec, unsigned int entrySec);
 void forwardMessage(int index);
-String getMobileNumberOfMsg(int index);
 String getMobileNumberOfMsg(String index);
 int totalUnreadMessages(); //! depreciate it or execute once
 void terminateLastMessage();
@@ -575,8 +574,9 @@ String getResponse() {
   }
   Println(3, "After while loop in get response");
   if (response.indexOf("+CMTI:") != -1) {
+    messages_in_inbox++;
     int newMessageNumber = getNewMessageNumber(response);
-    String senderNumber = getMobileNumberOfMsg(newMessageNumber);
+    String senderNumber = getMobileNumberOfMsg(String(newMessageNumber), true);
     if (senderNumber.indexOf("3374888420") == -1) {
       // if message is not send by module it self
       String temp_str = executeCommand(removeOk(readMessage(newMessageNumber)));
@@ -669,7 +669,6 @@ String executeCommand(String str) {
   inputManager(str, 3);
   if (ret_string.indexOf("<executed>") == -1) { // command is not executed
     println("-> Module is not trained to execute this command ! <-");
-    messages_in_inbox++;
   }
   return ret_string;
 }
@@ -705,21 +704,15 @@ void forwardMessage(int index) {
     sendSMS("No message found at index : " + String(index));
 }
 
-String getMobileNumberOfMsg(int index) {
-  // only call this function if want to deal with new message
-  say("AT+CMGR=" + String(index));
-  String tempStr = getResponse();
-  setTime(tempStr);
-  if ((tempStr.indexOf("3374888420") != -1 && index != 1) ||
-      tempStr.indexOf("setTime") != -1)
-    deleteMessage(index); // delete message because it was just to set time
-  //+CMGR: "REC READ","+923354888420","","23/07/22,01:02:28+20"
-  return fetchDetails(tempStr, ",", 2);
-}
-
-String getMobileNumberOfMsg(String index) {
+String getMobileNumberOfMsg(String index, bool newMessage) {
   say("AT+CMGR=" + index);
   String tempStr = getResponse();
+  if (newMessage){
+    setTime(tempStr);
+    if ((tempStr.indexOf("3374888420") != -1 && index.toInt() != 1) ||
+        tempStr.indexOf("setTime") != -1)
+      deleteMessage(index); // delete message because it was just to set time
+  }
   //+CMGR: "REC READ","+923354888420","","23/07/22,01:02:28+20"
   return fetchDetails(tempStr, ",", 2);
 }
@@ -746,7 +739,7 @@ void terminateLastMessage() {
     deleteMessage(current_target_index);
     println("Message {" + String(current_target_index) + "} deleted");
   } else { // if the message don't execute
-    String mobileNumber = getMobileNumberOfMsg(String(current_target_index));
+    String mobileNumber = getMobileNumberOfMsg(String(current_target_index), false);
     if (!checkStack(current_target_index)) {
       if (!companyMsg(mobileNumber)) {
         sendSMS("Unable to execute sms no. {" + String(current_target_index) +
@@ -1125,8 +1118,6 @@ void wait(unsigned int miliSeconds) {
     if (display_working) {
       if ((millis() / 1000) % 100 == 0) {
         Println(2, "before display status work in wait function");
-        messages_in_inbox =
-            totalUnreadMessages(); // ! will be depreciated in future versions
         updateBatteryParameters(updateBatteryStatus());
         condition = true;
         Println(2, "after display status work in wait function");
@@ -1160,10 +1151,10 @@ void wait(unsigned int miliSeconds) {
       Println(3, "\nBefore updating values from message 1\n");
       updateVariablesValues(readMessage(1));
       Println(3, "\nValues are updated from message 1\n");
+      messages_in_inbox = totalUnreadMessages();
       Delay(1000);
       sendSMS("#setTime", "+923374888420");
-      Delay(1000);
-      i += 2000;
+      i += 1000;
       condition = true;
     }
     if (condition) {
