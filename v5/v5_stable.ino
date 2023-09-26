@@ -51,15 +51,7 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #define MODEM_RX 26
 #define I2C_SDA 21
 #define I2C_SCL 22
-#define LED 13
-
-// #define WAPDA_STATE 15 // Check if wapda is on or off
-// // Magenta  R1:
-// #define BATTERY_PAIR_SELECTOR 32 // Select which battery pair is to be charge
-// // Blue R2-A:
-// #define BATTERY_CHARGER 14 // Battery should charge or not
-// // Green R2-B:
-// #define POWER_OUTPUT_SELECTOR 0 // Router input source selector
+#define LED 13 // indicate that data is uploaded seccessfully last time on thingSpeak
 
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
@@ -99,9 +91,9 @@ bool setPowerBoostKeepOn(int en) {
   return Wire.endTransmission() == 0;
 }
 
-// ThingSpeak parameters
 const char *ssid = MY_SSID;
 const char *password = MY_PASSWORD;
+// ThingSpeak parameters:
 const unsigned long ts_channel_id = MY_CHANNEL_ID;
 const char *ts_api_key = THINGSPEAK_API;
 
@@ -110,7 +102,7 @@ const char *ts_api_key = THINGSPEAK_API;
 #define TS_PACKAGE_EXPIRY_DATE 7
 int whatsapp_message_number = -1;
 unsigned int last_ts_update_time =
-    2; // TS will update when current time == this variable
+    2; // TS will update when current time >= this variable
 unsigned int last_update = 0; // in minutes
 WiFiClient client;
 
@@ -121,7 +113,6 @@ String line_2 = "                ";
 String received_message = ""; // Global variable to store received message
 double battery_voltage = 0;
 int battery_percentage = 0;
-// another variable to store time in millis
 int messages_in_inbox = 0;
 int messageStack[MAX_MESSAGES] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 int current_target_index = 0;
@@ -929,6 +920,8 @@ void updateThingSpeak(float temperature, int humidity) {
       errorMsg();
     }
   }
+  else{
+    digitalWrite(LED, LOW);
 }
 
 void successMsg() {
@@ -964,7 +957,10 @@ void lcdPrint() {
   Println(2, "before checking wifi status lcd function");
   drawWifiSymbol(wifiConnected());
   Println(2, "after checking wifi status lcd function");
-  display.print(" ");
+  if (sms_allowed)
+    display.print("_A");
+  else
+    display.print("_N");
   if (messages_in_inbox > 1) {
     display.print(String(messages_in_inbox));
     display.print(" ");
@@ -1015,13 +1011,11 @@ String thingSpeakLastUpdate() {
 
 void drawWifiSymbol(bool isConnected) {
   if (!isConnected) {
-    display.setCursor(0, 0);
     if (!wifi_working)
       display.print("D");
     else
       display.print("X");
   } else {
-    display.setCursor(0, 0);
     display.print("C");
   }
 }
