@@ -1,5 +1,5 @@
 //$ last work 26/Sep/23 [01:30 AM]
-// # version 5.5.1
+// # version 5.4.2 -> 5.5.1 (5.5.3)
 // # Release Note : SMS bug fix
 // module was sending sms by setting sms_allowed to true it self: logic issue
 
@@ -1895,8 +1895,9 @@ void setField_MonthAndDate(int &field, int &month, int &date) {
     field = 10000 + month * 100 + date;
     Println(7, "From Month : " + String(month) + " & Date : " + String(date) +
                    " => field : " + String(field));
-  } else {
-    Println(7, "\tError in setField_MonthAndDate function!");
+  } else if (millis() > 25000) {
+    Println(7, "\tError in setField_MonthAndDate function!" +
+                   String(millis() / 1000));
     Println(7, "Recived data => field: " + String(field) +
                    " month: " + String(month) + " date: " + String(date));
     error_codes += "1855";

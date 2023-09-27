@@ -123,7 +123,7 @@ int distance = 0; // variable for the distance measurement
 float temperature;
 int humidity;
 
-bool DEBUGGING = false;
+bool DEBUGGING = true;
 int allowed_debugging[7] = {0, 0, 1, 0, 1, 0, 1};
 // 0 => allowed, 1 => not allowed
 // (debuggerID == 0)     // debugging WIFI_debug functionality
@@ -302,8 +302,9 @@ void BLE_inputManager(String input) {
 
 void setup() {
   SerialMon.begin(115200);
-  syncSPIFFS(); // use it to update global variables from SPIFFS
+  Println("####  Setup ####");
   initBLE();
+  Println("After BLE init");
   Wire.begin(I2C_SDA, I2C_SCL);
   bool isOk = setPowerBoostKeepOn(1);
   println(String("IP5306 KeepOn ") + (isOk ? "OK" : "FAIL"));
@@ -382,6 +383,8 @@ void setup() {
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
   sms_allowed = hasPackage();
+  Println("before syncSPIFFS: ");
+  // syncSPIFFS(); // use it to update global variables from SPIFFS
 }
 
 void loop() {
@@ -711,7 +714,8 @@ String getMobileNumberOfMsg(String index, bool newMessage) {
     setTime(tempStr);
     if ((tempStr.indexOf("3374888420") != -1 && index.toInt() != 1) ||
         tempStr.indexOf("setTime") != -1)
-      deleteMessage(index); // delete message because it was just to set time
+      deleteMessage(
+          index.toInt()); // delete message because it was just to set time
   }
   //+CMGR: "REC READ","+923354888420","","23/07/22,01:02:28+20"
   return fetchDetails(tempStr, ",", 2);
@@ -1137,7 +1141,6 @@ void wait(unsigned int miliSeconds) {
           ThingSpeak.setField(4, random(52, 99)); // set any random value.
         }
       }
-      if ()
     }
     if ((millis() / 1000) > debug_for && DEBUGGING &&
         (millis() / 1000) < (debug_for + (debug_for / 2))) {
