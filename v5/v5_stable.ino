@@ -1,6 +1,6 @@
-//$ last work 27/Sep/23 [05:49 PM]
-// # version 5.5.3
-// # Release Note : sync debugging variables from SPIFFS
+//$ last work 29/Sep/23 [08:32 PM]
+// # version 5.5.4
+// # Release Note : sync debugging variables from SPIFFS (working)
 
 #include "arduino_secrets.h"
 
@@ -384,7 +384,7 @@ void setup() {
   Println("Leaving setup with seconds : " + String(millis() / 1000));
   sms_allowed = hasPackage();
   Println("before syncSPIFFS: ");
-  // syncSPIFFS(); // use it to update global variables from SPIFFS
+  syncSPIFFS(); // use it to update global variables from SPIFFS
 }
 
 void loop() {
@@ -1338,7 +1338,7 @@ String getCompleteString(String str, String target) {
     if ((str[i] >= '0' && str[i] <= '9') || (str[i] >= 'a' && str[i] <= 'z') ||
         (str[i] >= 'A' && str[i] <= 'Z') || (str[i] == ' ') ||
         (str[i] == '.') && (str[i] != '>') && (str[i] != '\n') ||
-        (str[i] == ':') || (str[i] == '='))
+        (str[i] == ':') || (str[i] == '=') || (str[i] == '_'))
       tempStr += str[i];
     else {
       Println(7, "Returning (complete string) 1: " + tempStr);
@@ -1486,7 +1486,7 @@ void inputManager(String command, int inputFrom) {
     inputFrom == 3 ? command += "<executed>" : "";
     println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
     String DValue = (DEBUGGING ? "1" : "0");
-    updateSPIFFS("DEBUGGER", DValue);
+    updateSPIFFS("DEBUGGING", DValue);
   } else if (command.indexOf("status") != -1) {
     println(getVariablesValues());
   } else if (command.indexOf("update") != -1) {
@@ -1532,7 +1532,7 @@ void inputManager(String command, int inputFrom) {
     }
     Println(7, "now trying to fetch data from line : " + targetLine);
     String targetValue = targetLine.substring(varName.length(), -1);
-    Println(7, "Trying to fetch data from : " + targetValue);
+    // Println(7, "Trying to fetch data from : " + targetValue);
     println("Value of : " + varName + " is : " + fetchNumber(targetValue, '.'));
     if (command.indexOf("to") != -1) {
       String newValue = command.substring(command.indexOf("to") + 2, -1);
@@ -1722,7 +1722,7 @@ String readSPIFFS() {
     return "";
   }
   Println(7, "Reading file ...");
-  Serial.println("File Content:");
+  Println(7, "File Content:");
   while (file.available()) {
     char character = file.read();
     tempStr += character; // Append the character to the string
@@ -1777,7 +1777,7 @@ String getFileVariableValue(String varName, bool createNew) {
     return "0";
   }
   String targetValue = targetLine.substring(varName.length(), -1);
-  Println(7, "Trying to fetch data from : " + targetValue);
+  // Println(7, "Trying to fetch data from : " + targetValue);
   String variableValue = fetchNumber(targetValue, '.');
   Println(7, "Returning value of {" + varName + "} : " + variableValue);
   return variableValue;

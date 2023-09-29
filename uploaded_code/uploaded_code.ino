@@ -1,7 +1,6 @@
-//$ last work 26/Sep/23 [01:30 AM]
-// # version 5.4.2 -> 5.5.1 (5.5.3)
-// # Release Note : SMS bug fix
-// module was sending sms by setting sms_allowed to true it self: logic issue
+//$ last work 27/Sep/23 [05:49 PM]
+// # version 5.5.3
+// # Release Note : sync debugging variables from SPIFFS
 
 #include "arduino_secrets.h"
 
@@ -51,15 +50,8 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #define MODEM_RX 26
 #define I2C_SDA 21
 #define I2C_SCL 22
-#define LED 13
-
-// #define WAPDA_STATE 15 // Check if wapda is on or off
-// // Magenta  R1:
-// #define BATTERY_PAIR_SELECTOR 32 // Select which battery pair is to be charge
-// // Blue R2-A:
-// #define BATTERY_CHARGER 14 // Battery should charge or not
-// // Green R2-B:
-// #define POWER_OUTPUT_SELECTOR 0 // Router input source selector
+#define LED                                                                    \
+  13 // indicate that data is uploaded successfully last time on thingSpeak
 
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
@@ -99,9 +91,9 @@ bool setPowerBoostKeepOn(int en) {
   return Wire.endTransmission() == 0;
 }
 
-// ThingSpeak parameters
 const char *ssid = MY_SSID;
 const char *password = MY_PASSWORD;
+// ThingSpeak parameters:
 const unsigned long ts_channel_id = MY_CHANNEL_ID;
 const char *ts_api_key = THINGSPEAK_API;
 
@@ -110,7 +102,7 @@ const char *ts_api_key = THINGSPEAK_API;
 #define TS_PACKAGE_EXPIRY_DATE 7
 int whatsapp_message_number = -1;
 unsigned int last_ts_update_time =
-    2; // TS will update when current time == this variable
+    2; // TS will update when current time >= this variable
 unsigned int last_update = 0; // in minutes
 WiFiClient client;
 
@@ -121,7 +113,6 @@ String line_2 = "                ";
 String received_message = ""; // Global variable to store received message
 double battery_voltage = 0;
 int battery_percentage = 0;
-// another variable to store time in millis
 int messages_in_inbox = 0;
 int messageStack[MAX_MESSAGES] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 int current_target_index = 0;
@@ -132,16 +123,16 @@ int distance = 0; // variable for the distance measurement
 float temperature;
 int humidity;
 
-bool DEBUGGING = false;
+bool DEBUGGING = true;
 int allowed_debugging[7] = {0, 0, 1, 0, 1, 0, 1};
 // 0 => allowed, 1 => not allowed
-// (debuggerID == 0)     // debugging WIFI functionality
-// (debuggerID == 1) // debugging LCD functionality
-// (debuggerID == 2) // debugging SIM800L functionality
-// (debuggerID == 3) // debugging thingSpeak functionality
-// (debuggerID == 4) // debugging Whatsapp functionality
-// (debuggerID == 5) // debugging BLE functionality
-// (debuggerID == 6) // debugging SPIFFS functionality
+// (debuggerID == 0)     // debugging WIFI_debug functionality
+// (debuggerID == 1) // debugging LCD_debug functionality
+// (debuggerID == 2) // debugging SIM800L_debug functionality
+// (debuggerID == 3) // debugging THINGSPEAK_debug functionality
+// (debuggerID == 4) // debugging WHATSAPP_debug functionality
+// (debuggerID == 5) // debugging BLE_debug functionality
+// (debuggerID == 6) // debugging SPIFFS_debug functionality
 
 int debug_for = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
@@ -203,7 +194,6 @@ String updateBatteryStatus();
 void updateBatteryParameters(String response);
 bool timeOut(unsigned int sec, unsigned int entrySec);
 void forwardMessage(int index);
-String getMobileNumberOfMsg(int index);
 String getMobileNumberOfMsg(String index);
 int totalUnreadMessages(); //! depreciate it or execute once
 void terminateLastMessage();
@@ -312,8 +302,9 @@ void BLE_inputManager(String input) {
 
 void setup() {
   SerialMon.begin(115200);
+  Println("####  Setup ####");
   initBLE();
-  // Keep power when running from battery
+  Println("After BLE init");
   Wire.begin(I2C_SDA, I2C_SCL);
   bool isOk = setPowerBoostKeepOn(1);
   println(String("IP5306 KeepOn ") + (isOk ? "OK" : "FAIL"));
@@ -392,6 +383,8 @@ void setup() {
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
   sms_allowed = hasPackage();
+  Println("before syncSPIFFS: ");
+  syncSPIFFS(); // use it to update global variables from SPIFFS
 }
 
 void loop() {
@@ -584,8 +577,9 @@ String getResponse() {
   }
   Println(3, "After while loop in get response");
   if (response.indexOf("+CMTI:") != -1) {
+    messages_in_inbox++;
     int newMessageNumber = getNewMessageNumber(response);
-    String senderNumber = getMobileNumberOfMsg(newMessageNumber);
+    String senderNumber = getMobileNumberOfMsg(String(newMessageNumber), true);
     if (senderNumber.indexOf("3374888420") == -1) {
       // if message is not send by module it self
       String temp_str = executeCommand(removeOk(readMessage(newMessageNumber)));
@@ -678,7 +672,6 @@ String executeCommand(String str) {
   inputManager(str, 3);
   if (ret_string.indexOf("<executed>") == -1) { // command is not executed
     println("-> Module is not trained to execute this command ! <-");
-    messages_in_inbox++;
   }
   return ret_string;
 }
@@ -714,21 +707,16 @@ void forwardMessage(int index) {
     sendSMS("No message found at index : " + String(index));
 }
 
-String getMobileNumberOfMsg(int index) {
-  // only call this function if want to deal with new message
-  say("AT+CMGR=" + String(index));
-  String tempStr = getResponse();
-  setTime(tempStr);
-  if ((tempStr.indexOf("3374888420") != -1 && index != 1) ||
-      tempStr.indexOf("setTime") != -1)
-    deleteMessage(index); // delete message because it was just to set time
-  //+CMGR: "REC READ","+923354888420","","23/07/22,01:02:28+20"
-  return fetchDetails(tempStr, ",", 2);
-}
-
-String getMobileNumberOfMsg(String index) {
+String getMobileNumberOfMsg(String index, bool newMessage) {
   say("AT+CMGR=" + index);
   String tempStr = getResponse();
+  if (newMessage) {
+    setTime(tempStr);
+    if ((tempStr.indexOf("3374888420") != -1 && index.toInt() != 1) ||
+        tempStr.indexOf("setTime") != -1)
+      deleteMessage(
+          index.toInt()); // delete message because it was just to set time
+  }
   //+CMGR: "REC READ","+923354888420","","23/07/22,01:02:28+20"
   return fetchDetails(tempStr, ",", 2);
 }
@@ -755,7 +743,8 @@ void terminateLastMessage() {
     deleteMessage(current_target_index);
     println("Message {" + String(current_target_index) + "} deleted");
   } else { // if the message don't execute
-    String mobileNumber = getMobileNumberOfMsg(String(current_target_index));
+    String mobileNumber =
+        getMobileNumberOfMsg(String(current_target_index), false);
     if (!checkStack(current_target_index)) {
       if (!companyMsg(mobileNumber)) {
         sendSMS("Unable to execute sms no. {" + String(current_target_index) +
@@ -928,6 +917,8 @@ void updateThingSpeak(float temperature, int humidity) {
       Println(4, "Error updating ThingSpeak. Status: " + String(updateStatus));
       errorMsg();
     }
+  } else {
+    digitalWrite(LED, LOW);
   }
 }
 
@@ -964,7 +955,10 @@ void lcdPrint() {
   Println(2, "before checking wifi status lcd function");
   drawWifiSymbol(wifiConnected());
   Println(2, "after checking wifi status lcd function");
-  display.print(" ");
+  if (sms_allowed)
+    display.print("_A");
+  else
+    display.print("_N");
   if (messages_in_inbox > 1) {
     display.print(String(messages_in_inbox));
     display.print(" ");
@@ -1015,13 +1009,11 @@ String thingSpeakLastUpdate() {
 
 void drawWifiSymbol(bool isConnected) {
   if (!isConnected) {
-    display.setCursor(0, 0);
     if (!wifi_working)
       display.print("D");
     else
       display.print("X");
   } else {
-    display.setCursor(0, 0);
     display.print("C");
   }
 }
@@ -1128,26 +1120,20 @@ void wait(unsigned int miliSeconds) {
         sendSMS("#setTime", "+923374888420");
       }
     }
-    if (display_working) {
-      if ((millis() / 1000) % 100 == 0) {
-        Println(2, "before display status work in wait function");
-        messages_in_inbox =
-            totalUnreadMessages(); // ! will be depreciated in future versions
-        updateBatteryParameters(updateBatteryStatus());
-        condition = true;
-        Println(2, "after display status work in wait function");
-      }
-    }
-    if (THINGSPEAK_ENABLE && (getMint() > last_ts_update_time)) {
-      if (wifiConnected()) {
+    if (getMint() > last_ts_update_time) {
+      // jobs which have to be execute after every 5 minutes
+      if (wifiConnected() && THINGSPEAK_ENABLE) {
         if (wifi_working) {
           Println(4, "Before Temperature Update");
           updateThingSpeak(temperature, humidity);
           last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
           Println(4, "After temperature update");
+          if (display_working) {
+            updateBatteryParameters(updateBatteryStatus());
+          }
           condition = true;
         }
-      } else { // comment it if you don't want to connect to wifi
+      } else if (THINGSPEAK_ENABLE) {
         connect_wifi();
         if (wifiConnected()) {
           wifi_working = true;
@@ -1156,7 +1142,12 @@ void wait(unsigned int miliSeconds) {
         }
       }
     }
-    if ((millis() / 1000) > debug_for && DEBUGGING) {
+    if ((millis() / 1000) > debug_for && DEBUGGING &&
+        (millis() / 1000) < (debug_for + (debug_for / 2))) {
+      // it will disable debugging after some time defined in "debug_for"
+      // variable, because in this duration every function got chance to execute
+      // at least once, so if user want to enable it then he just need to type
+      // debug in serial terminal
       Println("Disabling DEBUGGING...");
       DEBUGGING = false;
     }
@@ -1166,10 +1157,10 @@ void wait(unsigned int miliSeconds) {
       Println(3, "\nBefore updating values from message 1\n");
       updateVariablesValues(readMessage(1));
       Println(3, "\nValues are updated from message 1\n");
+      messages_in_inbox = totalUnreadMessages();
       Delay(1000);
       sendSMS("#setTime", "+923374888420");
-      Delay(1000);
-      i += 2000;
+      i += 1000;
       condition = true;
     }
     if (condition) {
@@ -1347,7 +1338,7 @@ String getCompleteString(String str, String target) {
     if ((str[i] >= '0' && str[i] <= '9') || (str[i] >= 'a' && str[i] <= 'z') ||
         (str[i] >= 'A' && str[i] <= 'Z') || (str[i] == ' ') ||
         (str[i] == '.') && (str[i] != '>') && (str[i] != '\n') ||
-        (str[i] == ':') || (str[i] == '='))
+        (str[i] == ':') || (str[i] == '=')||(str[i] == '_'))
       tempStr += str[i];
     else {
       Println(7, "Returning (complete string) 1: " + tempStr);
@@ -1408,29 +1399,15 @@ void inputManager(String command, int inputFrom) {
             " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
             " Month : " + String(RTC.month));
   } else if (command.indexOf("debug:") != -1) {
-    if (command.indexOf("0") != -1)
-      allowed_debugging[0] ? allowed_debugging[0] = 0
-                           : allowed_debugging[0] = 1;
-    else if (command.indexOf("1") != -1)
-      allowed_debugging[1] ? allowed_debugging[1] = 0
-                           : allowed_debugging[1] = 1;
-    else if (command.indexOf("2") != -1)
-      allowed_debugging[2] ? allowed_debugging[2] = 0
-                           : allowed_debugging[2] = 1;
-    else if (command.indexOf("3") != -1)
-      allowed_debugging[3] ? allowed_debugging[3] = 0
-                           : allowed_debugging[3] = 1;
-    else if (command.indexOf("4") != -1)
-      allowed_debugging[4] ? allowed_debugging[4] = 0
-                           : allowed_debugging[4] = 1;
-    else if (command.indexOf("5") != -1)
-      allowed_debugging[5] ? allowed_debugging[5] = 0
-                           : allowed_debugging[5] = 1;
-    else if (command.indexOf("6") != -1)
-      allowed_debugging[6] ? allowed_debugging[6] = 0
-                           : allowed_debugging[6] = 1;
-    else
-      println("Error in debug command");
+    int index = fetchNumber(getCompleteString(command, "debug:"));
+    if (index < 7 && index > -1) {
+      allowed_debugging[index] ? allowed_debugging[index] = 0
+                               : allowed_debugging[index] = 1;
+      updateDebugger(index, allowed_debugging[index]);
+    } else {
+      print("Error in debug command!\t");
+      println("Unable to make changes at index : " + String(index));
+    }
     println("\nUpdated debugging status : ");
     Serial.println(
         "Debugging : " + String(allowed_debugging[0] ? "0: Wifi" : " ") +
@@ -1508,6 +1485,8 @@ void inputManager(String command, int inputFrom) {
     Delay(50);
     inputFrom == 3 ? command += "<executed>" : "";
     println(String("Debugging : ") + (DEBUGGING ? "Enabled" : "Disabled"));
+    String DValue = (DEBUGGING ? "1" : "0");
+    updateSPIFFS("DEBUGGING", DValue);
   } else if (command.indexOf("status") != -1) {
     println(getVariablesValues());
   } else if (command.indexOf("update") != -1) {
@@ -1562,8 +1541,8 @@ void inputManager(String command, int inputFrom) {
     }
     Println(7, "\t\t ###leaving else part #### \n");
   } else if (command.indexOf("setTime") != -1) {
-    String tempStr =
-        "+CMGL: 1,\"REC READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
+    String tempStr = "+CMGL: 1,\"REC "
+                     "READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
     setTime(tempStr);
   } else if (command.indexOf("read") != -1) {
     int targetMsg = fetchNumber(command);
@@ -1783,11 +1762,19 @@ String getVariableName(String str, String startFrom) {
 }
 
 String getFileVariableValue(String varName) {
+  return getFileVariableValue(varName, false);
+}
+
+String getFileVariableValue(String varName, bool createNew) {
   String targetLine = getCompleteString(readSPIFFS(), varName);
   Println(7, "Trying to fetch data from line : " + targetLine);
-  if (targetLine.indexOf(varName) == -1) {
-    Println(7, "Variable not found in file returning null");
+  if (targetLine.indexOf(varName) == -1 && !createNew) {
+    Println(7, "Variable not found in file returning -1");
     return "-1";
+  } else if (targetLine.indexOf(varName) == -1 && createNew) {
+    Println(7, "Variable not found in file creating new & returning 0");
+    updateSPIFFS(varName, "0");
+    return "0";
   }
   String targetValue = targetLine.substring(varName.length(), -1);
   Println(7, "Trying to fetch data from : " + targetValue);
@@ -1839,7 +1826,7 @@ void updateSPIFFS(String variableName, String newValue) {
 
   if (!valueReplaced) {
     println("Variable not found in file, creating new variable");
-    updatedContent += ("\n" + variableName + ": " + newValue + "\n");
+    updatedContent += ("\n" + variableName + ": " + newValue);
   }
 
   // Write the modified content back to the file
@@ -1895,11 +1882,44 @@ void setField_MonthAndDate(int &field, int &month, int &date) {
     field = 10000 + month * 100 + date;
     Println(7, "From Month : " + String(month) + " & Date : " + String(date) +
                    " => field : " + String(field));
-  } else if (millis() > 25000) {
-    Println(7, "\tError in setField_MonthAndDate function!" +
-                   String(millis() / 1000));
+  } else {
+    Println(7, "\tError in setField_MonthAndDate function!");
     Println(7, "Recived data => field: " + String(field) +
                    " month: " + String(month) + " date: " + String(date));
     error_codes += "1855";
+  }
+}
+
+void syncSPIFFS() {
+  updateDebugger();
+  DEBUGGING =
+      getFileVariableValue("DEBUGGING", true).toInt() == 1 ? true : false;
+}
+
+void updateDebugger() {
+  allowed_debugging[0] = getFileVariableValue("WIFI_debug", true).toInt();
+  allowed_debugging[1] = getFileVariableValue("LCD_debug", true).toInt();
+  allowed_debugging[2] = getFileVariableValue("SIM800L_debug", true).toInt();
+  allowed_debugging[3] = getFileVariableValue("THINGSPEAK_debug", true).toInt();
+  allowed_debugging[4] = getFileVariableValue("WHATSAPP_debug", true).toInt();
+  allowed_debugging[5] = getFileVariableValue("BLE_debug", true).toInt();
+  allowed_debugging[6] = getFileVariableValue("SPIFFS_debug", true).toInt();
+}
+
+void updateDebugger(int index, int value) {
+  String varName = (index == 0   ? "WIFI_debug"
+                    : index == 1 ? "LCD_debug"
+                    : index == 2 ? "SIM800L_debug"
+                    : index == 3 ? "THINGSPEAK_debug"
+                    : index == 4 ? "WHATSAPP_debug"
+                    : index == 5 ? "BLE_debug"
+                    : index == 6 ? "SPIFFS_debug"
+                                 : "error");
+  if (varName == "error") {
+    println("Error in updateDebugger function");
+    return;
+  } else {
+    Println("Updating value of : " + varName + " to : " + String(value));
+    updateSPIFFS(varName, String(value));
   }
 }
