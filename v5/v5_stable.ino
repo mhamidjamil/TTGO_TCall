@@ -1,6 +1,6 @@
-//$ last work 29/Sep/23 [08:32 PM]
-// # version 5.5.4
-// # Release Note : sync debugging variables from SPIFFS (working)
+//$ last work 04/Oct/23 [10:44 PM]
+// # version 5.5.5
+// # Release Note : Issue reported, BLE can't send whatsapp messages
 
 #include "arduino_secrets.h"
 
@@ -1589,7 +1589,8 @@ void sendWhatsappMsg(String message) {
   Println(5, "########_______________________________#########");
   HTTPClient http;
   String serverPath = getServerPath(getHTTPString(message));
-  Println(5, "Working on this HTTP: " + serverPath);
+  Println(5, "Working on this HTTP: \n->{" + serverPath + "}");
+  Delay(3000);
   http.begin(serverPath);
   int httpResponseCode = http.GET();
   if (httpResponseCode > 0) {
@@ -1683,6 +1684,7 @@ void writeThingSpeakData() {
 unsigned int getMint() { return ((millis() / 1000) / 60); }
 
 String getHTTPString(String message) {
+  Println(5, "\n@ -> recived message string:{" + message + "}");
   String tempStr = "";
   for (int i = 0; i < message.length(); i++) {
     if (message[i] == ' ' || message[i] == '\n' || message[i] == '\r')
@@ -1697,6 +1699,7 @@ String getHTTPString(String message) {
       println("Invalid character {" + String(message[i]) +
               "} in whatsapp message ignoring it");
   }
+  Println(5, "@ -> returning message string:{" + tempStr + "}");
   return tempStr;
   // TODO:remove all other characters which can cause any issue in http request
 }

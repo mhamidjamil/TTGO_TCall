@@ -1,6 +1,6 @@
-//$ last work 27/Sep/23 [05:49 PM]
-// # version 5.5.3
-// # Release Note : sync debugging variables from SPIFFS
+//$ last work 29/Sep/23 [08:32 PM]
+// # version 5.5.4
+// # Release Note : sync debugging variables from SPIFFS (working)
 
 #include "arduino_secrets.h"
 
@@ -1338,7 +1338,7 @@ String getCompleteString(String str, String target) {
     if ((str[i] >= '0' && str[i] <= '9') || (str[i] >= 'a' && str[i] <= 'z') ||
         (str[i] >= 'A' && str[i] <= 'Z') || (str[i] == ' ') ||
         (str[i] == '.') && (str[i] != '>') && (str[i] != '\n') ||
-        (str[i] == ':') || (str[i] == '=')||(str[i] == '_'))
+        (str[i] == ':') || (str[i] == '=') || (str[i] == '_'))
       tempStr += str[i];
     else {
       Println(7, "Returning (complete string) 1: " + tempStr);
@@ -1532,7 +1532,7 @@ void inputManager(String command, int inputFrom) {
     }
     Println(7, "now trying to fetch data from line : " + targetLine);
     String targetValue = targetLine.substring(varName.length(), -1);
-    Println(7, "Trying to fetch data from : " + targetValue);
+    // Println(7, "Trying to fetch data from : " + targetValue);
     println("Value of : " + varName + " is : " + fetchNumber(targetValue, '.'));
     if (command.indexOf("to") != -1) {
       String newValue = command.substring(command.indexOf("to") + 2, -1);
@@ -1589,7 +1589,8 @@ void sendWhatsappMsg(String message) {
   Println(5, "########_______________________________#########");
   HTTPClient http;
   String serverPath = getServerPath(getHTTPString(message));
-  Println(5, "Working on this HTTP: " + serverPath);
+  Println(5, "Working on this HTTP: \n->{" + serverPath + "}");
+  Delay(3000);
   http.begin(serverPath);
   int httpResponseCode = http.GET();
   if (httpResponseCode > 0) {
@@ -1683,6 +1684,7 @@ void writeThingSpeakData() {
 unsigned int getMint() { return ((millis() / 1000) / 60); }
 
 String getHTTPString(String message) {
+  Println(5, "\n@ -> recived message string:{" + message + "}");
   String tempStr = "";
   for (int i = 0; i < message.length(); i++) {
     if (message[i] == ' ' || message[i] == '\n' || message[i] == '\r')
@@ -1697,6 +1699,7 @@ String getHTTPString(String message) {
       println("Invalid character {" + String(message[i]) +
               "} in whatsapp message ignoring it");
   }
+  Println(5, "@ -> returning message string:{" + tempStr + "}");
   return tempStr;
   // TODO:remove all other characters which can cause any issue in http request
 }
@@ -1722,7 +1725,7 @@ String readSPIFFS() {
     return "";
   }
   Println(7, "Reading file ...");
-  Serial.println("File Content:");
+  Println(7, "File Content:");
   while (file.available()) {
     char character = file.read();
     tempStr += character; // Append the character to the string
@@ -1777,7 +1780,7 @@ String getFileVariableValue(String varName, bool createNew) {
     return "0";
   }
   String targetValue = targetLine.substring(varName.length(), -1);
-  Println(7, "Trying to fetch data from : " + targetValue);
+  // Println(7, "Trying to fetch data from : " + targetValue);
   String variableValue = fetchNumber(targetValue, '.');
   Println(7, "Returning value of {" + varName + "} : " + variableValue);
   return variableValue;
