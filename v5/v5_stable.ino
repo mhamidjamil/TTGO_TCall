@@ -1,6 +1,6 @@
-//$ last work 23/Oct/23 [10:44 PM]
-// # version 5.5.6
-// # Release Note : Module can now use time send by orange pi
+//$ last work 25/Oct/23 [02:08 AM]
+// # version 5.5.7
+// # Release Note : Module can now send data to Things Board via MQTT
 
 #include "arduino_secrets.h"
 
@@ -16,7 +16,9 @@ String whatsapp_numbers[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2,
 String API[4] = {WHATSAPP_API_1, WHATSAPP_API_2, WHATSAPP_API_3,
                  WHATSAPP_API_4};
 
-// https://api.callmebot.com/whatsapp.php?phone=+923354888420&text=This+is+a+test&apikey=518125
+const char *mqtt_server = MY_MQTT_SERVER_IP;
+
+// https://api.callmebot.com/whatsapp.php?phone=+923354***420&text=This+is+a+test&apikey=***125
 
 String server = "https://api.callmebot.com/whatsapp.php?phone=";
 
@@ -35,6 +37,7 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #include "SPIFFS.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <PubSubClient.h>
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -104,7 +107,9 @@ int whatsapp_message_number = -1;
 unsigned int last_ts_update_time =
     2; // TS will update when current time >= this variable
 unsigned int last_update = 0; // in minutes
-WiFiClient client;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
 
 String end_value = "  ";
 String line_1 = "Temp: 00.0 C";
@@ -160,6 +165,8 @@ String ret_string = "";
 String error_codes = "";
 // String chargingStatus = "";
 // these error codes will be moving in the last row of lcd
+
+bool mqtt_connected = false;
 
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
@@ -375,7 +382,7 @@ void setup() {
   delay(100);
   if (THINGSPEAK_ENABLE && wifi_working) {
     Println("\nThinkSpeak initializing...\n");
-    ThingSpeak.begin(client); // Initialize ThingSpeak
+    ThingSpeak.begin(espClient); // Initialize ThingSpeak
     delay(500);
     ThingSpeak.setField(4, random(1, 50)); // set any random value.
   }
@@ -387,11 +394,13 @@ void setup() {
   syncSPIFFS(); // use it to update global variables from SPIFFS
   Println("after syncSPIFFS: ");
   println("{hay orange-pi! please update my time?}");
+  Println("after time request");
+  client.setServer(mqtt_server, 1883);
 }
 
 void loop() {
   Println("in loop");
-
+  client.loop(); // ensure that the MQTT client remains responsive
   if (deviceConnected) {
     if (!oldDeviceConnected) {
       Serial.println("Connected to device");
@@ -905,6 +914,23 @@ void connect_wifi() {
   }
 }
 
+void reconnect() {
+  int i = 0;
+  while (!client.connected() && i++ < 5) { // try for 10 seconds
+    Serial.print("Attempting MQTT connection...");
+    if (client.connect("ESP32Client", "ts53yrn2f09kpcignf8t", NULL)) {
+      Serial.println("connected");
+      mqtt_connected = false;
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 2 seconds");
+      mqtt_connected = false;
+      wait(2000);
+    }
+  }
+}
+
 void updateThingSpeak(float temperature, int humidity) {
   if (humidity < 110) {
     ThingSpeak.setField(1, temperature); // Set temperature value
@@ -1079,7 +1105,7 @@ void updateVariablesValues(String str) {
         wifi_working = true;
         if (THINGSPEAK_ENABLE && wifiConnected()) {
           Println(4, "\nThinkSpeak initializing in loop...\n");
-          ThingSpeak.begin(client); // Initialize ThingSpeak
+          ThingSpeak.begin(espClient); // Initialize ThingSpeak
         }
       }
     }
@@ -1128,6 +1154,7 @@ void wait(unsigned int miliSeconds) {
         if (wifi_working) {
           Println(4, "Before Temperature Update");
           updateThingSpeak(temperature, humidity);
+          updateMQTT((int)temperature, humidity);
           last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
           Println(4, "After temperature update");
           if (display_working) {
@@ -1139,7 +1166,7 @@ void wait(unsigned int miliSeconds) {
         connect_wifi();
         if (wifiConnected()) {
           wifi_working = true;
-          ThingSpeak.begin(client);               // Initialize ThingSpeak
+          ThingSpeak.begin(espClient);            // Initialize ThingSpeak
           ThingSpeak.setField(4, random(52, 99)); // set any random value.
         }
       }
@@ -1933,4 +1960,16 @@ void updateDebugger(int index, int value) {
     Println("Updating value of : " + varName + " to : " + String(value));
     updateSPIFFS(varName, String(value));
   }
+}
+
+void updateMQTT(int temperature_, int humidity_) {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+  client.publish("v1/devices/me/telemetry",
+                 ("{temperature:" + String(temperature_) +
+                  ",humidity:" + String(humidity_) + "}")
+                     .c_str());
+  Println(4, "MQTT updated");
 }
