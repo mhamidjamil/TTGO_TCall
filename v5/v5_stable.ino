@@ -1,6 +1,6 @@
-//$ last work 04/Oct/23 [10:44 PM]
-// # version 5.5.5
-// # Release Note : Issue reported, BLE can't send whatsapp messages
+//$ last work 23/Oct/23 [10:44 PM]
+// # version 5.5.6
+// # Release Note : Module can now use time send by orange pi
 
 #include "arduino_secrets.h"
 
@@ -316,8 +316,8 @@ void setup() {
   digitalWrite(MODEM_RST, HIGH);
   digitalWrite(MODEM_POWER_ON, HIGH);
   SerialAT.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX);
-  delay(3000);
   println("Initializing modem...");
+  delay(3000);
   modem.restart();
   delay(2000);
   modem.sendAT(GF("+CLIP=1"));
@@ -385,6 +385,8 @@ void setup() {
   sms_allowed = hasPackage();
   Println("before syncSPIFFS: ");
   syncSPIFFS(); // use it to update global variables from SPIFFS
+  Println("after syncSPIFFS: ");
+  println("{hay orange-pi! please update my time?}");
 }
 
 void loop() {
@@ -1394,6 +1396,12 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("py_time:") != -1) {
+    println("***Received time from terminal setting up time...");
+    rtc = command.substring(command.indexOf("py_time:") + 8, -1);
+    println("Fetching time from: <" + rtc + ">");
+    setTime();
+    rtc = "";
   } else if (command.indexOf("time?") != -1) {
     println("Hour : " + String(RTC.hour) + " Minutes : " + String(RTC.minutes) +
             " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
