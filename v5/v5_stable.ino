@@ -1,6 +1,6 @@
-//$ last work 25/Oct/23 [02:08 AM]
-// # version 5.5.7
-// # Release Note : Module can now send data to Things Board via MQTT
+//$ last work 27/Oct/23 [01:48 AM]
+// # version 5.5.8
+// # Release Note : Communication function added for orange pi
 
 #include "arduino_secrets.h"
 
@@ -393,7 +393,7 @@ void setup() {
   Println("before syncSPIFFS: ");
   syncSPIFFS(); // use it to update global variables from SPIFFS
   Println("after syncSPIFFS: ");
-  println("{hay orange-pi! please update my time?}");
+  toOrangePi("Please send updated time");
   Println("after time request");
   client.setServer(mqtt_server, 1883);
 }
@@ -1585,6 +1585,12 @@ void inputManager(String command, int inputFrom) {
       println("Message: " + readMessage(targetMsg));
     else
       println("Message not Exists");
+  } else if (command.indexOf("hay ttgo-tcall!") != -1) {
+    println("`````````````````````````````````");
+    println("Message from Orange Pi:");
+    println(command);
+    println("`````````````````````````````````");
+
   }
   // TODO: help command should return all executable commands
   else {
@@ -1972,4 +1978,26 @@ void updateMQTT(int temperature_, int humidity_) {
                   ",humidity:" + String(humidity_) + "}")
                      .c_str());
   Println(4, "MQTT updated");
+}
+
+void toOrangePi(String str) { println("{hay orange-pi! " + str + "}"); }
+
+String askOrangPi(String str) {
+  toOrangePi(str + "?");
+  wait(500);
+  return replyOfOrangePi();
+}
+
+String replyOfOrangePi() {
+  unsigned int startTime = millis() / 1000;
+  String reply = "";
+  while (
+      (!(reply.indexOf("hay ttgo-tcall!") != -1 && reply.indexOf("}") != -1)) &&
+      (millis() / 1000) - startTime < 10) {
+    if (SerialMon.available()) {
+      reply += SerialMon.readString();
+    }
+  }
+  Println(5, "Reply of Orange Pi : " + reply); // TODO: orange-pi debugger
+  return reply;
 }
