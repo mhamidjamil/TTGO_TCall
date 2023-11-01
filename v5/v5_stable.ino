@@ -1,5 +1,5 @@
-//$ last work 27/Oct/23 [01:48 AM]
-// # version 5.5.8
+//$ last work 02/Nov/23 [01:28 AM]
+// # version 5.5.9
 // # Release Note : Communication function added for orange pi
 
 #include "arduino_secrets.h"
@@ -1475,7 +1475,7 @@ void inputManager(String command, int inputFrom) {
   } else if (command.indexOf("callTo") != -1) {
     call(command.substring(command.indexOf("{") + 1, command.indexOf("}")));
     inputFrom == 3 ? command += "<executed>" : "";
-  } else if (command.indexOf("call") != -1) {
+  } else if (command.indexOf("_call") != -1) {
     println("Calling " + String(my_number));
     giveMissedCall();
     inputFrom == 3 ? command += "<executed>" : "";
@@ -1501,7 +1501,6 @@ void inputManager(String command, int inputFrom) {
     println("Index before <" + command.substring(11, -1) + "> is : " +
             String(getMessageNumberBefore(command.substring(11, -1).toInt())));
   } else if (command.indexOf("forward") != -1) {
-    command += " <executed>";
     println("Forwarding message of index : " +
             fetchNumber(getCompleteString(command, "forward")));
     forwardMessage(fetchNumber(getCompleteString(command, "forward")));
@@ -1591,6 +1590,12 @@ void inputManager(String command, int inputFrom) {
     println(command);
     println("`````````````````````````````````");
 
+  } else if (command.indexOf("my_ip") != -1 || command.indexOf("my ip") != -1) {
+    String response = askOrangPi("send ip");
+    if (inputFrom == 3) {
+      command += "<executed>";
+      sendSMS(response);
+    }
   }
   // TODO: help command should return all executable commands
   else {
@@ -1998,6 +2003,7 @@ String replyOfOrangePi() {
       reply += SerialMon.readString();
     }
   }
-  Println(5, "Reply of Orange Pi : " + reply); // TODO: orange-pi debugger
+  Println(5,
+          "Reply of Orange Pi : {" + reply + "}"); // TODO: orange-pi debugger
   return reply;
 }

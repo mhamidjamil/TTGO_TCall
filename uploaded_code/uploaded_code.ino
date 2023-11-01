@@ -1,6 +1,6 @@
-//$ last work 25/Oct/23 [02:08 AM]
-// # version 5.5.7
-// # Release Note : Module can now send data to Things Board via MQTT
+//$ last work 02/Nov/23 [01:28 AM]
+// # version 5.5.9
+// # Release Note : Communication function added for orange pi
 
 #include "arduino_secrets.h"
 
@@ -393,7 +393,7 @@ void setup() {
   Println("before syncSPIFFS: ");
   syncSPIFFS(); // use it to update global variables from SPIFFS
   Println("after syncSPIFFS: ");
-  println("{hay orange-pi! please update my time?}");
+  toOrangePi("Please send updated time");
   Println("after time request");
   client.setServer(mqtt_server, 1883);
 }
@@ -1475,7 +1475,7 @@ void inputManager(String command, int inputFrom) {
   } else if (command.indexOf("callTo") != -1) {
     call(command.substring(command.indexOf("{") + 1, command.indexOf("}")));
     inputFrom == 3 ? command += "<executed>" : "";
-  } else if (command.indexOf("call") != -1) {
+  } else if (command.indexOf("_call") != -1) {
     println("Calling " + String(my_number));
     giveMissedCall();
     inputFrom == 3 ? command += "<executed>" : "";
@@ -1501,7 +1501,6 @@ void inputManager(String command, int inputFrom) {
     println("Index before <" + command.substring(11, -1) + "> is : " +
             String(getMessageNumberBefore(command.substring(11, -1).toInt())));
   } else if (command.indexOf("forward") != -1) {
-    command += " <executed>";
     println("Forwarding message of index : " +
             fetchNumber(getCompleteString(command, "forward")));
     forwardMessage(fetchNumber(getCompleteString(command, "forward")));
@@ -1585,6 +1584,18 @@ void inputManager(String command, int inputFrom) {
       println("Message: " + readMessage(targetMsg));
     else
       println("Message not Exists");
+  } else if (command.indexOf("hay ttgo-tcall!") != -1) {
+    println("`````````````````````````````````");
+    println("Message from Orange Pi:");
+    println(command);
+    println("`````````````````````````````````");
+
+  } else if (command.indexOf("my_ip") != -1 || command.indexOf("my ip") != -1) {
+    String response = askOrangPi("send ip");
+    if (inputFrom == 3) {
+      command += "<executed>";
+      sendSMS(response);
+    }
   }
   // TODO: help command should return all executable commands
   else {
@@ -1972,4 +1983,27 @@ void updateMQTT(int temperature_, int humidity_) {
                   ",humidity:" + String(humidity_) + "}")
                      .c_str());
   Println(4, "MQTT updated");
+}
+
+void toOrangePi(String str) { println("{hay orange-pi! " + str + "}"); }
+
+String askOrangPi(String str) {
+  toOrangePi(str + "?");
+  wait(500);
+  return replyOfOrangePi();
+}
+
+String replyOfOrangePi() {
+  unsigned int startTime = millis() / 1000;
+  String reply = "";
+  while (
+      (!(reply.indexOf("hay ttgo-tcall!") != -1 && reply.indexOf("}") != -1)) &&
+      (millis() / 1000) - startTime < 10) {
+    if (SerialMon.available()) {
+      reply += SerialMon.readString();
+    }
+  }
+  Println(5,
+          "Reply of Orange Pi : {" + reply + "}"); // TODO: orange-pi debugger
+  return reply;
 }
