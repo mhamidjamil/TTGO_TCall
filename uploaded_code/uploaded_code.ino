@@ -1,6 +1,6 @@
-//$ last work 02/Nov/23 [01:28 AM]
+//$ last work 03/Nov/23 [12:31 AM]
 // # version 5.5.9
-// # Release Note : Communication function added for orange pi
+// # Release Note : Communication function rework
 
 #include "arduino_secrets.h"
 
@@ -603,8 +603,14 @@ String getResponse() {
                   "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
+        } else {
+          Println(3, "Company message received deleting it...");
+          sendSMS("<Unable to execute new sms no. {" +
+                  String(newMessageNumber) + "} message : > [ " +
+                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                  " ] from : " + senderNumber + ". deleting it...");
           if (newPackageSubscribed(temp_str) &&
-              RTC.date != 0) { // ~ part belongs to else part
+              updateTime()) { // ~ part belongs to else part
             // increment 30 days in date and month or just month
             int field_7_data = getThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE);
             int previous_month = 0, previous_day = 0;
@@ -619,12 +625,6 @@ String getResponse() {
             package_expiry_date = field_7_data;
             writeThingSpeakData();
           }
-        } else {
-          Println(3, "Company message received deleting it...");
-          sendSMS("<Unable to execute new sms no. {" +
-                  String(newMessageNumber) + "} message : > [ " +
-                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
-                  " ] from : " + senderNumber + ". deleting it...");
           deleteMessage(newMessageNumber);
         }
       }
@@ -1145,7 +1145,8 @@ void wait(unsigned int miliSeconds) {
       condition = true;
       if (RTC.date == 0 && sms_allowed) {
         println("Time is not updated yet updating it");
-        sendSMS("#setTime", "+923374888420");
+        updateTime() ? alert("Time updated successfully #1148")
+                     : sendSMS("#setTime", "+923374888420");
       }
     }
     if (getMint() > last_ts_update_time) {
@@ -1154,13 +1155,13 @@ void wait(unsigned int miliSeconds) {
         if (wifi_working) {
           Println(4, "Before Temperature Update");
           updateThingSpeak(temperature, humidity);
-          updateMQTT((int)temperature, humidity);
           last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
           Println(4, "After temperature update");
           if (display_working) {
             updateBatteryParameters(updateBatteryStatus());
           }
           condition = true;
+          updateMQTT((int)temperature, humidity);
         }
       } else if (THINGSPEAK_ENABLE) {
         connect_wifi();
@@ -1248,9 +1249,9 @@ void setTime() { // this function will set RTC struct using rtc string
 }
 
 void Delay(int milliseconds) {
-  for (int i = 0; i < milliseconds; i++) {
+  for (int i = 0; i < milliseconds; i += 10) {
     // most important task will be executed here
-    delay(1);
+    delay(10);
   }
 
   RTC.milliSeconds += milliseconds;
@@ -1273,6 +1274,7 @@ void updateRTC() {
   if (RTC.hour > 23) {
     RTC.hour -= 24;
     RTC.date++;
+    updateTime();
   }
   // still the loop hole is present for month increment.
 }
@@ -1542,7 +1544,9 @@ void inputManager(String command, int inputFrom) {
     println("Time String : " + rtc);
   } else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
-    sendSMS("#setTime", "+923374888420");
+    // sendSMS("#setTime", "+923374888420");
+    updateTime() ? alert("Time updated successfully #1550")
+                 : sendSMS("#setTime", "+923374888420");
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("whatsapp") != -1) {
     if (command.length() <= 10) {
@@ -1627,7 +1631,8 @@ bool companyMsg(String mobileNumber) {
 void sendWhatsappMsg(String message) {
   if (RTC.date == 0) {
     println("RTC not updated yet so wait for it to avoid unexpected behaviour");
-    return;
+    updateTime() ? sendWhatsappMsg(message)
+                 : println("Unable send message, time not updated");
   } else if (!wifiConnected()) {
     println("Wifi not connected unable to send whatsapp message");
     return;
@@ -1903,6 +1908,10 @@ bool hasPackage() {
       }
     }
   } else {
+    if (updateTime())
+      hasPackage();
+    else
+      alert("Unable to update time from orange pi #1912");
     Println(7, "Set Time First!");
   }
   setField_MonthAndDate(package_expiry_date, expiryMonth, expiryDate);
@@ -2006,4 +2015,43 @@ String replyOfOrangePi() {
   Println(5,
           "Reply of Orange Pi : {" + reply + "}"); // TODO: orange-pi debugger
   return reply;
+}
+
+bool updateTime() {
+  askTime();
+  String piResponse = replyOfOrangePi();
+  if (piResponse.length() > 0) {
+    if (piResponse.indexOf("py_time:") != -1) {
+      println("***Received time from terminal setting up time...@");
+      rtc = piResponse.substring(piResponse.indexOf("py_time:") + 8, -1);
+      println("@2 Fetching time from: <" + rtc + ">");
+      setTime();
+    } else {
+      Println(5, "Unable to execute pi response : [" + piResponse + "]");
+      return false;
+    }
+    Println(5, "Time updated successfully");
+    return true;
+  } else {
+    Println(5, "Failed to update time");
+    return false;
+  }
+}
+
+void askTime() {
+  // this will ask for updated time from orange pi
+  Println(5, "Asking time from Orange Pi");
+  toOrangePi("send time");
+}
+
+void error(String msg) {
+  println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+  println("Error : " + msg);
+  println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+}
+
+void alert(String msg) {
+  println("\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+  println("Alert : " + msg);
+  println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n");
 }
