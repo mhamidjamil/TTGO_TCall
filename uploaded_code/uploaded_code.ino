@@ -1,6 +1,6 @@
-//$ last work 04/Oct/23 [10:44 PM]
-// # version 5.5.5
-// # Release Note : Issue reported, BLE can't send whatsapp messages
+//$ last work 03/Nov/23 [12:31 AM]
+// # version 5.5.9
+// # Release Note : Communication function rework
 
 #include "arduino_secrets.h"
 
@@ -16,7 +16,9 @@ String whatsapp_numbers[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2,
 String API[4] = {WHATSAPP_API_1, WHATSAPP_API_2, WHATSAPP_API_3,
                  WHATSAPP_API_4};
 
-// https://api.callmebot.com/whatsapp.php?phone=+923354888420&text=This+is+a+test&apikey=518125
+const char *mqtt_server = MY_MQTT_SERVER_IP;
+
+// https://api.callmebot.com/whatsapp.php?phone=+923354***420&text=This+is+a+test&apikey=***125
 
 String server = "https://api.callmebot.com/whatsapp.php?phone=";
 
@@ -35,6 +37,7 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #include "SPIFFS.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <PubSubClient.h>
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -104,7 +107,9 @@ int whatsapp_message_number = -1;
 unsigned int last_ts_update_time =
     2; // TS will update when current time >= this variable
 unsigned int last_update = 0; // in minutes
-WiFiClient client;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
 
 String end_value = "  ";
 String line_1 = "Temp: 00.0 C";
@@ -160,6 +165,8 @@ String ret_string = "";
 String error_codes = "";
 // String chargingStatus = "";
 // these error codes will be moving in the last row of lcd
+
+bool mqtt_connected = false;
 
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
@@ -375,7 +382,7 @@ void setup() {
   delay(100);
   if (THINGSPEAK_ENABLE && wifi_working) {
     Println("\nThinkSpeak initializing...\n");
-    ThingSpeak.begin(client); // Initialize ThingSpeak
+    ThingSpeak.begin(espClient); // Initialize ThingSpeak
     delay(500);
     ThingSpeak.setField(4, random(1, 50)); // set any random value.
   }
@@ -385,11 +392,15 @@ void setup() {
   sms_allowed = hasPackage();
   Println("before syncSPIFFS: ");
   syncSPIFFS(); // use it to update global variables from SPIFFS
+  Println("after syncSPIFFS: ");
+  toOrangePi("Please send updated time");
+  Println("after time request");
+  client.setServer(mqtt_server, 1883);
 }
 
 void loop() {
   Println("in loop");
-
+  client.loop(); // ensure that the MQTT client remains responsive
   if (deviceConnected) {
     if (!oldDeviceConnected) {
       Serial.println("Connected to device");
@@ -592,8 +603,14 @@ String getResponse() {
                   "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
+        } else {
+          Println(3, "Company message received deleting it...");
+          sendSMS("<Unable to execute new sms no. {" +
+                  String(newMessageNumber) + "} message : > [ " +
+                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                  " ] from : " + senderNumber + ". deleting it...");
           if (newPackageSubscribed(temp_str) &&
-              RTC.date != 0) { // ~ part belongs to else part
+              updateTime()) { // ~ part belongs to else part
             // increment 30 days in date and month or just month
             int field_7_data = getThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE);
             int previous_month = 0, previous_day = 0;
@@ -608,12 +625,6 @@ String getResponse() {
             package_expiry_date = field_7_data;
             writeThingSpeakData();
           }
-        } else {
-          Println(3, "Company message received deleting it...");
-          sendSMS("<Unable to execute new sms no. {" +
-                  String(newMessageNumber) + "} message : > [ " +
-                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
-                  " ] from : " + senderNumber + ". deleting it...");
           deleteMessage(newMessageNumber);
         }
       }
@@ -903,6 +914,23 @@ void connect_wifi() {
   }
 }
 
+void reconnect() {
+  int i = 0;
+  while (!client.connected() && i++ < 5) { // try for 10 seconds
+    Serial.print("Attempting MQTT connection...");
+    if (client.connect("ESP32Client", "ts53yrn2f09kpcignf8t", NULL)) {
+      Serial.println("connected");
+      mqtt_connected = false;
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 2 seconds");
+      mqtt_connected = false;
+      wait(2000);
+    }
+  }
+}
+
 void updateThingSpeak(float temperature, int humidity) {
   if (humidity < 110) {
     ThingSpeak.setField(1, temperature); // Set temperature value
@@ -1077,7 +1105,7 @@ void updateVariablesValues(String str) {
         wifi_working = true;
         if (THINGSPEAK_ENABLE && wifiConnected()) {
           Println(4, "\nThinkSpeak initializing in loop...\n");
-          ThingSpeak.begin(client); // Initialize ThingSpeak
+          ThingSpeak.begin(espClient); // Initialize ThingSpeak
         }
       }
     }
@@ -1117,7 +1145,8 @@ void wait(unsigned int miliSeconds) {
       condition = true;
       if (RTC.date == 0 && sms_allowed) {
         println("Time is not updated yet updating it");
-        sendSMS("#setTime", "+923374888420");
+        updateTime() ? alert("Time updated successfully #1148")
+                     : sendSMS("#setTime", "+923374888420");
       }
     }
     if (getMint() > last_ts_update_time) {
@@ -1132,12 +1161,13 @@ void wait(unsigned int miliSeconds) {
             updateBatteryParameters(updateBatteryStatus());
           }
           condition = true;
+          updateMQTT((int)temperature, humidity);
         }
       } else if (THINGSPEAK_ENABLE) {
         connect_wifi();
         if (wifiConnected()) {
           wifi_working = true;
-          ThingSpeak.begin(client);               // Initialize ThingSpeak
+          ThingSpeak.begin(espClient);            // Initialize ThingSpeak
           ThingSpeak.setField(4, random(52, 99)); // set any random value.
         }
       }
@@ -1219,9 +1249,9 @@ void setTime() { // this function will set RTC struct using rtc string
 }
 
 void Delay(int milliseconds) {
-  for (int i = 0; i < milliseconds; i++) {
+  for (int i = 0; i < milliseconds; i += 10) {
     // most important task will be executed here
-    delay(1);
+    delay(10);
   }
 
   RTC.milliSeconds += milliseconds;
@@ -1244,6 +1274,7 @@ void updateRTC() {
   if (RTC.hour > 23) {
     RTC.hour -= 24;
     RTC.date++;
+    updateTime();
   }
   // still the loop hole is present for month increment.
 }
@@ -1399,6 +1430,7 @@ void inputManager(String command, int inputFrom) {
     rtc = command.substring(command.indexOf("py_time:") + 8, -1);
     println("Fetching time from: <" + rtc + ">");
     setTime();
+    rtc = "";
   } else if (command.indexOf("time?") != -1) {
     println("Hour : " + String(RTC.hour) + " Minutes : " + String(RTC.minutes) +
             " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
@@ -1445,7 +1477,7 @@ void inputManager(String command, int inputFrom) {
   } else if (command.indexOf("callTo") != -1) {
     call(command.substring(command.indexOf("{") + 1, command.indexOf("}")));
     inputFrom == 3 ? command += "<executed>" : "";
-  } else if (command.indexOf("call") != -1) {
+  } else if (command.indexOf("_call") != -1) {
     println("Calling " + String(my_number));
     giveMissedCall();
     inputFrom == 3 ? command += "<executed>" : "";
@@ -1471,7 +1503,6 @@ void inputManager(String command, int inputFrom) {
     println("Index before <" + command.substring(11, -1) + "> is : " +
             String(getMessageNumberBefore(command.substring(11, -1).toInt())));
   } else if (command.indexOf("forward") != -1) {
-    command += " <executed>";
     println("Forwarding message of index : " +
             fetchNumber(getCompleteString(command, "forward")));
     forwardMessage(fetchNumber(getCompleteString(command, "forward")));
@@ -1513,7 +1544,9 @@ void inputManager(String command, int inputFrom) {
     println("Time String : " + rtc);
   } else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
-    sendSMS("#setTime", "+923374888420");
+    // sendSMS("#setTime", "+923374888420");
+    updateTime() ? alert("Time updated successfully #1550")
+                 : sendSMS("#setTime", "+923374888420");
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("whatsapp") != -1) {
     if (command.length() <= 10) {
@@ -1555,6 +1588,18 @@ void inputManager(String command, int inputFrom) {
       println("Message: " + readMessage(targetMsg));
     else
       println("Message not Exists");
+  } else if (command.indexOf("hay ttgo-tcall!") != -1) {
+    println("`````````````````````````````````");
+    println("Message from Orange Pi:");
+    println(command);
+    println("`````````````````````````````````");
+
+  } else if (command.indexOf("my_ip") != -1 || command.indexOf("my ip") != -1) {
+    String response = askOrangPi("send ip");
+    if (inputFrom == 3) {
+      command += "<executed>";
+      sendSMS(response);
+    }
   }
   // TODO: help command should return all executable commands
   else {
@@ -1586,7 +1631,8 @@ bool companyMsg(String mobileNumber) {
 void sendWhatsappMsg(String message) {
   if (RTC.date == 0) {
     println("RTC not updated yet so wait for it to avoid unexpected behaviour");
-    return;
+    updateTime() ? sendWhatsappMsg(message)
+                 : println("Unable send message, time not updated");
   } else if (!wifiConnected()) {
     println("Wifi not connected unable to send whatsapp message");
     return;
@@ -1862,6 +1908,10 @@ bool hasPackage() {
       }
     }
   } else {
+    if (updateTime())
+      hasPackage();
+    else
+      alert("Unable to update time from orange pi #1912");
     Println(7, "Set Time First!");
   }
   setField_MonthAndDate(package_expiry_date, expiryMonth, expiryDate);
@@ -1930,4 +1980,78 @@ void updateDebugger(int index, int value) {
     Println("Updating value of : " + varName + " to : " + String(value));
     updateSPIFFS(varName, String(value));
   }
+}
+
+void updateMQTT(int temperature_, int humidity_) {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+  client.publish("v1/devices/me/telemetry",
+                 ("{temperature:" + String(temperature_) +
+                  ",humidity:" + String(humidity_) + "}")
+                     .c_str());
+  Println(4, "MQTT updated");
+}
+
+void toOrangePi(String str) { println("{hay orange-pi! " + str + "}"); }
+
+String askOrangPi(String str) {
+  toOrangePi(str + "?");
+  wait(500);
+  return replyOfOrangePi();
+}
+
+String replyOfOrangePi() {
+  unsigned int startTime = millis() / 1000;
+  String reply = "";
+  while (
+      (!(reply.indexOf("hay ttgo-tcall!") != -1 && reply.indexOf("}") != -1)) &&
+      (millis() / 1000) - startTime < 10) {
+    if (SerialMon.available()) {
+      reply += SerialMon.readString();
+    }
+  }
+  Println(5,
+          "Reply of Orange Pi : {" + reply + "}"); // TODO: orange-pi debugger
+  return reply;
+}
+
+bool updateTime() {
+  askTime();
+  String piResponse = replyOfOrangePi();
+  if (piResponse.length() > 0) {
+    if (piResponse.indexOf("py_time:") != -1) {
+      println("***Received time from terminal setting up time...@");
+      rtc = piResponse.substring(piResponse.indexOf("py_time:") + 8, -1);
+      println("@2 Fetching time from: <" + rtc + ">");
+      setTime();
+    } else {
+      Println(5, "Unable to execute pi response : [" + piResponse + "]");
+      return false;
+    }
+    Println(5, "Time updated successfully");
+    return true;
+  } else {
+    Println(5, "Failed to update time");
+    return false;
+  }
+}
+
+void askTime() {
+  // this will ask for updated time from orange pi
+  Println(5, "Asking time from Orange Pi");
+  toOrangePi("send time");
+}
+
+void error(String msg) {
+  println("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+  println("Error : " + msg);
+  println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+}
+
+void alert(String msg) {
+  println("\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+  println("Alert : " + msg);
+  println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n");
 }
