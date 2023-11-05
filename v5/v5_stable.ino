@@ -1,6 +1,6 @@
-//$ last work 05/Nov/23 [05:15 PM]
+//$ last work 06/Nov/23 [12:33 AM]
 // # version 5.6.1
-// # Release Note : Add debugging option for Orange-pi functionality
+// # Release Note : work on-> unknown message for orange pi
 
 #include "arduino_secrets.h"
 
@@ -476,8 +476,7 @@ void Print(String str) {
 void Println(int debuggerID, String str) {
   if (DEBUGGING) {
     println(str);
-  } else if (allowed_debugging[debuggerID -
-                               1]) { // debugging WIFI functionality
+  } else if (allowed_debugging[debuggerID - 1]) {
     println(str);
   } else if (debuggerID < 0 || debuggerID > DEBUGGING_OPTIONS) {
     Serial.println("Debugger is not defined for this string : " + str);
@@ -593,7 +592,8 @@ String getResponse() {
     String senderNumber = getMobileNumberOfMsg(String(newMessageNumber), true);
     if (senderNumber.indexOf("3374888420") == -1) {
       // if message is not send by module it self
-      String temp_str = executeCommand(removeOk(readMessage(newMessageNumber)));
+      String temp_str =
+          executeCommand(removeEnter(removeOk(readMessage(newMessageNumber))));
       println("New message [ " + temp_str + "]");
       if (temp_str.indexOf("<executed>") != -1)
         deleteMessage(newMessageNumber);
@@ -676,6 +676,8 @@ String removeOk(String str) {
   else
     return str;
 }
+
+String removeEnter(String str) { return str.trim(); }
 
 String executeCommand(String str) {
   ret_string = "";
@@ -1164,6 +1166,7 @@ void wait(unsigned int miliSeconds) {
         Delay(1000);
         i += 1000;
         updateMQTT((int)temperature, humidity);
+        Println(7, "After MQTT update");
       } else if (THINGSPEAK_ENABLE) {
         connect_wifi();
         if (wifiConnected()) {
@@ -1426,6 +1429,24 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("value of:") != -1) {
+    String varName =
+        getVariableName(command.substring(command.indexOf(":")), ":");
+    String targetLine = getCompleteString(readSPIFFS(), varName);
+    if (targetLine.indexOf(varName) == -1) {
+      println("Variable not found in file creating new one");
+      updateSPIFFS(varName, "0");
+    }
+    Println(7, "now trying to fetch data from line : " + targetLine);
+    String targetValue = targetLine.substring(varName.length(), -1);
+    // Println(7, "Trying to fetch data from : " + targetValue);
+    println("Value of : " + varName + " is : " + fetchNumber(targetValue, '.'));
+    if (command.indexOf("to") != -1) {
+      String newValue = command.substring(command.indexOf("to") + 2, -1);
+      Println(7, "Updating value to : " + newValue);
+      updateSPIFFS(varName, newValue);
+    }
+    Println(7, "\t\t ###leaving else part #### \n");
   } else if (command.indexOf("py_time:") != -1) {
     println("***Received time from terminal setting up time...");
     rtc = command.substring(command.indexOf("py_time:") + 8, -1);
@@ -1437,6 +1458,7 @@ void inputManager(String command, int inputFrom) {
             " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
             " Month : " + String(RTC.month));
   } else if (command.indexOf("debug:") != -1) {
+    // this part will enable/disable debugging, and print debugging status
     int index = fetchNumber(getCompleteString(command, "debug:"));
     if (index < DEBUGGING_OPTIONS && index > -1) {
       allowed_debugging[index] ? allowed_debugging[index] = 0
@@ -1564,24 +1586,6 @@ void inputManager(String command, int inputFrom) {
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("readSPIFFS") != -1) {
     println("Data in SPIFFS : " + readSPIFFS());
-  } else if (command.indexOf("value of:") != -1) {
-    String varName =
-        getVariableName(command.substring(command.indexOf(":")), ":");
-    String targetLine = getCompleteString(readSPIFFS(), varName);
-    if (targetLine.indexOf(varName) == -1) {
-      println("Variable not found in file creating new one");
-      updateSPIFFS(varName, "0");
-    }
-    Println(7, "now trying to fetch data from line : " + targetLine);
-    String targetValue = targetLine.substring(varName.length(), -1);
-    // Println(7, "Trying to fetch data from : " + targetValue);
-    println("Value of : " + varName + " is : " + fetchNumber(targetValue, '.'));
-    if (command.indexOf("to") != -1) {
-      String newValue = command.substring(command.indexOf("to") + 2, -1);
-      Println(7, "Updating value to : " + newValue);
-      updateSPIFFS(varName, newValue);
-    }
-    Println(7, "\t\t ###leaving else part #### \n");
   } else if (command.indexOf("setTime") != -1) {
     String tempStr = "+CMGL: 1,\"REC "
                      "READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
@@ -1966,7 +1970,7 @@ void updateDebugger() {
   allowed_debugging[4] = getFileVariableValue("WHATSAPP_debug", true).toInt();
   allowed_debugging[5] = getFileVariableValue("BLE_debug", true).toInt();
   allowed_debugging[6] = getFileVariableValue("SPIFFS_debug", true).toInt();
-  allowed_debugging[7] = getFileVariableValue("ORANGE-PI_debug", true).toInt();
+  allowed_debugging[7] = getFileVariableValue("OrangePi_debug", true).toInt();
 }
 
 void updateDebugger(int index, int value) {
@@ -1977,7 +1981,7 @@ void updateDebugger(int index, int value) {
                     : index == 4 ? "WHATSAPP_debug"
                     : index == 5 ? "BLE_debug"
                     : index == 6 ? "SPIFFS_debug"
-                    : index == 7 ? "ORANGE-PI_debug"
+                    : index == 7 ? "OrangePi_debug"
                                  : "error");
   if (varName == "error") {
     println("Error in updateDebugger function");
@@ -1997,7 +2001,7 @@ void updateMQTT(int temperature_, int humidity_) {
                  ("{temperature:" + String(temperature_) +
                   ",humidity:" + String(humidity_) + "}")
                      .c_str());
-  Println(7, "MQTT updated");
+  Println(8, "MQTT updated");
 }
 
 void toOrangePi(String str) { println("{hay orange-pi! " + str + "}"); }
@@ -2018,7 +2022,7 @@ String replyOfOrangePi() {
       reply += SerialMon.readString();
     }
   }
-  Println(7,
+  Println(8,
           "Reply of Orange Pi : {" + reply + "}"); // TODO: orange-pi debugger
   return reply;
 }
@@ -2033,20 +2037,20 @@ bool updateTime() {
       println("@2 Fetching time from: <" + rtc + ">");
       setTime();
     } else {
-      Println(7, "Unable to execute pi response : [" + piResponse + "]");
+      Println(8, "Unable to execute pi response : [" + piResponse + "]");
       return false;
     }
-    Println(7, "Time updated successfully");
+    Println(8, "Time updated successfully");
     return true;
   } else {
-    Println(7, "Failed to update time");
+    Println(8, "Failed to update time");
     return false;
   }
 }
 
 void askTime() {
   // this will ask for updated time from orange pi
-  Println(7, "Asking time from Orange Pi");
+  Println(8, "Asking time from Orange Pi");
   toOrangePi("send time");
 }
 
