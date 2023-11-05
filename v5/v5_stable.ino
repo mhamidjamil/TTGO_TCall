@@ -1,6 +1,6 @@
-//$ last work 03/Nov/23 [01:19 AM]
-// # version 5.6.0
-// # Release Note : Communication function rework
+//$ last work 05/Nov/23 [05:15 PM]
+// # version 5.6.1
+// # Release Note : Add debugging option for Orange-pi functionality
 
 #include "arduino_secrets.h"
 
@@ -17,8 +17,6 @@ String API[4] = {WHATSAPP_API_1, WHATSAPP_API_2, WHATSAPP_API_3,
                  WHATSAPP_API_4};
 
 const char *mqtt_server = MY_MQTT_SERVER_IP;
-
-// https://api.callmebot.com/whatsapp.php?phone=+923354***420&text=This+is+a+test&apikey=***125
 
 String server = "https://api.callmebot.com/whatsapp.php?phone=";
 
@@ -129,7 +127,8 @@ float temperature;
 int humidity;
 
 bool DEBUGGING = true;
-int allowed_debugging[7] = {0, 0, 1, 0, 1, 0, 1};
+#define DEBUGGING_OPTIONS 8
+int allowed_debugging[DEBUGGING_OPTIONS] = {0, 0, 1, 0, 1, 0, 1, 1};
 // 0 => allowed, 1 => not allowed
 // (debuggerID == 0)     // debugging WIFI_debug functionality
 // (debuggerID == 1) // debugging LCD_debug functionality
@@ -138,6 +137,7 @@ int allowed_debugging[7] = {0, 0, 1, 0, 1, 0, 1};
 // (debuggerID == 4) // debugging WHATSAPP_debug functionality
 // (debuggerID == 5) // debugging BLE_debug functionality
 // (debuggerID == 6) // debugging SPIFFS_debug functionality
+// (debuggerID == 7) // debugging Orange-pi functionality
 
 int debug_for = 130; // mentioned in seconds
 bool ultraSoundWorking = false;
@@ -479,7 +479,7 @@ void Println(int debuggerID, String str) {
   } else if (allowed_debugging[debuggerID -
                                1]) { // debugging WIFI functionality
     println(str);
-  } else if (debuggerID < 0 || debuggerID > 7) {
+  } else if (debuggerID < 0 || debuggerID > DEBUGGING_OPTIONS) {
     Serial.println("Debugger is not defined for this string : " + str);
   }
 }
@@ -1437,7 +1437,7 @@ void inputManager(String command, int inputFrom) {
             " Month : " + String(RTC.month));
   } else if (command.indexOf("debug:") != -1) {
     int index = fetchNumber(getCompleteString(command, "debug:"));
-    if (index < 7 && index > -1) {
+    if (index < DEBUGGING_OPTIONS && index > -1) {
       allowed_debugging[index] ? allowed_debugging[index] = 0
                                : allowed_debugging[index] = 1;
       updateDebugger(index, allowed_debugging[index]);
@@ -1453,11 +1453,13 @@ void inputManager(String command, int inputFrom) {
         String(allowed_debugging[3] ? "3: ThingSpeak" : " ") +
         String(allowed_debugging[4] ? "4: Whatsapp" : " ") +
         String(allowed_debugging[5] ? "5: BLE" : " ") +
-        String(allowed_debugging[6] ? "6: SPIFFS" : " "));
+        String(allowed_debugging[6] ? "6: SPIFFS" : " ")) +
+        String(allowed_debugging[7] ? "7: Orange pi" : " ");
   } else if ((command.indexOf("debug") != -1) &&
              (command.indexOf("option") != -1)) {
     println("Here the the debugging index :\n\t-> Wifi : 0, LCD : 1, SIM800L "
-            ": 2, ThingSpeak : 3, Whatsapp : 4, BLE : 5, SPIFFS : 6");
+            ": 2, ThingSpeak : 3, Whatsapp : 4, BLE : 5, SPIFFS : 6, Orange pi "
+            ": 7");
   } else if (command.indexOf("debug?") != -1) {
     println("Here is the debugging status: ");
     Serial.println(
@@ -1467,7 +1469,8 @@ void inputManager(String command, int inputFrom) {
         String(allowed_debugging[3] ? "3: ThingSpeak" : " ") +
         String(allowed_debugging[4] ? "4: Whatsapp" : " ") +
         String(allowed_debugging[5] ? "5: BLE" : " ") +
-        String(allowed_debugging[6] ? "6: SPIFFS" : " "));
+        String(allowed_debugging[6] ? "6: SPIFFS" : " ") +
+        String(allowed_debugging[7] ? "7: Orange pi" : " "));
   } else if (command.indexOf("#setting") != -1) {
     updateVariablesValues(command);
     deleteMessage(1);
@@ -1962,6 +1965,7 @@ void updateDebugger() {
   allowed_debugging[4] = getFileVariableValue("WHATSAPP_debug", true).toInt();
   allowed_debugging[5] = getFileVariableValue("BLE_debug", true).toInt();
   allowed_debugging[6] = getFileVariableValue("SPIFFS_debug", true).toInt();
+  allowed_debugging[7] = getFileVariableValue("ORANGE-PI_debug", true).toInt();
 }
 
 void updateDebugger(int index, int value) {
@@ -1972,6 +1976,7 @@ void updateDebugger(int index, int value) {
                     : index == 4 ? "WHATSAPP_debug"
                     : index == 5 ? "BLE_debug"
                     : index == 6 ? "SPIFFS_debug"
+                    : index == 7 ? "ORANGE-PI_debug"
                                  : "error");
   if (varName == "error") {
     println("Error in updateDebugger function");
