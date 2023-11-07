@@ -603,8 +603,9 @@ String getResponse() {
                   "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
-          toOrangePi("untrained_message:" + temp_str + " from : {_" +
-                     senderNumber + "_}<_" + String(newMessageNumber) + "_>");
+          toOrangePi("untrained_message:" + removeNewline(temp_str) +
+                     " from : {_" + senderNumber + "_}<_" +
+                     String(newMessageNumber) + "_>");
         } else {
           Println(3, "Company message received deleting it...");
           sendSMS("<Unable to execute new sms no. {" +
@@ -769,8 +770,9 @@ void terminateLastMessage() {
                 "} message : [ " +
                 temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                 " ] from : " + mobileNumber + ", what to do ?");
-        toOrangePi("untrained_message:" + temp_str + " from : {_" +
-                   mobileNumber + "_}<_" + String(current_target_index) + "_>");
+        toOrangePi("untrained_message:" + removeNewline(temp_str) +
+                   " from : {_" + mobileNumber + "_}<_" +
+                   String(current_target_index) + "_>");
         Delay(2000);
       } else {
         sendSMS("Unable to execute previous sms no. {" +
@@ -1374,7 +1376,7 @@ String getCompleteString(String str, String target) {
     Println("String is empty" + str);
     return tempStr;
   } else if (str.length() <= 20) { // to avoid spiffs on terminal
-    Println(6, "@--> Working on : " + str + " finding : " + target);
+    Println(7, "@--> Working on : " + str + " finding : " + target);
   }
   for (; i < str.length(); i++) {
     if ((str[i] >= '0' && str[i] <= '9') || (str[i] >= 'a' && str[i] <= 'z') ||
@@ -1383,17 +1385,17 @@ String getCompleteString(String str, String target) {
         (str[i] == ':') || (str[i] == '=') || (str[i] == '_'))
       tempStr += str[i];
     else {
-      Println(6, "Returning (complete string) 1: " + tempStr);
+      Println(7, "Returning (complete string) 1: " + tempStr);
       return tempStr;
     }
   }
-  Println(6, "Returning (complete string) 2: " + tempStr);
+  Println(7, "Returning (complete string) 2: " + tempStr);
   return tempStr;
 }
 
 String fetchNumber(String str, char charToInclude) {
   String number = "";
-  Println(6, "Fetching number from : " + str);
+  Println(7, "Fetching number from : " + str);
   bool numberStart = false;
   for (int i = 0; i < str.length(); i++) {
     if (str[i] >= '0' && str[i] <= '9' ||
@@ -1401,11 +1403,11 @@ String fetchNumber(String str, char charToInclude) {
       number += str[i];
       numberStart = true;
     } else if (numberStart) {
-      Println(6, "Returning (fetchNumber) 1: " + number);
+      Println(7, "Returning (fetchNumber) 1: " + number);
       return number;
     }
   }
-  Println(6, "Returning (fetchNumber) 2: " + number);
+  Println(7, "Returning (fetchNumber) 2: " + number);
   return number;
 }
 
@@ -2011,7 +2013,9 @@ void updateMQTT(int temperature_, int humidity_) {
   Println(8, "MQTT updated");
 }
 
-void toOrangePi(String str) { println("{hay orange-pi! " + str + "}"); }
+void toOrangePi(String str) {
+  println("{hay orange-pi! " + removeNewline(str) + "}");
+}
 
 String askOrangPi(String str) {
   toOrangePi(str + "?");
@@ -2071,4 +2075,9 @@ void alert(String msg) {
   println("\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
   println("Alert : " + msg);
   println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n");
+}
+
+String removeNewline(String str) {
+  str.replace("\n", "");
+  return str;
 }

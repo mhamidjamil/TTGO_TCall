@@ -1,6 +1,6 @@
 //$ last work 07/Nov/23 [11:35 PM]
 // # version 5.6.2
-// # Release Note : work on-> unknown message for orange pi issue
+// # Release Note : Unknow message is no readable by orangePi
 
 #include "arduino_secrets.h"
 
@@ -592,8 +592,8 @@ String getResponse() {
     String senderNumber = getMobileNumberOfMsg(String(newMessageNumber), true);
     if (senderNumber.indexOf("3374888420") == -1) {
       // if message is not send by module it self
-      String temp_str =
-          executeCommand(removeEnter(removeOk(readMessage(newMessageNumber))));
+      String temp_str = executeCommand(
+          removeNewline(removeOk(readMessage(newMessageNumber))));
       println("New message [ " + temp_str + "]");
       if (temp_str.indexOf("<executed>") != -1)
         deleteMessage(newMessageNumber);
@@ -601,10 +601,12 @@ String getResponse() {
         if (!companyMsg(senderNumber)) {
           sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
                   "} message : > [ " +
-                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                  removeNewline(temp_str.substring(
+                      0, temp_str.indexOf(" <not executed>"))) +
                   " ] from : " + senderNumber);
-          toOrangePi("untrained_message:" + temp_str + " from : {_" +
-                     senderNumber + "_}<_" + String(newMessageNumber) + "_>");
+          toOrangePi("untrained_message:" + removeNewline(temp_str) +
+                     " from : {_" + senderNumber + "_}<_" +
+                     String(newMessageNumber) + "_>");
         } else {
           Println(3, "Company message received deleting it...");
           sendSMS("<Unable to execute new sms no. {" +
@@ -767,10 +769,12 @@ void terminateLastMessage() {
       if (!companyMsg(mobileNumber)) {
         sendSMS("Unable to execute sms no. {" + String(current_target_index) +
                 "} message : [ " +
-                temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                removeNewline(temp_str.substring(
+                    0, temp_str.indexOf(" <not executed>"))) +
                 " ] from : " + mobileNumber + ", what to do ?");
-        toOrangePi("untrained_message:" + temp_str + " from : {_" +
-                   mobileNumber + "_}<_" + String(current_target_index) + "_>");
+        toOrangePi("untrained_message:" + removeNewline(temp_str) +
+                   " from : {_" + mobileNumber + "_}<_" +
+                   String(current_target_index) + "_>");
         Delay(2000);
       } else {
         sendSMS("Unable to execute previous sms no. {" +
@@ -2011,7 +2015,9 @@ void updateMQTT(int temperature_, int humidity_) {
   Println(8, "MQTT updated");
 }
 
-void toOrangePi(String str) { println("{hay orange-pi! " + str + "}"); }
+void toOrangePi(String str) {
+  println("{hay orange-pi! " + removeNewline(str) + "}");
+}
 
 String askOrangPi(String str) {
   toOrangePi(str + "?");
@@ -2071,4 +2077,9 @@ void alert(String msg) {
   println("\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
   println("Alert : " + msg);
   println("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n");
+}
+
+String removeNewline(String str) {
+  str.replace("\n", " ");
+  return str;
 }
