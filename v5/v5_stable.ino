@@ -1,6 +1,6 @@
-//$ last work 07/Nov/23 [11:35 PM]
+//$ last work 08/Nov/23 [12:45 PM]
 // # version 5.6.2
-// # Release Note : Unknow message is no readable by orangePi
+// # Release Note : Unknow message is now readable by orangePi
 
 #include "arduino_secrets.h"
 
