@@ -1,6 +1,6 @@
-//$ last work 06/Nov/23 [12:33 AM]
-// # version 5.6.1
-// # Release Note : work on-> unknown message for orange pi
+//$ last work 07/Nov/23 [11:35 PM]
+// # version 5.6.2
+// # Release Note : work on-> unknown message for orange pi issue
 
 #include "arduino_secrets.h"
 
@@ -128,7 +128,7 @@ int humidity;
 
 bool DEBUGGING = true;
 #define DEBUGGING_OPTIONS 8
-int allowed_debugging[DEBUGGING_OPTIONS] = {0, 0, 1, 0, 1, 0, 1, 1};
+int allowed_debugging[DEBUGGING_OPTIONS] = {0, 0, 1, 0, 1, 0, 0, 1};
 // 0 => allowed, 1 => not allowed
 // (debuggerID == 0)     // debugging WIFI_debug functionality
 // (debuggerID == 1) // debugging LCD_debug functionality
@@ -603,6 +603,8 @@ String getResponse() {
                   "} message : > [ " +
                   temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber);
+          toOrangePi("untrained_message:" + temp_str + " from : {_" +
+                     senderNumber + "_}<_" + String(newMessageNumber) + "_>");
         } else {
           Println(3, "Company message received deleting it...");
           sendSMS("<Unable to execute new sms no. {" +
@@ -677,7 +679,10 @@ String removeOk(String str) {
     return str;
 }
 
-String removeEnter(String str) { return str.trim(); }
+String removeEnter(String str) {
+  str.trim();
+  return str;
+}
 
 String executeCommand(String str) {
   ret_string = "";
@@ -764,6 +769,8 @@ void terminateLastMessage() {
                 "} message : [ " +
                 temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
                 " ] from : " + mobileNumber + ", what to do ?");
+        toOrangePi("untrained_message:" + temp_str + " from : {_" +
+                   mobileNumber + "_}<_" + String(current_target_index) + "_>");
         Delay(2000);
       } else {
         sendSMS("Unable to execute previous sms no. {" +
@@ -1163,8 +1170,8 @@ void wait(unsigned int miliSeconds) {
             updateBatteryParameters(updateBatteryStatus());
           }
         }
-        Delay(1000);
-        i += 1000;
+        Delay(3000);
+        i += 3000;
         updateMQTT((int)temperature, humidity);
         Println(7, "After MQTT update");
       } else if (THINGSPEAK_ENABLE) {
@@ -1366,7 +1373,7 @@ String getCompleteString(String str, String target) {
   if (i == -1) {
     Println("String is empty" + str);
     return tempStr;
-  } else {
+  } else if (str.length() <= 20) { // to avoid spiffs on terminal
     Println(7, "@--> Working on : " + str + " finding : " + target);
   }
   for (; i < str.length(); i++) {
