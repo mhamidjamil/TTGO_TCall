@@ -1,6 +1,6 @@
-//$ last work 10/Nov/23 [04:36 PM]
-// # version 5.6.3
-// # Release Note : setTime issue
+//$ last work 10/Nov/23 [07:13 PM]
+// # version 5.6.3.2
+// # Release Note : features fixes
 
 #include "arduino_secrets.h"
 
@@ -81,6 +81,7 @@ bool thingsboard_enabled = true;
 #define UPDATE_THING_SPEAK_TH_AFTER 5
 #define ALLOW_CREATING_NEW_VARIABLE_FILE true
 #define CONFIG_FILE "/config.txt"
+#define SEND_MSG_ON_REBOOT true
 
 bool setPowerBoostKeepOn(int en) {
   Wire.beginTransmission(IP5306_ADDR);
@@ -392,10 +393,10 @@ void setup() {
   sms_allowed = hasPackage();
   Println("before syncSPIFFS: ");
   Println("after syncSPIFFS: ");
-  askTime();
+  updateTime();
   Println("after time request");
-  if (thingsboard_enabled)
-    initThingsBoard();
+  thingsboard_enabled ? initThingsBoard() : alert("Thingsboard is not enabled");
+  SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + rtc) : Println("");
 }
 
 void loop() {
@@ -1167,19 +1168,23 @@ void wait(unsigned int miliSeconds) {
     if (getMint() > last_ts_update_time) {
       // jobs which have to be execute after every 5 minutes
       if (wifiConnected()) {
-        if (wifi_working && thingspeak_enabled) {
-          Println(4, "Before Temperature Update");
-          updateThingSpeak(temperature, humidity);
-          last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
-          Println(4, "After temperature update");
+        if (wifi_working && (thingspeak_enabled || thingsboard_enabled)) {
+          if (thingspeak_enabled) {
+            Println(4, "Before Temperature Update");
+            updateThingSpeak(temperature, humidity);
+            last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
+            Println(4, "After temperature update");
+          }
           if (display_working) {
             updateBatteryParameters(updateBatteryStatus());
           }
+          if (thingsboard_enabled && !thingsboard_enabled) {
+            Delay(3000);
+            i += 3000;
+            updateMQTT((int)temperature, humidity);
+            Println(7, "After MQTT update");
+          }
         }
-        Delay(3000);
-        i += 3000;
-        updateMQTT((int)temperature, humidity);
-        Println(7, "After MQTT update");
       } else if (thingspeak_enabled) {
         connect_wifi();
         if (wifiConnected()) {
