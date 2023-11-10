@@ -1,6 +1,6 @@
-//$ last work 08/Nov/23 [12:45 PM]
-// # version 5.6.2
-// # Release Note : Unknow message is now readable by orangePi
+//$ last work 10/Nov/23 [04:36 PM]
+// # version 5.6.3
+// # Release Note : setTime issue
 
 #include "arduino_secrets.h"
 
@@ -75,7 +75,8 @@ TinyGsm modem(SerialAT);
 #define IP5306_ADDR 0x75
 #define IP5306_REG_SYS_CTL0 0x00
 
-#define THINGSPEAK_ENABLE true
+bool thingspeak_enabled = false;
+bool thingsboard_enabled = true;
 #define MAX_MESSAGES 15
 #define UPDATE_THING_SPEAK_TH_AFTER 5
 #define ALLOW_CREATING_NEW_VARIABLE_FILE true
@@ -378,24 +379,23 @@ void setup() {
   }
   delay(500);
   Println("after wifi connection");
+  syncSPIFFS(); // use it to update global variables from SPIFFS
+  Println("After SPIFFS sync");
   pinMode(LED, OUTPUT);
   delay(100);
-  if (THINGSPEAK_ENABLE && wifi_working) {
-    Println("\nThinkSpeak initializing...\n");
-    ThingSpeak.begin(espClient); // Initialize ThingSpeak
-    delay(500);
-    ThingSpeak.setField(4, random(1, 50)); // set any random value.
+  if (thingspeak_enabled && wifi_working) {
+    initThingSpeak();
   }
   Println("\nAfter ThingSpeak");
   //`...............................
   Println("Leaving setup with seconds : " + String(millis() / 1000));
   sms_allowed = hasPackage();
   Println("before syncSPIFFS: ");
-  syncSPIFFS(); // use it to update global variables from SPIFFS
   Println("after syncSPIFFS: ");
   askTime();
   Println("after time request");
-  client.setServer(mqtt_server, 1883);
+  if (thingsboard_enabled)
+    initThingsBoard();
 }
 
 void loop() {
@@ -728,8 +728,8 @@ void forwardMessage(int index) {
 }
 
 String getMobileNumberOfMsg(String index, bool newMessage) {
-  say("AT+CMGR=" + index);
-  String tempStr = getResponse();
+  say("AT+CMGR=" + index);        // ask to send the message at index
+  String tempStr = getResponse(); // read message at index and save it
   if (newMessage) {
     setTime(tempStr);
     if ((tempStr.indexOf("3374888420") != -1 && index.toInt() != 1) ||
@@ -766,7 +766,9 @@ void terminateLastMessage() {
     String mobileNumber =
         getMobileNumberOfMsg(String(current_target_index), false);
     if (!checkStack(current_target_index)) {
-      if (!companyMsg(mobileNumber)) {
+      if (!companyMsg(mobileNumber) &&
+          mobileNumber.indexOf("3374888420") != -1) {
+        // if its not company and self message
         sendSMS("Unable to execute sms no. {" + String(current_target_index) +
                 "} message : [ " +
                 removeNewline(temp_str.substring(
@@ -1116,7 +1118,7 @@ void updateVariablesValues(String str) {
         wifi_working = false;
       } else if (response == 1) {
         wifi_working = true;
-        if (THINGSPEAK_ENABLE && wifiConnected()) {
+        if (thingspeak_enabled && wifiConnected()) {
           Println(4, "\nThinkSpeak initializing in loop...\n");
           ThingSpeak.begin(espClient); // Initialize ThingSpeak
         }
@@ -1159,13 +1161,13 @@ void wait(unsigned int miliSeconds) {
       if (RTC.date == 0 && sms_allowed) {
         println("Time is not updated yet updating it");
         updateTime() ? alert("Time updated successfully #1148")
-                     : sendSMS("#setTime", "+923374888420");
+                     : alert("Time not updated #1164");
       }
     }
     if (getMint() > last_ts_update_time) {
       // jobs which have to be execute after every 5 minutes
       if (wifiConnected()) {
-        if (wifi_working && THINGSPEAK_ENABLE) {
+        if (wifi_working && thingspeak_enabled) {
           Println(4, "Before Temperature Update");
           updateThingSpeak(temperature, humidity);
           last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
@@ -1178,7 +1180,7 @@ void wait(unsigned int miliSeconds) {
         i += 3000;
         updateMQTT((int)temperature, humidity);
         Println(7, "After MQTT update");
-      } else if (THINGSPEAK_ENABLE) {
+      } else if (thingspeak_enabled) {
         connect_wifi();
         if (wifiConnected()) {
           wifi_working = true;
@@ -1204,7 +1206,6 @@ void wait(unsigned int miliSeconds) {
       Println(3, "\nValues are updated from message 1\n");
       messages_in_inbox = totalUnreadMessages();
       Delay(1000);
-      sendSMS("#setTime", "+923374888420");
       i += 1000;
       condition = true;
     }
@@ -1301,7 +1302,7 @@ void deleteMessages(String deleteCommand) {
   String targetCommand =
       deleteCommand.substring(deleteCommand.indexOf("delete") + 7, -1);
   // targetCommand = "3,4,5"
-  for (int i = 0; i <= targetCommand.length(); i++) {
+  for (int i = 0; i < targetCommand.length(); i++) {
     {
       if (targetCommand[i] == ',' || targetCommand[i] == ' ') {
         if (isNum(numHolder)) {
@@ -1570,15 +1571,6 @@ void inputManager(String command, int inputFrom) {
     println("Rebooting...");
     modem.restart();
     inputFrom == 3 ? command += "<executed>" : "";
-  } else if (command.indexOf("time") != -1) {
-    if (rtc.length() < 2) {
-      String tempTime =
-          "+CMGL: 1,\"REC "
-          "READ\",\"+923374888420\",\"\",\"23/08/14,17:21:05+20\"";
-      println("dummy time : [" + tempTime + "]");
-      setTime(tempTime);
-    }
-    println("Time String : " + rtc);
   } else if (command.indexOf("updateTime") != -1) {
     println("Updating time");
     // sendSMS("#setTime", "+923374888420");
@@ -1618,6 +1610,36 @@ void inputManager(String command, int inputFrom) {
     if (inputFrom == 3) {
       command += "<executed>";
       sendSMS(response);
+    }
+  } else if (command.indexOf("enable") != -1) {
+    // bool thingspeak_enabled = false;
+    // bool thingsboard_enabled = true;
+    if (command.indexOf("thingspeak") != -1 ||
+        command.indexOf("thingSpeak") != -1) {
+      thingspeak_enabled = true;
+      initThingSpeak();
+      updateSPIFFS("thingspeak_enabled", "1");
+    } else if (command.indexOf("thingsboard") != -1 ||
+               command.indexOf("thingsBoard") != -1) {
+      thingsboard_enabled = true;
+      updateSPIFFS("thingsboard_enabled", "1");
+      initThingsBoard();
+    } else {
+      println("You can only enable these services : "
+              "\n\t->thingspeak\n\t->thingsboard");
+    }
+  } else if (command.indexOf("disable") != -1) {
+    if (command.indexOf("thingspeak") != -1 ||
+        command.indexOf("thingSpeak") != -1) {
+      thingspeak_enabled = false;
+      updateSPIFFS("thingspeak_enabled", "0");
+    } else if (command.indexOf("thingsboard") != -1 ||
+               command.indexOf("thingsBoard") != -1) {
+      thingsboard_enabled = false;
+      updateSPIFFS("thingsboard_enabled", "0");
+    } else {
+      println("You can only disable these services : "
+              "\n\t->thingspeak\n\t->thingsboard");
     }
   }
   // TODO: help command should return all executable commands
@@ -1971,6 +1993,12 @@ void syncSPIFFS() {
   updateDebugger();
   DEBUGGING =
       getFileVariableValue("DEBUGGING", true).toInt() == 1 ? true : false;
+  thingspeak_enabled =
+      getFileVariableValue("thingspeak_enabled", true).toInt() == 1 ? true
+                                                                    : false;
+  thingsboard_enabled =
+      getFileVariableValue("thingsboard_enabled", true).toInt() == 1 ? true
+                                                                     : false;
 }
 
 void updateDebugger() {
@@ -2082,4 +2110,15 @@ void alert(String msg) {
 String removeNewline(String str) {
   str.replace("\n", " ");
   return str;
+}
+
+void initThingsBoard() {
+  println("\nThingsBoard initializing...\n");
+  client.setServer(mqtt_server, 1883);
+}
+void initThingSpeak() {
+  println("\nThinkSpeak initializing...\n");
+  ThingSpeak.begin(espClient); // Initialize ThingSpeak
+  delay(500);
+  ThingSpeak.setField(4, random(1, 50)); // set any random value.
 }
