@@ -1,6 +1,6 @@
-//$ last work 10/Nov/23 [06:43 PM]
-// # version 5.6.3.1
-// # Release Note : thingsboard_issue_fixed
+//$ last work 11/Nov/23 [08:00 PM]
+// # version 5.6.3.4
+// # Release Note : message delete bug fix
 
 #include "arduino_secrets.h"
 
@@ -75,8 +75,9 @@ TinyGsm modem(SerialAT);
 #define IP5306_ADDR 0x75
 #define IP5306_REG_SYS_CTL0 0x00
 
-bool thingspeak_enabled = false;
+bool thingspeak_enabled = true;
 bool thingsboard_enabled = true;
+bool thingspeak_turn = false;
 #define MAX_MESSAGES 15
 #define UPDATE_THING_SPEAK_TH_AFTER 5
 #define ALLOW_CREATING_NEW_VARIABLE_FILE true
@@ -384,7 +385,7 @@ void setup() {
   Println("After SPIFFS sync");
   pinMode(LED, OUTPUT);
   delay(100);
-  if (thingspeak_enabled && wifi_working) {
+  if (wifi_working) {
     initThingSpeak();
   }
   Println("\nAfter ThingSpeak");
@@ -768,7 +769,7 @@ void terminateLastMessage() {
         getMobileNumberOfMsg(String(current_target_index), false);
     if (!checkStack(current_target_index)) {
       if (!companyMsg(mobileNumber) &&
-          mobileNumber.indexOf("3374888420") != -1) {
+          mobileNumber.indexOf("3374888420") == -1) {
         // if its not company and self message
         sendSMS("Unable to execute sms no. {" + String(current_target_index) +
                 "} message : [ " +
@@ -1169,7 +1170,7 @@ void wait(unsigned int miliSeconds) {
       // jobs which have to be execute after every 5 minutes
       if (wifiConnected()) {
         if (wifi_working && (thingspeak_enabled || thingsboard_enabled)) {
-          if (thingspeak_enabled) {
+          if (thingspeak_enabled && (thingspeak_turn || !thingsboard_enabled)) {
             Println(4, "Before Temperature Update");
             updateThingSpeak(temperature, humidity);
             last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
@@ -1178,12 +1179,15 @@ void wait(unsigned int miliSeconds) {
           if (display_working) {
             updateBatteryParameters(updateBatteryStatus());
           }
-          if (thingsboard_enabled && !thingsboard_enabled) {
+          if (thingsboard_enabled &&
+              (!thingspeak_turn || !thingspeak_enabled)) {
             Delay(3000);
             i += 3000;
+            Println(7, "Before MQTT update");
             updateMQTT((int)temperature, humidity);
             Println(7, "After MQTT update");
           }
+          thingspeak_turn = !thingspeak_turn;
         }
       } else if (thingspeak_enabled) {
         connect_wifi();
@@ -1301,28 +1305,51 @@ void updateRTC() {
 }
 
 void deleteMessages(String deleteCommand) {
+  bool temp_bool;
+  deleteMessages(deleteCommand, &temp_bool);
+}
+
+void deleteMessages(String deleteCommand, bool *message_deleted) {
   // let say deleteCommand = "#delete 3,4,5"
   int num = 0;
   String numHolder = "";
   String targetCommand =
       deleteCommand.substring(deleteCommand.indexOf("delete") + 7, -1);
   // targetCommand = "3,4,5"
-  for (int i = 0; i < targetCommand.length(); i++) {
-    {
-      if (targetCommand[i] == ',' || targetCommand[i] == ' ') {
-        if (isNum(numHolder)) {
-          println("$Deleting message number : " + numHolder);
-          deleteMessage(numHolder.toInt());
-          numHolder = "";
-        } else {
-          println("Error in delete command");
-          println("numHolder : " + numHolder);
-        }
-      } else {
-        numHolder += targetCommand[i];
+  // check if the there is a number or empty space or not other wise print error
+  // message
+  bool condition_ = true;
+  for (int pointer_ = 0; condition_; pointer_++)
+    if (targetCommand[pointer_] != ' ')
+      if (targetCommand[pointer_] >= '0' && targetCommand[pointer_] <= '9')
+        condition_ = false;
+      else {
+        alert("Unable to delete messages {" + targetCommand + "} #1322");
+        *message_deleted = false;
+        return;
       }
+
+  for (int i = 0; i < targetCommand.length(); i++) {
+    if (targetCommand[i] == ',' || targetCommand[i] == ' ') {
+      if (isNum(numHolder)) {
+        println("$Deleting message number : " + numHolder);
+        deleteMessage(numHolder.toInt());
+        numHolder = "";
+      } else {
+        println("Error in delete command");
+        println("numHolder : " + numHolder);
+      }
+    } else {
+      numHolder += targetCommand[i];
     }
   }
+  if (numHolder.length() > 0) {
+    println("$$Deleting message number : " + numHolder);
+    deleteMessage(numHolder.toInt());
+    numHolder = "";
+    *message_deleted = true;
+  }
+  *message_deleted = true;
 }
 
 String fetchDetails(String str, String begin_end, int padding) {
@@ -1403,7 +1430,8 @@ String getCompleteString(String str, String target) {
 
 String fetchNumber(String str, char charToInclude) {
   String number = "";
-  Println(7, "Fetching number from : " + str);
+  (millis() / 1000) > 10 ? Println(7, "Fetching number from : " + str)
+                         : Println("");
   bool numberStart = false;
   for (int i = 0; i < str.length(); i++) {
     if (str[i] >= '0' && str[i] <= '9' ||
@@ -1411,11 +1439,14 @@ String fetchNumber(String str, char charToInclude) {
       number += str[i];
       numberStart = true;
     } else if (numberStart) {
-      Println(7, "Returning (fetchNumber) 1: " + number);
+      (millis() / 1000) > 10
+          ? Println(7, "Returning (fetchNumber) 1: " + number)
+          : Println("");
       return number;
     }
   }
-  Println(7, "Returning (fetchNumber) 2: " + number);
+  (millis() / 1000) > 10 ? Println(7, "Returning (fetchNumber) 2: " + number)
+                         : Println("");
   return number;
 }
 
@@ -1504,13 +1535,13 @@ void inputManager(String command, int inputFrom) {
     println("Here is the debugging status: ");
     Serial.println(
         "Debugging : " + String(allowed_debugging[0] ? "0: Wifi" : " ") +
-        String(allowed_debugging[1] ? "1: LCD" : " ") +
-        String(allowed_debugging[2] ? "2: SIM800L" : " ") +
-        String(allowed_debugging[3] ? "3: ThingSpeak" : " ") +
-        String(allowed_debugging[4] ? "4: Whatsapp" : " ") +
-        String(allowed_debugging[5] ? "5: BLE" : " ") +
-        String(allowed_debugging[6] ? "6: SPIFFS" : " ") +
-        String(allowed_debugging[7] ? "7: Orange pi" : " "));
+        String(allowed_debugging[1] ? "1: LCD " : " ") +
+        String(allowed_debugging[2] ? "2: SIM800L " : " ") +
+        String(allowed_debugging[3] ? "3: ThingSpeak " : " ") +
+        String(allowed_debugging[4] ? "4: Whatsapp " : " ") +
+        String(allowed_debugging[5] ? "5: BLE " : " ") +
+        String(allowed_debugging[6] ? "6: SPIFFS " : " ") +
+        String(allowed_debugging[7] ? "7: Orange pi " : " "));
   } else if (command.indexOf("#setting") != -1) {
     updateVariablesValues(command);
     deleteMessage(1);
@@ -1551,8 +1582,9 @@ void inputManager(String command, int inputFrom) {
     forwardMessage(fetchNumber(getCompleteString(command, "forward")));
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("delete") != -1) { // to delete message
-    deleteMessages(command);
-    inputFrom == 3 ? command += "<executed>" : "";
+    bool messages_deleted;
+    deleteMessages(command, &messages_deleted);
+    messages_deleted ? inputFrom == 3 ? command += "<executed>" : "" : "";
   } else if (command.indexOf("terminator") != -1) {
     terminateLastMessage();
     inputFrom == 3 ? command += "<executed>" : "";
@@ -1729,6 +1761,10 @@ String getServerPath(String message) {
 }
 
 int getMessagesCounter() {
+  if (!thingspeak_enabled) {
+    error("Unable to update field thingspeak functionality is disabled #1737");
+    return -1;
+  }
   int todayMessages = -1;
   int lastUpdateOfThingSpeakMessageCounter =
       getThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD);
@@ -1747,16 +1783,21 @@ int getMessagesCounter() {
 }
 
 int getThingSpeakFieldData(int fieldNumber) {
-  int data = ThingSpeak.readIntField(ts_channel_id, fieldNumber);
-  int statusCode = ThingSpeak.getLastReadStatus();
-  if (statusCode == 200) {
-    Println(5, "Data fetched from field : " + String(fieldNumber));
+  if (thingspeak_enabled) {
+    int data = ThingSpeak.readIntField(ts_channel_id, fieldNumber);
+    int statusCode = ThingSpeak.getLastReadStatus();
+    if (statusCode == 200) {
+      Println(5, "Data fetched from field : " + String(fieldNumber));
+    } else {
+      Println(5,
+              "Problem reading channel. HTTP error code " + String(statusCode));
+      data = -1;
+    }
+    return data;
   } else {
-    Println(5,
-            "Problem reading channel. HTTP error code " + String(statusCode));
-    data = -1;
+    error("Unable to update field thingspeak functionality is disabled #1775");
+    return -1;
   }
-  return data;
 }
 
 void updateWhatsappMessageCounter() {
@@ -1766,15 +1807,23 @@ void updateWhatsappMessageCounter() {
 }
 
 void setThingSpeakFieldData(int field, int data) {
-  ThingSpeak.setField(field, data);
+  if (thingspeak_enabled)
+    ThingSpeak.setField(field, data);
+  else
+    error("Unable to update field thingspeak functionality "
+          "is disabled #1775");
 }
 
 void writeThingSpeakData() {
-  int updateStatus = ThingSpeak.writeFields(ts_channel_id, ts_api_key);
-  if (updateStatus == 200) {
-    Println(4, "ThingSpeak update successfully...");
+  if (thingspeak_enabled) {
+    int updateStatus = ThingSpeak.writeFields(ts_channel_id, ts_api_key);
+    if (updateStatus == 200) {
+      Println(4, "ThingSpeak update successfully...");
+    } else {
+      Println(4, "Error updating ThingSpeak. Status: " + String(updateStatus));
+    }
   } else {
-    Println(4, "Error updating ThingSpeak. Status: " + String(updateStatus));
+    error("Unable to update field thingspeak functionality is disabled #1787");
   }
 }
 
