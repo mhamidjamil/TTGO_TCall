@@ -1,8 +1,6 @@
 //$ last work 11/Nov/23 [08:48 PM]
-// # version 5.6.3
+// # version 5.6.3.5
 // # Release Note : message delete bug fix
-
-//% moving toward library concept
 
 #include "arduino_secrets.h"
 
@@ -114,9 +112,10 @@ unsigned int last_update = 0; // in minutes
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-String end_value = "  ";
-String line_1 = "Temp: 00.0 C";
-String line_2 = "                ";
+String end_value = "=";
+String line_1 = "098 ";
+String line_2 = "786";
+String last_line = "Not initialized";
 
 String received_message = ""; // Global variable to store received message
 double battery_voltage = 0;
@@ -259,7 +258,7 @@ void setThingSpeakFieldData(int field, int data);
 void writeThingSpeakData();
 unsigned int getMint();
 String getHTTPString(String message);
-
+//! outdated
 // # ......... < functions .......
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -439,11 +438,10 @@ void loop() {
     dtostrf(temperature, 4, 1, temperatureStr);
     Println("after DHT conversion");
 
-    line_1 = line_1.substring(0, 6) + String(temperatureStr) + " C  " +
-             end_value + " ";
-    Println("after line 1");
+    line_1 = String(temperatureStr) + " C " + String(humidity) + " % " +
+             thingSpeakLastUpdate();
+    line_2 = last_line + " " + end_value;
 
-    line_2 = "Hu: " + String(humidity) + " % / " + thingSpeakLastUpdate();
     Println("before lcd call");
     Delay(100);
     lcdPrint();
@@ -910,7 +908,6 @@ bool messageExists(int index) {
 //`..................................
 void connect_wifi() {
   if (String(ssid).indexOf("skip") != -1 && wifi_working) {
-    end_value.setCharAt(0, 'Z');
     return;
   }
   WiFi.begin(ssid, password); // Connect to Wi-Fi
@@ -920,15 +917,10 @@ void connect_wifi() {
       break;
     }
     Delay(500);
-    end_value.setCharAt(0, '?');
-    Delay(500);
-    end_value.setCharAt(0, ' ');
   }
   if (wifiConnected()) {
-    end_value.setCharAt(0, '*');
     println("Wi-Fi connected successfully");
   } else {
-    end_value.setCharAt(0, '!');
     digitalWrite(LED, LOW);
   }
 }
@@ -980,7 +972,6 @@ void errorMsg() {
   // set curser to first row, first last column and print "tick symbol"
   digitalWrite(LED, LOW);
   end_value.setCharAt(1, '-');
-  end_value.setCharAt(1, 'e');
   connect_wifi();
 }
 
@@ -1479,6 +1470,23 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("py_time:") != -1) {
+    println("***Received time from terminal setting up time...");
+    rtc = command.substring(command.indexOf("py_time:") + 8, -1);
+    println("Fetching time from: <" + rtc + ">");
+    setTime();
+    rtc = "";
+  } else if (command.indexOf("hay ttgo-tcall!") != -1) {
+    println("`````````````````````````````````");
+    println("Message from Orange Pi:");
+    println(command);
+    // it will receive command like this {hay ttgo-tcall! Fajir 5:42 AM}
+    // and i want to upload Fajir 5:42 AM in last_line variable
+    if (command.indexOf("AM") != -1 || command.indexOf("PM") != -1)
+      last_line =
+          command.substring(command.indexOf("!") + 1, command.indexOf("}"));
+    println("`````````````````````````````````");
+
   } else if (command.indexOf("value of:") != -1) {
     String varName =
         getVariableName(command.substring(command.indexOf(":")), ":");
@@ -1497,12 +1505,6 @@ void inputManager(String command, int inputFrom) {
       updateSPIFFS(varName, newValue);
     }
     Println(7, "\t\t ###leaving else part #### \n");
-  } else if (command.indexOf("py_time:") != -1) {
-    println("***Received time from terminal setting up time...");
-    rtc = command.substring(command.indexOf("py_time:") + 8, -1);
-    println("Fetching time from: <" + rtc + ">");
-    setTime();
-    rtc = "";
   } else if (command.indexOf("time?") != -1) {
     println("Hour : " + String(RTC.hour) + " Minutes : " + String(RTC.minutes) +
             " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
@@ -1638,12 +1640,6 @@ void inputManager(String command, int inputFrom) {
       println("Message: " + readMessage(targetMsg));
     else
       println("Message not Exists");
-  } else if (command.indexOf("hay ttgo-tcall!") != -1) {
-    println("`````````````````````````````````");
-    println("Message from Orange Pi:");
-    println(command);
-    println("`````````````````````````````````");
-
   } else if (command.indexOf("my_ip") != -1 || command.indexOf("my ip") != -1) {
     String response = askOrangPi("send ip");
     if (inputFrom == 3) {

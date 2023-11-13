@@ -2170,6 +2170,7 @@ void initThingsBoard() {
   println("\nThingsBoard initializing...\n");
   client.setServer(mqtt_server, 1883);
 }
+
 void initThingSpeak() {
   println("\nThinkSpeak initializing...\n");
   ThingSpeak.begin(espClient); // Initialize ThingSpeak
