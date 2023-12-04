@@ -1,6 +1,6 @@
-//$ last work 03/Dec/23 [06:02 PM]
-// # version 5.6.4.1
-// # Release Note : message package rework, authentic messages will be executed
+//$ last work 04/Dec/23 [12:21 AM]
+// # version 5.6.4.2
+// # Release Note : OrangePi will save debugging logs
 
 #include "arduino_secrets.h"
 
@@ -2003,7 +2003,7 @@ void updateSPIFFS(String variableName, String newValue) {
 
 bool hasPackage() {
   int expiryDate = 0, expiryMonth = 0;
-  if (RTC.date != 0) {
+  if (RTC.date != 0) { // if time is initialized
     if (package_expiry_date == 0)
       package_expiry_date = getFileVariableValue("packageExpiryDate").toInt();
     Println(7, "Package expiry date fetched from file: " +
@@ -2022,9 +2022,12 @@ bool hasPackage() {
   } else {
     if (updateTime())
       hasPackage();
-    else
+    else {
       alert("Unable to update time from orange pi #1912");
+      error_codes += " 1912";
+    }
     Println(7, "Set Time First!");
+    return false;
   }
   setField_MonthAndDate(package_expiry_date, expiryMonth, expiryDate);
   if (RTC.month <= expiryMonth && RTC.month != 0) {
@@ -2056,6 +2059,10 @@ void setField_MonthAndDate(int &field, int &month, int &date) {
     Println(7, "\tError in setField_MonthAndDate function!");
     Println(7, "Recived data => field: " + String(field) +
                    " month: " + String(month) + " date: " + String(date));
+    saveItOrangePi("Error in setField_MonthAndDate function! here is the "
+                   "data function received: field: " +
+                   String(field) + " month: " + String(month) +
+                   " date: " + String(date));
     error_codes += "1855";
   }
 }
@@ -2116,6 +2123,11 @@ void updateMQTT(int temperature_, int humidity_) {
 
 void toOrangePi(String str) {
   println("{hay orange-pi! " + removeNewline(str) + "}");
+}
+
+String saveItOrangePi(String str) {
+  toOrangePi("[#SaveIt]:" + "\n\n" + "TimeStamp: " + String(millis() / 1000) +
+             "\nData:{" + str + "}\n\n");
 }
 
 String askOrangPi(String str) {
