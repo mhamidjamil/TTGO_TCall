@@ -1,8 +1,6 @@
 //$ last work 11/Nov/23 [08:48 PM]
-// # version 5.6.3
+// # version 5.6.3.5
 // # Release Note : message delete bug fix
-
-//% moving toward library concept
 
 #include "arduino_secrets.h"
 

@@ -1,12 +1,13 @@
-//$ last work 11/Nov/23 [08:48 PM]
-// # version 5.6.3.5
-// # Release Note : message delete bug fix
+//$ last work 04/Dec/23 [12:21 AM]
+// # version 5.6.4.2
+// # Release Note : OrangePi will save debugging logs
 
 #include "arduino_secrets.h"
 
 const char simPIN[] = "";
 
 String my_number = MY_Number;
+String byPass_key_from_orangePi = "";
 
 #include <HTTPClient.h>
 
@@ -112,9 +113,10 @@ unsigned int last_update = 0; // in minutes
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-String end_value = "  ";
-String line_1 = "Temp: 00.0 C";
-String line_2 = "                ";
+String end_value = "=";
+String line_1 = "098 ";
+String line_2 = "786";
+String last_line = "Not initialized";
 
 String received_message = ""; // Global variable to store received message
 double battery_voltage = 0;
@@ -173,6 +175,7 @@ bool mqtt_connected = false;
 
 struct RTC {
   // Final data : 23/08/26,05:38:34+20
+  int year = 0; // year will be 23
   int milliSeconds = 0;
   int month = 0;   // month will be 08
   int date = 0;    // date will be 26
@@ -257,7 +260,7 @@ void setThingSpeakFieldData(int field, int data);
 void writeThingSpeakData();
 unsigned int getMint();
 String getHTTPString(String message);
-
+//! outdated
 // # ......... < functions .......
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -398,6 +401,7 @@ void setup() {
   Println("after time request");
   thingsboard_enabled ? initThingsBoard() : alert("Thingsboard is not enabled");
   SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + rtc) : Println("");
+  setBypassKey(askOrangPi("send bypass key"));
 }
 
 void loop() {
@@ -437,11 +441,10 @@ void loop() {
     dtostrf(temperature, 4, 1, temperatureStr);
     Println("after DHT conversion");
 
-    line_1 = line_1.substring(0, 6) + String(temperatureStr) + " C  " +
-             end_value + " ";
-    Println("after line 1");
+    line_1 = String(temperatureStr) + " C " + String(humidity) + " % " +
+             thingSpeakLastUpdate();
+    line_2 = last_line + " " + end_value;
 
-    line_2 = "Hu: " + String(humidity) + " % / " + thingSpeakLastUpdate();
     Println("before lcd call");
     Delay(100);
     lcdPrint();
@@ -588,56 +591,53 @@ String getResponse() {
     response += SerialAT.readString();
   }
   Println(3, "After while loop in get response");
-  if (response.indexOf("+CMTI:") != -1) {
+  if (response.indexOf("+CMTI:") != -1) { // new message
     messages_in_inbox++;
     int newMessageNumber = getNewMessageNumber(response);
     String senderNumber = getMobileNumberOfMsg(String(newMessageNumber), true);
     if (senderNumber.indexOf("3374888420") == -1) {
       // if message is not send by module it self
-      String temp_str = executeCommand(
-          removeNewline(removeOk(readMessage(newMessageNumber))));
-      println("New message [ " + temp_str + "]");
-      if (temp_str.indexOf("<executed>") != -1)
+      String _message_ =
+          (removeNewline(removeOk(readMessage(newMessageNumber))));
+      if (senderIsAuthentic(senderNumber, _message_))
+        _message_ = executeCommand(_message_);
+      println("New message [ " + _message_ + "]");
+      if (_message_.indexOf("<executed>") != -1)
         deleteMessage(newMessageNumber);
-      else {
+      else { // message is not executed
         if (!companyMsg(senderNumber)) {
+          if (newPackageSubscribed(_message_)) {
+            // ~ part not belongs to this condition just for testing
+            // increment 30 days in date and month or just month
+            updatePackageSubscribedDate();
+          }
           sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
                   "} message : > [ " +
-                  removeNewline(temp_str.substring(
-                      0, temp_str.indexOf(" <not executed>"))) +
+                  removeNewline(_message_.substring(
+                      0, _message_.indexOf(" <not executed>"))) +
                   " ] from : " + senderNumber);
-          toOrangePi("untrained_message:" + removeNewline(temp_str) +
+          toOrangePi("untrained_message:" + removeNewline(_message_) +
                      " from : {_" + senderNumber + "_}<_" +
                      String(newMessageNumber) + "_>");
         } else {
           Println(3, "Company message received deleting it...");
           sendSMS("<Unable to execute new sms no. {" +
                   String(newMessageNumber) + "} message : > [ " +
-                  temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                  _message_.substring(0, _message_.indexOf(" <not executed>")) +
                   " ] from : " + senderNumber + ". deleting it...");
-          if (newPackageSubscribed(temp_str) &&
-              updateTime()) { // ~ part belongs to else part
+          if (newPackageSubscribed(_message_)) { // ~ part belongs to else part
             // increment 30 days in date and month or just month
-            int field_7_data = getThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE);
-            int previous_month = 0, previous_day = 0;
-            setField_MonthAndDate(field_7_data, previous_month, previous_day);
-            // TODO: what if field's value is 0
-            Println(3, "Previous Month : " + String(previous_month) +
-                           " and previous day : " + String(previous_day));
-            field_7_data =
-                10000 + (((previous_month + 1) * 100) + (previous_day - 1));
-            updateSPIFFS("packageExpiryDate", String(field_7_data));
-            setThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE, field_7_data);
-            package_expiry_date = field_7_data;
-            writeThingSpeakData();
+            updatePackageSubscribedDate();
           }
-          deleteMessage(newMessageNumber);
+          if (sms_allowed)
+            deleteMessage(newMessageNumber);
         }
       }
     } else {
       Println(3, "skipping message from : " + senderNumber);
+      deleteMessage(newMessageNumber);
     }
-  } else if (response.indexOf("+CLIP:") != -1) {
+  } else if (response.indexOf("+CLIP:") != -1) { // miss call
     //+CLIP: "03354888420",161,"",0,"",0
     String temp_str = "Missed call from : " + fetchDetails(response, "\"", 1);
     sendSMS(temp_str);
@@ -908,7 +908,6 @@ bool messageExists(int index) {
 //`..................................
 void connect_wifi() {
   if (String(ssid).indexOf("skip") != -1 && wifi_working) {
-    end_value.setCharAt(0, 'Z');
     return;
   }
   WiFi.begin(ssid, password); // Connect to Wi-Fi
@@ -918,15 +917,10 @@ void connect_wifi() {
       break;
     }
     Delay(500);
-    end_value.setCharAt(0, '?');
-    Delay(500);
-    end_value.setCharAt(0, ' ');
   }
   if (wifiConnected()) {
-    end_value.setCharAt(0, '*');
     println("Wi-Fi connected successfully");
   } else {
-    end_value.setCharAt(0, '!');
     digitalWrite(LED, LOW);
   }
 }
@@ -970,15 +964,14 @@ void updateThingSpeak(float temperature, int humidity) {
 void successMsg() {
   // set curser to first row, first last column and print "tick symbol"
   digitalWrite(LED, HIGH);
-  end_value.setCharAt(1, '+');
+  end_value = "+";
   last_update = (millis() / 1000);
 }
 
 void errorMsg() {
   // set curser to first row, first last column and print "tick symbol"
   digitalWrite(LED, LOW);
-  end_value.setCharAt(1, '-');
-  end_value.setCharAt(1, 'e');
+  end_value = "-";
   connect_wifi();
 }
 
@@ -1245,10 +1238,10 @@ void setTime() { // this function will set RTC struct using rtc string
   int tempDate = RTC.date;
   String datePart = rtc.substring(0, rtc.indexOf(",")); // 23/08/26
   Println("fetched date : " + datePart);
-  String date_ = (datePart.substring(datePart.indexOf("/") + 1)); // 08/26
-  Println("fetched date_ : " + date_);
-  RTC.month = date_.substring(0, datePart.indexOf("/")).toInt(); // 08
-  RTC.date = date_.substring(datePart.indexOf("/") + 1).toInt(); // 26
+  RTC.year = datePart.substring(0, datePart.indexOf("/")).toInt(); // 23
+  String date_ = (datePart.substring(datePart.indexOf("/") + 1));  // 08/26
+  RTC.month = date_.substring(0, datePart.indexOf("/")).toInt();   // 08
+  RTC.date = date_.substring(datePart.indexOf("/") + 1).toInt();   // 26
 
   String timePart = rtc.substring(rtc.indexOf(",") + 1);       // 05:38:34+20
   String time_ = timePart.substring(0, timePart.indexOf("+")); // 05:38:34
@@ -1469,7 +1462,10 @@ int fetchNumber(String str) {
 }
 
 void inputManager(String command, int inputFrom) {
-  // input from indicated from where the input is coming BLE, Serial or sms
+  // when you ant to ad new command just try to add as above as you can and make
+  // sure you dont make any conflict with pre use strings.
+
+  //  inputFrom tell who's this function user 1:BLE, 2:Serial or 3:sms
   if (command.indexOf("smsTo") != -1) {
     String strSms =
         command.substring(command.indexOf("[") + 1, command.indexOf("]"));
@@ -1477,6 +1473,35 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if ((command.indexOf("check sms sending") != -1) ||
+             (command.indexOf("sms sending?") != -1)) {
+    //
+
+  } else if (command.indexOf("py_time:") != -1) {
+    println("***Received time from terminal setting up time...");
+    rtc = command.substring(command.indexOf("py_time:") + 8, -1);
+    println("Fetching time from: <" + rtc + ">");
+    setTime();
+    rtc = "";
+  } else if (command.indexOf("hay ttgo-tcall!") !=
+             -1) { // message from orangePi
+    println("`````````````````````````````````");
+    println("Message from Orange Pi:");
+    println(command);
+    // it will receive command like this {hay ttgo-tcall! Fajir 5:42 AM}
+    // and i want to upload Fajir 5:42 AM in last_line variable
+    if (command.indexOf("AM") != -1 || command.indexOf("PM") != -1)
+      last_line =
+          command.substring(command.indexOf("!") + 1, command.indexOf("}"));
+    println("`````````````````````````````````");
+    if (command.indexOf("by pass key:") != -1) {
+      // {hay ttgo-tcall! by pass key: QWERTY}
+      println("Bypass key received");
+      byPass_key_from_orangePi =
+          command.substring(command.indexOf(":") + 1, command.indexOf("}"));
+      println("Bypass key : " + byPass_key_from_orangePi);
+    }
+
   } else if (command.indexOf("value of:") != -1) {
     String varName =
         getVariableName(command.substring(command.indexOf(":")), ":");
@@ -1495,12 +1520,6 @@ void inputManager(String command, int inputFrom) {
       updateSPIFFS(varName, newValue);
     }
     Println(7, "\t\t ###leaving else part #### \n");
-  } else if (command.indexOf("py_time:") != -1) {
-    println("***Received time from terminal setting up time...");
-    rtc = command.substring(command.indexOf("py_time:") + 8, -1);
-    println("Fetching time from: <" + rtc + ">");
-    setTime();
-    rtc = "";
   } else if (command.indexOf("time?") != -1) {
     println("Hour : " + String(RTC.hour) + " Minutes : " + String(RTC.minutes) +
             " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
@@ -1636,12 +1655,6 @@ void inputManager(String command, int inputFrom) {
       println("Message: " + readMessage(targetMsg));
     else
       println("Message not Exists");
-  } else if (command.indexOf("hay ttgo-tcall!") != -1) {
-    println("`````````````````````````````````");
-    println("Message from Orange Pi:");
-    println(command);
-    println("`````````````````````````````````");
-
   } else if (command.indexOf("my_ip") != -1 || command.indexOf("my ip") != -1) {
     String response = askOrangPi("send ip");
     if (inputFrom == 3) {
@@ -1699,6 +1712,10 @@ bool companyMsg(String mobileNumber) {
   else if (mobileNumber.indexOf("Zong") != -1)
     return true;
   else if (mobileNumber.indexOf("Ufone") != -1)
+    return true;
+  else if (mobileNumber.indexOf("8011") != -1) // UPaisa
+    return true;
+  else if (mobileNumber.indexOf("8558") != -1) // Jazz Cash
     return true;
   else if (mobileNumber.indexOf("Warid") != -1)
     return true;
@@ -1986,7 +2003,7 @@ void updateSPIFFS(String variableName, String newValue) {
 
 bool hasPackage() {
   int expiryDate = 0, expiryMonth = 0;
-  if (RTC.date != 0) {
+  if (RTC.date != 0) { // if time is initialized
     if (package_expiry_date == 0)
       package_expiry_date = getFileVariableValue("packageExpiryDate").toInt();
     Println(7, "Package expiry date fetched from file: " +
@@ -2005,9 +2022,12 @@ bool hasPackage() {
   } else {
     if (updateTime())
       hasPackage();
-    else
+    else {
       alert("Unable to update time from orange pi #1912");
+      error_codes += " 1912";
+    }
     Println(7, "Set Time First!");
+    return false;
   }
   setField_MonthAndDate(package_expiry_date, expiryMonth, expiryDate);
   if (RTC.month <= expiryMonth && RTC.month != 0) {
@@ -2039,6 +2059,10 @@ void setField_MonthAndDate(int &field, int &month, int &date) {
     Println(7, "\tError in setField_MonthAndDate function!");
     Println(7, "Recived data => field: " + String(field) +
                    " month: " + String(month) + " date: " + String(date));
+    saveItOrangePi("Error in setField_MonthAndDate function! here is the "
+                   "data function received: field: " +
+                   String(field) + " month: " + String(month) +
+                   " date: " + String(date));
     error_codes += "1855";
   }
 }
@@ -2101,6 +2125,11 @@ void toOrangePi(String str) {
   println("{hay orange-pi! " + removeNewline(str) + "}");
 }
 
+String saveItOrangePi(String str) {
+  toOrangePi("[#SaveIt]:" + "\n\n" + "TimeStamp: " + String(millis() / 1000) +
+             "\nData:{" + str + "}\n\n");
+}
+
 String askOrangPi(String str) {
   toOrangePi(str + "?");
   wait(500);
@@ -2112,13 +2141,12 @@ String replyOfOrangePi() {
   String reply = "";
   while (
       (!(reply.indexOf("hay ttgo-tcall!") != -1 && reply.indexOf("}") != -1)) &&
-      (millis() / 1000) - startTime < 10) {
+      (millis() / 1000) - startTime < ORANGEPI_RESPONSE_WAIT_TIME) {
     if (SerialMon.available()) {
       reply += SerialMon.readString();
     }
   }
-  Println(8,
-          "Reply of Orange Pi : {" + reply + "}"); // TODO: orange-pi debugger
+  println("Reply of Orange Pi : {" + reply + "}"); // TODO: orange-pi debugger
   return reply;
 }
 
@@ -2170,9 +2198,77 @@ void initThingsBoard() {
   println("\nThingsBoard initializing...\n");
   client.setServer(mqtt_server, 1883);
 }
+
 void initThingSpeak() {
   println("\nThinkSpeak initializing...\n");
   ThingSpeak.begin(espClient); // Initialize ThingSpeak
   delay(500);
   ThingSpeak.setField(4, random(1, 50)); // set any random value.
+}
+
+void updatePackageSubscribedDate() {
+  int field_7_data;
+  if (RTC.month == 0) { // should not execute
+    alert("module time is not updated so using thingSpeak value");
+    field_7_data = getThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE);
+    int previous_month = 0, previous_day = 0;
+    setField_MonthAndDate(field_7_data, previous_month, previous_day);
+    field_7_data = 10000 + (((previous_month + 1) * 100) + (previous_day - 1));
+  } else {
+    print("Using module's time, Month: " + String(RTC.month) +
+          ", Day: " + String(RTC.date) + "to -> ");
+    field_7_data = 10000 + (RTC.month + 1 < 13 ? (RTC.month + 1) * 100 : 100) +
+                   getMonthDaysCount(RTC.month, RTC.year);
+    println(String(field_7_data));
+    println("!!!!!!!!!!***!!!!!!!!!!\n");
+  }
+  updateSPIFFS("packageExpiryDate", String(field_7_data));
+  setThingSpeakFieldData(TS_PACKAGE_EXPIRY_DATE, field_7_data);
+  package_expiry_date = field_7_data;
+  writeThingSpeakData(); //! FIXME: what if it fails?
+}
+
+int getMonthDaysCount(int month, int year) {
+  if (month == 2) {
+    if (year % 4 == 0)
+      return 29;
+    else
+      return 28;
+  } else if (month == 4 || month == 6 || month == 9 || month == 11)
+    return 30;
+  else
+    return 31;
+}
+
+bool senderIsAuthentic(String number, String message) {
+  if (companyMsg(number))
+    return false;
+  if (String(AUTHENTIC_NUMBERS).indexOf(number) != -1)
+    return true;
+  else if (number.length() > 10) {
+    if (message.indexOf(BYPASS_KEY))
+      return true;
+
+    byPass_key_from_orangePi.length() <= 0
+        ? setBypassKey(askOrangPi("send bypass key")),
+        "" : "";
+    if (message.indexOf(byPass_key_from_orangePi) != -1) {
+      return true;
+    }
+    byPass_key_from_orangePi.length() > 0
+        ? sendSMS("Unauthorized number : {" + number +
+                  "} tried to access your device if he is "
+                  "authorized then ask him to use this key in his message : " +
+                  byPass_key_from_orangePi)
+        : error("#2240 unexpected error occur, unable to deal with authentic "
+                "message"),
+        sendSMS("Error #2240");
+  }
+  return false;
+}
+
+void setBypassKey(String tempStr) {
+  byPass_key_from_orangePi =
+      tempStr.substring(tempStr.indexOf(":") + 1, tempStr.indexOf("}"));
+  println("Bypass key : " + byPass_key_from_orangePi);
 }
