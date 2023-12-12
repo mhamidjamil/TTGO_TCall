@@ -1,4 +1,4 @@
-//$ last work 04/Dec/23 [12:21 AM]
+//$ last work 04/Dec/23 [12:02 AM]
 // # version 5.6.4.2
 // # Release Note : OrangePi will save debugging logs
 
@@ -8,8 +8,6 @@ const char simPIN[] = "";
 
 String my_number = MY_Number;
 String byPass_key_from_orangePi = "";
-
-#include <HTTPClient.h>
 
 String whatsapp_numbers[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2,
                               WHATSAPP_NUMBER_3, WHATSAPP_NUMBER_4};
@@ -29,6 +27,7 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #include <Wire.h>
 //`===================================
 #include <DHT.h>
+#include <HTTPClient.h>
 #include <ThingSpeak.h>
 #include <WiFi.h>
 #include <random>
@@ -83,6 +82,7 @@ bool thingspeak_turn = false;
 #define UPDATE_THING_SPEAK_TH_AFTER 5
 #define ALLOW_CREATING_NEW_VARIABLE_FILE true
 #define CONFIG_FILE "/config.txt"
+const String relayControllerURL = "http://192.168.0.7/?minute";
 #define SEND_MSG_ON_REBOOT true
 
 bool setPowerBoostKeepOn(int en) {
@@ -1473,6 +1473,10 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (command.indexOf("switch") != -1 &&
+             (command.indexOf("off") != -1 || command.indexOf("on") != -1)) {
+    relayControllerManager(command);
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if ((command.indexOf("check sms sending") != -1) ||
              (command.indexOf("sms sending?") != -1)) {
     //
@@ -2126,8 +2130,9 @@ void toOrangePi(String str) {
 }
 
 String saveItOrangePi(String str) {
-  toOrangePi("[#SaveIt]:" + "\n\n" + "TimeStamp: " + String(millis() / 1000) +
-             "\nData:{" + str + "}\n\n");
+  toOrangePi(String("[#SaveIt]:\n\n") +
+             "TimeStamp: " + String(millis() / 1000) + "\n" + str);
+  // TODO: add this part to orange pi
 }
 
 String askOrangPi(String str) {
@@ -2271,4 +2276,50 @@ void setBypassKey(String tempStr) {
   byPass_key_from_orangePi =
       tempStr.substring(tempStr.indexOf(":") + 1, tempStr.indexOf("}"));
   println("Bypass key : " + byPass_key_from_orangePi);
+}
+
+void relayControllerManager(String switchNumber, String time) {
+  String newRequest = relayControllerURL + switchNumber + "=" + time;
+  println("Final URL: [" + newRequest + "]");
+  HTTPClient localRequest;
+  localRequest.begin(newRequest);
+
+  int httpResponseCode = localRequest.GET();
+  if (httpResponseCode > 0) {
+    Serial.print("HTTP Response code: ");
+    Serial.println(httpResponseCode);
+    String payload = localRequest.getString();
+    Serial.println("Response payload: " + payload);
+    sendSMS("Request sent for switch: " + switchNumber + " time: " + time +
+            " minutes");
+  } else {
+    Serial.print("Error in HTTP GET request. HTTP Response code: ");
+    Serial.println(httpResponseCode);
+    sendSMS("Request failed for switch: " + switchNumber + " time: " + time +
+            " minutes");
+  }
+
+  localRequest.end();
+}
+
+void relayControllerManager(String input) {
+  // input should be like this:
+  // on switch 1 for 10 (10 is time in minutes)
+  // or
+  // on/off switch 1
+  String switchNumber =
+      String(fetchNumber(input.substring(input.indexOf("switch") + 7, -1)));
+  String time = "";
+  if (input.indexOf("for") != -1) {
+    time = String(fetchNumber(input.substring(input.indexOf("for") + 4, -1)));
+  }
+  if (input.indexOf("on") != -1) {
+    if (time.length() > 0) {
+      relayControllerManager(switchNumber, time);
+    } else { // common case
+      relayControllerManager(switchNumber, "998");
+    }
+  } else if (input.indexOf("off") != -1) {
+    relayControllerManager(switchNumber, "-1");
+  }
 }
