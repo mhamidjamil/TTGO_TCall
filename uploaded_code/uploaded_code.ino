@@ -1,6 +1,7 @@
-//$ last work 04/Dec/23 [12:02 AM]
-// # version 5.6.4.2
-// # Release Note : OrangePi will save debugging logs
+//$ last work 02/Jan/24 [01:18 AM]
+// # version 5.6.6
+// # Release Note: Rework: Communication with orange pi
+//& message package_expiry_date work & unknow sender restrictions
 
 #include "arduino_secrets.h"
 
@@ -150,6 +151,7 @@ bool wifi_working = true;
 bool display_working = true;
 bool sms_allowed = false;
 int package_expiry_date = 0;
+bool connected_with_pi = false;
 // 10921 => 09 = month, 21 = day
 
 String messageTemplate = "#setting <ultra sound alerts 0> <display 1> <wifi "
@@ -601,6 +603,8 @@ String getResponse() {
           (removeNewline(removeOk(readMessage(newMessageNumber))));
       if (senderIsAuthentic(senderNumber, _message_))
         _message_ = executeCommand(_message_);
+      else
+        println("Unauthorize sender, message {" + _message_ + "} not executed");
       println("New message [ " + _message_ + "]");
       if (_message_.indexOf("<executed>") != -1)
         deleteMessage(newMessageNumber);
@@ -634,7 +638,7 @@ String getResponse() {
         }
       }
     } else {
-      Println(3, "skipping message from : " + senderNumber);
+      Println(3, "skipping message from: " + senderNumber);
       deleteMessage(newMessageNumber);
     }
   } else if (response.indexOf("+CLIP:") != -1) { // miss call
@@ -759,33 +763,48 @@ void terminateLastMessage() {
   if (current_target_index == firstMessageIndex() || current_target_index <= 1)
     return;
   println("work index : " + String(current_target_index));
-  String temp_str = executeCommand(removeOk(readMessage(current_target_index)));
-  println("Last message [ " + temp_str + "]");
-  if (temp_str.indexOf("<executed>") != -1) {
+  String _message_ = (removeOk(readMessage(current_target_index)));
+  String mobileNumber =
+      getMobileNumberOfMsg(String(current_target_index), true);
+  if (senderIsAuthentic(mobileNumber, _message_))
+    _message_ = executeCommand(_message_);
+  else
+    println("Terminator has skiped message: {" + String(current_target_index) +
+            "} Because it is not supposed to be executed #771");
+  println("Last message [ " + _message_ + "]");
+  if (_message_.indexOf("<executed>") != -1) {
     deleteMessage(current_target_index);
     println("Message {" + String(current_target_index) + "} deleted");
-  } else { // if the message don't execute
-    String mobileNumber =
-        getMobileNumberOfMsg(String(current_target_index), false);
-    if (!checkStack(current_target_index)) {
-      if (!companyMsg(mobileNumber) &&
-          mobileNumber.indexOf("3374888420") == -1) {
-        // if its not company and self message
-        sendSMS("Unable to execute sms no. {" + String(current_target_index) +
-                "} message : [ " +
-                removeNewline(temp_str.substring(
-                    0, temp_str.indexOf(" <not executed>"))) +
-                " ] from : " + mobileNumber + ", what to do ?");
-        toOrangePi("untrained_message:" + removeNewline(temp_str) +
+  } else {                                   // if the message don't execute
+    if (!checkStack(current_target_index)) { // ?
+      if (senderIsAuthentic(mobileNumber, _message_)) {
+        sendSMS("!Unable to execute previous sms no. {" +
+                String(current_target_index) + "} message : [ " +
+                removeNewline(_message_)+ " ] from: {" + mobileNumber +
+                "} Removing it from stack so it don't disturb you !");
+        // TODO: add this message to orange-pi:
+        toOrangePi("untrained_sender:" + removeNewline(_message_) +
                    " from : {_" + mobileNumber + "_}<_" +
                    String(current_target_index) + "_>");
-        Delay(2000);
-      } else {
-        sendSMS("Unable to execute previous sms no. {" +
+        Delay(600);
+      } else if (!companyMsg(mobileNumber) &&
+                 mobileNumber.indexOf("3374888420") != -1) {
+        // if its neither company nor self message
+        sendSMS("#Unable to execute previous sms no. {" +
                 String(current_target_index) + "} message : [ " +
-                temp_str.substring(0, temp_str.indexOf(" <not executed>")) +
+                removeNewline(_message_.substring(
+                    0, _message_.indexOf(" <not executed>"))) +
+                " ] from : " + mobileNumber + ", what to do ?");
+        toOrangePi("untrained_message:" + removeNewline(_message_) +
+                   " from : {_" + mobileNumber + "_}<_" +
+                   String(current_target_index) + "_>");
+        Delay(600);
+      } else {
+        sendSMS("$Unable to execute previous sms no. {" +
+                String(current_target_index) + "} message : [ " +
+                _message_.substring(0, _message_.indexOf(" <not executed>")) +
                 " ] from : " + mobileNumber + ". deleting it...");
-        Delay(2000);
+        Delay(600);
         deleteMessage(current_target_index);
       }
     }
@@ -1479,7 +1498,7 @@ void inputManager(String command, int inputFrom) {
     inputFrom == 3 ? command += "<executed>" : "";
   } else if ((command.indexOf("check sms sending") != -1) ||
              (command.indexOf("sms sending?") != -1)) {
-    //
+    // TODO: check and update sms boolean values
 
   } else if (command.indexOf("py_time:") != -1) {
     println("***Received time from terminal setting up time...");
@@ -2251,12 +2270,13 @@ bool senderIsAuthentic(String number, String message) {
   if (String(AUTHENTIC_NUMBERS).indexOf(number) != -1)
     return true;
   else if (number.length() > 10) {
-    if (message.indexOf(BYPASS_KEY))
+    if (message.indexOf(BYPASS_KEY) != -1)
       return true;
 
     byPass_key_from_orangePi.length() <= 0
         ? setBypassKey(askOrangPi("send bypass key")),
-        "" : "";
+        "module ask bypass key from orange-pi"
+        : "module already have initialized with bypass key";
     if (message.indexOf(byPass_key_from_orangePi) != -1) {
       return true;
     }
