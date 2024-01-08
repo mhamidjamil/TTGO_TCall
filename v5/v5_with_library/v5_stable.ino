@@ -1,7 +1,7 @@
-//$ last work 07/Jan/24 [11:42 PM]
-// # version 5.6.8 major rework need to deploy in staging
+//$ last work 08/Jan/24 [06:20 PM]
+// # version 5.6.8.5 major rework need to deploy in staging
 // # Release Note: Rework: Communication with orange pi
-// # message package_expiry_date rework
+// # message package_expiry_date rework, minor output fix
 
 #include "arduino_secrets.h"
 
@@ -411,7 +411,8 @@ void setup() {
   updateTime();
   Println("after time request");
   thingsboard_enabled ? initThingsBoard() : alert("Thingsboard is not enabled");
-  SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + rtc) : Println("");
+  SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + getRTC_Time())
+                     : Println("");
   setBypassKey(askOrangPi("send bypass key"));
 }
 
@@ -1271,7 +1272,7 @@ void wait(unsigned int miliSeconds) {
 
 void setTime(String timeOfMessage) {
   // +CMGL: 1,"REC READ","+923374888420","","23/08/14,17:21:05+20"
-  rtc = fetchDetails(timeOfMessage, "\"23/", "\"", 1);
+  rtc = fetchDetails(timeOfMessage, "\"24/", "\"", 1); // FIXME: Static year
   println(
       "\n+++++++++++++++++++++++++++++++++++++++++++\n Fetched data from : " +
       timeOfMessage + "\nFinal data : " + rtc +
@@ -2080,7 +2081,11 @@ bool hasPackage() {
       return false;
     }
   } else {
-    rise("Unable to update time for hasPackage function", "2080");
+    rise("Unable to update time for hasPackage function, value of myRTC "
+         "variables: {" +
+             getRTC_Time() +
+             "} package_expiry_date: " + String(package_expiry_date),
+         "2080");
     println("Set Time First!");
     return false;
   }
@@ -2196,7 +2201,7 @@ void saveItOrangePi(String str) {
       "TimeStamp: " +
       String(millis() / 1000) + "\nMessage:\n" + str +
       "\n----------------------------------------------------------\n "
-      "_<end>_ }";
+      "end_of_file }";
   println(_logger_);
 }
 
