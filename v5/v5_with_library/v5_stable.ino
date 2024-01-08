@@ -1,7 +1,7 @@
-//$ last work 07/Jan/24 [11:42 PM]
-// # version 5.6.8 major rework need to deploy in staging
+//$ last work 08/Jan/24 [07:32 PM]
+// # version 5.6.8.5 major rework need to deploy in staging
 // # Release Note: Rework: Communication with orange pi
-// # message package_expiry_date rework
+// # message package_expiry_date rework, Comments resolved
 
 #include "arduino_secrets.h"
 
@@ -156,7 +156,6 @@ bool wifi_working = true;
 bool display_working = true;
 bool sms_allowed = false;
 int package_expiry_date = 0;
-bool connected_with_pi = false;
 // 10921 => 09 = month, 21 = day
 
 String messageTemplate = "#setting <ultra sound alerts 0> <display 1> <wifi "
@@ -173,7 +172,7 @@ String BLE_Output = "";
 // bool batteriesCharged = false;
 
 String ret_string = "";
-String OWNER_NAME = "M Hamid Jamil";
+String OWNER_NAME = DEVELOPER;
 String error_codes = "";
 // String chargingStatus = "";
 // these error codes will be moving in the last row of lcd
@@ -411,7 +410,8 @@ void setup() {
   updateTime();
   Println("after time request");
   thingsboard_enabled ? initThingsBoard() : alert("Thingsboard is not enabled");
-  SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + rtc) : Println("");
+  SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + getRTC_Time())
+                     : Println("");
   setBypassKey(askOrangPi("send bypass key"));
 }
 
@@ -810,13 +810,12 @@ void terminateLastMessage() {
                 String(current_target_index) + "} message : [ " +
                 removeNewline(_message_) + " ] from: {" + mobileNumber +
                 "} Removing it from stack so it don't disturb you !");
-        // TODO: add this message to orange-pi:
         toOrangePi("untrained_sender:" + removeNewline(_message_) +
                    " from : {_" + mobileNumber + "_}<_" +
                    String(current_target_index) + "_>");
         Delay(600);
       } else if (!companyMsg(mobileNumber) &&
-                 mobileNumber.indexOf("3374888420") != -1) {
+                 mobileNumber.indexOf("3374888420") == -1) {
         // if its neither company nor self message
         sendSMS("#Unable to execute previous sms no. {" +
                 String(current_target_index) + "} message : [ " +
@@ -1271,7 +1270,7 @@ void wait(unsigned int miliSeconds) {
 
 void setTime(String timeOfMessage) {
   // +CMGL: 1,"REC READ","+923374888420","","23/08/14,17:21:05+20"
-  rtc = fetchDetails(timeOfMessage, "\"23/", "\"", 1);
+  rtc = fetchDetails(timeOfMessage, "\"" + String(myRTC.year) + "/", "\"", 1);
   println(
       "\n+++++++++++++++++++++++++++++++++++++++++++\n Fetched data from : " +
       timeOfMessage + "\nFinal data : " + rtc +
@@ -1538,7 +1537,8 @@ void inputManager(String command, int inputFrom) {
   } else if ((command.indexOf("check sms sending") != -1) ||
              (command.indexOf("sms sending?") != -1)) {
     sms_allowed = hasPackage();
-    println("SMS sending is " + sms_allowed ? "allowed!" : "not allowed!");
+    println(String("SMS sending is ") +
+            (sms_allowed ? "allowed!" : "not allowed!"));
   } else if (command.indexOf("py_time:") != -1) {
     println("***Received time from terminal setting up time...");
     rtc = command.substring(command.indexOf("py_time:") + 8, -1);
@@ -2080,7 +2080,11 @@ bool hasPackage() {
       return false;
     }
   } else {
-    rise("Unable to update time for hasPackage function", "2080");
+    rise("Unable to update time for hasPackage function, value of myRTC "
+         "variables: {" +
+             getRTC_Time() +
+             "} package_expiry_date: " + String(package_expiry_date),
+         "2080");
     println("Set Time First!");
     return false;
   }
@@ -2114,15 +2118,7 @@ void setField_MonthAndDate(int *field, int *month, int *date, int *year) {
     Println(7, "From field " + String(*field) +
                    " => Month : " + String(*month) +
                    " Date : " + String(*date) + " Year: " + String(*year));
-  }
-  //  else if (field == 0 && month != 0 && date != 0) {
-  //   field = 10000 + month * 100 + date;
-  //   Println(7, "From Month : " + String(month) + " & Date : " +
-  //   String(date)
-  //   +
-  //                  " => field : " + String(field));
-  // }
-  else {
+  } else {
     rise("Error in setField_MonthAndDate function! here is the "
          "data function received: field: " +
              String(*field) + " month: " + String(*month) +
@@ -2196,7 +2192,7 @@ void saveItOrangePi(String str) {
       "TimeStamp: " +
       String(millis() / 1000) + "\nMessage:\n" + str +
       "\n----------------------------------------------------------\n "
-      "_<end>_ }";
+      "end_of_file }";
   println(_logger_);
 }
 
@@ -2455,10 +2451,6 @@ String getRTC_Time() {
 }
 
 void updateOnlineTime(String formattedDate) {
-  // sscanf(formattedDate.c_str(), "%d-%d-%dT%d:%d:%dZ", myRTC.year,
-  // myRTC.month,
-  //        myRTC.date, myRTC.hour, myRTC.minutes, myRTC.seconds);
-  // myRTC.year = myRTC.year % 100;
   myRTC.year = formattedDate.substring(0, 4).toInt() % 100;
   myRTC.month = formattedDate.substring(5, 7).toInt();
   myRTC.date = formattedDate.substring(8, 10).toInt();

@@ -1,7 +1,7 @@
-//$ last work 07/Jan/24 [03:06 AM]
-// # version 5.6.7 major rework need to deploy in staging
+//$ last work 08/Jan/24 [06:20 PM]
+// # version 5.6.8.5 major rework need to deploy in staging
 // # Release Note: Rework: Communication with orange pi
-// # message package_expiry_date rework
+// # message package_expiry_date rework, minor output fix
 
 #include "arduino_secrets.h"
 
@@ -2080,13 +2080,17 @@ bool hasPackage() {
       return false;
     }
   } else {
-    rise("Unable to update time for hasPackage function", "2080");
+    rise("Unable to update time for hasPackage function, value of myRTC "
+         "variables: {" +
+             getRTC_Time() +
+             "} package_expiry_date: " + String(package_expiry_date),
+         "2080");
     println("Set Time First!");
     return false;
   }
   setField_MonthAndDate(&package_expiry_date, &expiryMonth, &expiryDate,
                         &expiryYear);
-  if ((myRTC.year < expiryYear) &&
+  if ((myRTC.year <= expiryYear) &&
       ((myRTC.month <= expiryMonth) ||
        (myRTC.month == expiryMonth && myRTC.date <= expiryDate)) &&
       myRTC.month != 0) {
@@ -2196,7 +2200,7 @@ void saveItOrangePi(String str) {
       "TimeStamp: " +
       String(millis() / 1000) + "\nMessage:\n" + str +
       "\n----------------------------------------------------------\n "
-      "_<end>_ }";
+      "end_of_file }";
   println(_logger_);
 }
 

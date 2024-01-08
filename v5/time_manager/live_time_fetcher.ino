@@ -3,8 +3,8 @@
 #include <WiFiUdp.h>
 
 // Replace with your network credentials
-const char *ssid = "Archer 73";
-const char *password = "Archer@73_102#";
+const char *ssid = MY_SSID;
+const char *password = MY_PASSWORD;
 
 // Define NTP Client to get time
 WiFiUDP ntpUDP;
