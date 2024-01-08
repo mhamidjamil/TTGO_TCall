@@ -1,7 +1,7 @@
-//$ last work 07/Jan/24 [12:50 AM]
-// # version 5.6.7 major rework need to deploy in staging
+//$ last work 08/Jan/24 [06:20 PM]
+// # version 5.6.8.5 major rework need to deploy in staging
 // # Release Note: Rework: Communication with orange pi
-// # message package_expiry_date rework
+// # message package_expiry_date rework, minor output fix
 
 #include "arduino_secrets.h"
 
@@ -29,8 +29,10 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 //`===================================
 #include <DHT.h>
 #include <HTTPClient.h>
+#include <NTPClient.h>
 #include <ThingSpeak.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <random>
 
 #include "SPIFFS.h"
@@ -41,6 +43,9 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
+String formattedDate;
 //`===================================
 
 //% pin details
@@ -184,7 +189,8 @@ struct RTC {
   int hour = 0;    // hour will be 05
   int minutes = 0; // minutes will be 38
   int seconds = 0; // seconds will be 34
-} RTC;
+};
+RTC myRTC;
 
 // # ......... functions > .......
 void println(String str);
@@ -383,6 +389,8 @@ void setup() {
       println("");
       print("Connected to WiFi network with IP Address: ");
       Serial.println(WiFi.localIP());
+      timeClient.begin();
+      timeClient.setTimeOffset(18000);
     }
   }
   delay(500);
@@ -1043,8 +1051,8 @@ void lcdPrint() {
   display.print(battery_percentage);
   display.print("%");
   display.print(" ");
-  display.print(String(RTC.hour) + ":" + String(RTC.minutes) + ":" +
-                String(RTC.seconds));
+  display.print(String(myRTC.hour) + ":" + String(myRTC.minutes) + ":" +
+                String(myRTC.seconds));
 
   display.setCursor(0, 17);
   display.print(line_1);
@@ -1181,7 +1189,7 @@ int findOccurrences(String str, String target) {
 void wait(unsigned int miliSeconds) {
   // replace Delay function with this function
   //  most important task will be executed here
-  RTC.milliSeconds += miliSeconds;
+  myRTC.milliSeconds += miliSeconds;
   bool condition = false;
   Println("Entering wait function...");
   for (int i = 0; (miliSeconds > (i * 5)); i++) {
@@ -1192,7 +1200,7 @@ void wait(unsigned int miliSeconds) {
       terminateLastMessage();
       Println(3, "after termination");
       condition = true;
-      if (RTC.date == 0 && sms_allowed) {
+      if (myRTC.date == 0 && sms_allowed) {
         println("Time is not updated yet updating it");
         updateTime() ? alert("Time updated successfully #1148")
                      : alert("Time not updated #1164");
@@ -1272,34 +1280,35 @@ void setTime(String timeOfMessage) {
   setTime();
 }
 
-void setTime() { // this function will set RTC struct using rtc string
+void setTime() { // this function will set myRTC struct using rtc string
   // Final data : 23/08/26,05:38:34+20
-  int tempDate = RTC.date;
+  int tempDate = myRTC.date;
   String datePart = rtc.substring(0, rtc.indexOf(",")); // 23/08/26
   Println("fetched date : " + datePart);
-  RTC.year = datePart.substring(0, datePart.indexOf("/")).toInt(); // 23
-  String date_ = (datePart.substring(datePart.indexOf("/") + 1));  // 08/26
-  RTC.month = date_.substring(0, datePart.indexOf("/")).toInt();   // 08
-  RTC.date = date_.substring(datePart.indexOf("/") + 1).toInt();   // 26
+  myRTC.year = datePart.substring(0, datePart.indexOf("/")).toInt(); // 23
+  String date_ = (datePart.substring(datePart.indexOf("/") + 1));    // 08/26
+  myRTC.month = date_.substring(0, datePart.indexOf("/")).toInt();   // 08
+  myRTC.date = date_.substring(datePart.indexOf("/") + 1).toInt();   // 26
 
   String timePart = rtc.substring(rtc.indexOf(",") + 1);       // 05:38:34+20
   String time_ = timePart.substring(0, timePart.indexOf("+")); // 05:38:34
-  RTC.hour = time_.substring(0, time_.indexOf(":")).toInt();   // 05
-  RTC.minutes = time_.substring(time_.indexOf(":") + 1, time_.lastIndexOf(":"))
-                    .toInt();                                        // 38
-  RTC.seconds = time_.substring(time_.lastIndexOf(":") + 1).toInt(); // 34
-  println("RTC updated");
+  myRTC.hour = time_.substring(0, time_.indexOf(":")).toInt(); // 05
+  myRTC.minutes =
+      time_.substring(time_.indexOf(":") + 1, time_.lastIndexOf(":"))
+          .toInt();                                                    // 38
+  myRTC.seconds = time_.substring(time_.lastIndexOf(":") + 1).toInt(); // 34
+  println("myRTC updated");
   println("--------------------------------\n");
-  println("Hour : " + String(RTC.hour) + " Minutes : " + String(RTC.minutes) +
-          " Seconds : " + String(RTC.seconds) + " Day : " + String(RTC.date) +
-          " Month : " + String(RTC.month));
+  println("Hour : " + String(myRTC.hour) + " Minutes : " +
+          String(myRTC.minutes) + " Seconds : " + String(myRTC.seconds) +
+          " Day : " + String(myRTC.date) + " Month : " + String(myRTC.month));
   println("--------------------------------");
-  if (tempDate == 0 && RTC.date != 0 && ((millis() / 1000) < 30)) {
+  if (tempDate == 0 && myRTC.date != 0 && ((millis() / 1000) < 30)) {
     // it will run if system is rebooted and time is set within 30 seconds
     String bootMessage = "System rebooted, Time stamp is : [ " +
-                         String(RTC.hour) + ":" + String(RTC.minutes) + ":" +
-                         String(RTC.seconds) + " ] " + String(RTC.date) + "/" +
-                         String(RTC.month);
+                         String(myRTC.hour) + ":" + String(myRTC.minutes) +
+                         ":" + String(myRTC.seconds) + " ] " +
+                         String(myRTC.date) + "/" + String(myRTC.month);
     sendSMS(bootMessage);
   }
   sms_allowed = hasPackage();
@@ -1311,26 +1320,26 @@ void Delay(int milliseconds) {
     delay(10);
   }
 
-  RTC.milliSeconds += milliseconds;
+  myRTC.milliSeconds += milliseconds;
   updateRTC();
 }
 
 void updateRTC() {
-  if (RTC.milliSeconds > 1000) {
-    RTC.milliSeconds -= 1000;
-    RTC.seconds++;
+  if (myRTC.milliSeconds > 1000) {
+    myRTC.milliSeconds -= 1000;
+    myRTC.seconds++;
   }
-  if (RTC.seconds > 59) {
-    RTC.seconds -= 60;
-    RTC.minutes++;
+  if (myRTC.seconds > 59) {
+    myRTC.seconds -= 60;
+    myRTC.minutes++;
   }
-  if (RTC.minutes > 59) {
-    RTC.minutes -= 60;
-    RTC.hour++;
+  if (myRTC.minutes > 59) {
+    myRTC.minutes -= 60;
+    myRTC.hour++;
   }
-  if (RTC.hour > 23) {
-    RTC.hour -= 24;
-    RTC.date++;
+  if (myRTC.hour > 23) {
+    myRTC.hour -= 24;
+    myRTC.date++;
     updateTime();
   }
   // still the loop hole is present for month increment.
@@ -1569,14 +1578,12 @@ void inputManager(String command, int inputFrom) {
     println("Value of : " + varName + " is : " + fetchNumber(targetValue, '.'));
     if (command.indexOf("to") != -1) {
       String newValue = command.substring(command.indexOf("to") + 2, -1);
-      Println(7, "Updating value to: " + newValue);
+      println("Updating value to: " + newValue);
       updateSPIFFS(varName, newValue);
     }
     Println(7, "\t\t ###leaving else part #### \n");
   } else if (command.indexOf("time?") != -1) {
-    println(String(RTC.hour) + ":" + String(RTC.minutes) + ":" +
-            String(RTC.seconds) + " __ " + String(RTC.month) + "/" +
-            String(RTC.date) + "/" + String(RTC.year));
+    println(getRTC_Time());
   } else if (command.indexOf("debug:") != -1) {
     // this part will enable/disable debugging, and print debugging status
     int index = fetchNumber(getCompleteString(command, "debug:"));
@@ -1778,8 +1785,9 @@ bool companyMsg(String mobileNumber) {
 }
 
 void sendWhatsappMsg(String message) {
-  if (RTC.date == 0) {
-    println("RTC not updated yet so wait for it to avoid unexpected behaviour");
+  if (myRTC.date == 0) {
+    println(
+        "myRTC not updated yet so wait for it to avoid unexpected behaviour");
     updateTime() ? sendWhatsappMsg(message)
                  : println("Unable send message, time not updated");
   } else if (!wifiConnected()) {
@@ -1839,9 +1847,9 @@ int getMessagesCounter() {
   int todayMessages = -1;
   int lastUpdateOfThingSpeakMessageCounter =
       getThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD);
-  if (lastUpdateOfThingSpeakMessageCounter != RTC.date) {
+  if (lastUpdateOfThingSpeakMessageCounter != myRTC.date) {
     Println(5, "Day changed initiating new counter");
-    setThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD, RTC.date);
+    setThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD, myRTC.date);
     setThingSpeakFieldData(TS_MSG_COUNTER_FIELD, 1);
     writeThingSpeakData();
     todayMessages = 1;
@@ -1872,7 +1880,7 @@ int getThingSpeakFieldData(int fieldNumber) {
 }
 
 void updateWhatsappMessageCounter() {
-  setThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD, RTC.date);
+  setThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD, myRTC.date);
   setThingSpeakFieldData(TS_MSG_COUNTER_FIELD, ++whatsapp_message_number);
   writeThingSpeakData();
 }
@@ -2057,33 +2065,49 @@ void updateSPIFFS(String variableName, String newValue) {
 
 bool hasPackage() {
   int expiryDate = 0, expiryMonth = 0, expiryYear = 0;
-  if (RTC.date != 0) { // if time is initialized
+  if (myRTC.date == 0)
+    updateTime()
+        ? "time updated in package inspector"
+        : "unable to update package inspector as time in not updated as "
+          "expected";
+  if (myRTC.date != 0) { // if time is initialized
     if (package_expiry_date == 0)
       package_expiry_date = getFileVariableValue("packageExpiryDate").toInt();
-    Println(7, "Package expiry date fetched from file: " +
-                   String(package_expiry_date));
-    rise("packageExpiryDate is not even initialized in SPIFFS", "2065");
-  } else {
-    if (updateTime())
-      hasPackage();
-    else {
-      rise("Unable to update time from orange pi", "2080");
+    println("Package expiry date fetched from file: " +
+            String(package_expiry_date));
+    if (package_expiry_date <= 0) {
+      rise("packageExpiryDate is not even initialized in SPIFFS", "2065");
+      return false;
     }
-    Println(7, "Set Time First!");
+  } else {
+    rise("Unable to update time for hasPackage function, value of myRTC "
+         "variables: {" +
+             getRTC_Time() +
+             "} package_expiry_date: " + String(package_expiry_date),
+         "2080");
+    println("Set Time First!");
     return false;
   }
   setField_MonthAndDate(&package_expiry_date, &expiryMonth, &expiryDate,
                         &expiryYear);
-  if ((RTC.year < expiryYear) || (RTC.month <= expiryMonth) ||
-      (RTC.month == expiryMonth && RTC.date <= expiryDate) && RTC.month != 0) {
-    println("\n\t $$$ Package is valid RTC month: " + String(RTC.month) +
-            " expiryMonth: " + String(expiryMonth) + ", RTC date: " +
-            String(RTC.date) + " expiryMonth: " + String(expiryMonth) +
-            ", RTC year: " + String(RTC.year) +
-            " expiryYear : " + String(expiryYear));
+  if ((myRTC.year <= expiryYear) &&
+      ((myRTC.month <= expiryMonth) ||
+       (myRTC.month == expiryMonth && myRTC.date <= expiryDate)) &&
+      myRTC.month != 0) {
+    println("\n\t $$$ Package is valid myRTC month: " + String(myRTC.month) +
+            " expiryMonth: " + String(expiryMonth) + ", myRTC date: " +
+            String(myRTC.date) + " expiryDate: " + String(expiryDate) +
+            ", myRTC year: " + String(myRTC.year) +
+            " expiryYear : " + String(expiryYear) + "\n\n");
     return true;
-  } else
+  } else {
+    println("\n\t !!! Package is not valid myRTC month: " +
+            String(myRTC.month) + " expiryMonth: " + String(expiryMonth) +
+            ", myRTC date: " + String(myRTC.date) + " expiryDate: " +
+            String(expiryDate) + ", myRTC year: " + String(myRTC.year) +
+            " expiryYear : " + String(expiryYear) + "\n\n");
     return false;
+  }
 }
 
 void setField_MonthAndDate(int *field, int *month, int *date, int *year) {
@@ -2169,12 +2193,15 @@ void toOrangePi(String str) {
   println("{hay orange-pi! " + removeNewline(str) + "}");
 }
 
-String saveItOrangePi(String str) {
-  toOrangePi(String("[#SaveIt]:") +
-             "----------------------------------------------------------" +
-             "TimeStamp: " + String(millis() / 1000) + "\nMessage:\n" + str +
-             "----------------------------------------------------------");
-  // TODO: add this part to orange pi
+void saveItOrangePi(String str) {
+  String _logger_ =
+      "{hay orange-pi! [#SaveIt]: \n"
+      "----------------------------------------------------------\n "
+      "TimeStamp: " +
+      String(millis() / 1000) + "\nMessage:\n" + str +
+      "\n----------------------------------------------------------\n "
+      "end_of_file }";
+  println(_logger_);
 }
 
 String askOrangPi(String str) {
@@ -2213,7 +2240,22 @@ bool updateTime() {
     Println(8, "Time updated successfully");
     return true;
   } else {
-    Println(8, "Failed to update time");
+    println("Failed to update time from orange pi trying to update online");
+    if (wifi_working) {
+      int i = 100;
+      while (!timeClient.update() && i > 0) {
+        timeClient.forceUpdate();
+        i -= 10;
+        delay(100);
+      }
+      formattedDate = timeClient.getFormattedDate();
+      updateOnlineTime(formattedDate);
+      println("Online updated time: " + getRTC_Time());
+      if (myRTC.month == 0)
+        return false;
+      else
+        return true;
+    }
     return false;
   }
 }
@@ -2254,22 +2296,25 @@ void initThingSpeak() {
 }
 
 void updatePackageSubscribedDate() {
-  if (RTC.month == 0) { // should not execute
-    alert("#2268 Module time is not updated so using thingSpeak value");
+  if (myRTC.month == 0) { // should not execute
+    alert("#2268 Module time is not updated so trying to update it");
     updateTime();
+    updatePackageSubscribedDate(3);
+  } else {
     updatePackageSubscribedDate(3);
   }
 }
 
 void updatePackageSubscribedDate(int retries) {
-  if (RTC.month == 0 && retries > 0) {
+  if (myRTC.month == 0 && retries > 0) {
     updatePackageSubscribedDate(retries - 1);
-  } else if (RTC.month != 0) {
-    print("Using module's time, Month: " + String(RTC.month) +
-          ", Day: " + String(RTC.date) + "to -> ");
-    int updatedDate = (RTC.year * 10000) +
-                      (RTC.month + 1 < 13 ? (RTC.month + 1) * 100 : 100) +
-                      getMonthDaysCount(RTC.month, RTC.year);
+    println("something bad happens retry count: " + retries);
+  } else if (myRTC.month != 0) {
+    print("Using module's time, Month: " + String(myRTC.month) +
+          ", Day: " + String(myRTC.date) + "to -> ");
+    int updatedDate = (myRTC.year * 10000) +
+                      (myRTC.month + 1 < 13 ? (myRTC.month + 1) * 100 : 100) +
+                      myRTC.date;
     // 240207 -> till 7th feb 2024
     log("New string for new package is: " + String(updatedDate));
     println("!!!!!!!!!!***!!!!!!!!!!\n");
@@ -2376,8 +2421,10 @@ void addError(String errorCode) {
   if (!isIn(error_codes, errorCode)) {
     error_codes += " " + errorCode;
     saveItOrangePi("New error added error code {" + errorCode + "}");
+    println("new error code added: " + errorCode);
   } else {
     saveItOrangePi("Error occurred again error code {" + errorCode + "}");
+    println("Error code already added: " + errorCode);
   }
 }
 
@@ -2396,7 +2443,7 @@ bool isIn(String mainString, String toFind_1, String toFind_2,
 }
 
 void log(String tempMessage) {
-  println(tempMessage);
+  alert(tempMessage);
   saveItOrangePi(tempMessage);
 }
 
@@ -2406,7 +2453,20 @@ void rise(String tempMessage, String errorCode) {
 }
 
 String getRTC_Time() {
-  return (String(RTC.hour) + ":" + String(RTC.minutes) + ":" +
-          String(RTC.seconds) + " ___ " + String(RTC.month) + "/" +
-          String(RTC.date) + "/" + String(RTC.year));
+  return (String(myRTC.hour) + ":" + String(myRTC.minutes) + ":" +
+          String(myRTC.seconds) + " ___ " + String(myRTC.month) + "/" +
+          String(myRTC.date) + "/" + String(myRTC.year));
+}
+
+void updateOnlineTime(String formattedDate) {
+  // sscanf(formattedDate.c_str(), "%d-%d-%dT%d:%d:%dZ", myRTC.year,
+  // myRTC.month,
+  //        myRTC.date, myRTC.hour, myRTC.minutes, myRTC.seconds);
+  // myRTC.year = myRTC.year % 100;
+  myRTC.year = formattedDate.substring(0, 4).toInt() % 100;
+  myRTC.month = formattedDate.substring(5, 7).toInt();
+  myRTC.date = formattedDate.substring(8, 10).toInt();
+  myRTC.hour = formattedDate.substring(11, 13).toInt();
+  myRTC.minutes = formattedDate.substring(14, 16).toInt();
+  myRTC.seconds = formattedDate.substring(17, 19).toInt();
 }
