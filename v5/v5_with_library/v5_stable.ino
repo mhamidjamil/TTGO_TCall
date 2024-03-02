@@ -1,5 +1,5 @@
 //$ last work 11/Feb/24 [04:14 PM]
-// # version 5.7 BLE timeout added, SPIFFS rework for string values
+// # version 5.7.1 SPIFFS rework for string update
 
 #include "arduino_secrets.h"
 
@@ -2049,7 +2049,7 @@ void updateSPIFFS(String variableName, String newValue) {
   while (file.available()) {
     String line = file.readStringUntil('\n');
     if (line.indexOf(variableName) != -1) {
-      line.replace(previousValue, newValue);
+      line = variableName + ": " + newValue;
       valueReplaced = true;
     }
     updatedContent += line + "\n";
