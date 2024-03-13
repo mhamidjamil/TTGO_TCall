@@ -1,5 +1,6 @@
-//$ last work 11/Feb/24 [04:14 PM]
-// # version 5.7.1 SPIFFS rework for string update
+//$ last work 12/March/24 [11:09 PM]
+// # version 5.7.2 String functionality added
+// HEX company messages will no more forwarded
 
 #include "arduino_secrets.h"
 
@@ -647,10 +648,14 @@ String getResponse() {
                      String(newMessageNumber) + "_>");
         } else {
           Println(3, "Company message received deleting it...");
-          sendSMS("<Company message received sms no. {" +
-                  String(newMessageNumber) + "} message: > [ " +
-                  _message_.substring(0, _message_.indexOf(" <not executed>")) +
-                  " ] from: " + senderNumber + ". deleting it...");
+          if (isValidString(_message_))
+            sendSMS(
+                "<Company message received sms no. {" +
+                String(newMessageNumber) + "} message: > [ " +
+                _message_.substring(0, _message_.indexOf(" <not executed>")) +
+                " ] from: " + senderNumber + ". deleting it...");
+          else
+            print("Message not send as it marked as HEX message");
           if (newPackageSubscribed(_message_)) { // ~ part belongs to else part
             // increment 30 days in date and month or just month
             updatePackageSubscribedDate();
@@ -1603,6 +1608,7 @@ void inputManager(String command, int inputFrom) {
       println("Updating value to: " + newValue);
       updateSPIFFS(varName, newValue);
     }
+    syncSPIFFS();
     Println(7, "\t\t ###leaving else part #### \n");
   } else if (command.indexOf("time?") != -1) {
     println(getRTC_Time());
@@ -1792,10 +1798,12 @@ void set(bool *var, String varName, bool varValue) {
 }
 
 bool companyMsg(String mobileNumber) {
-  if (isIn(company_numbers, mobileNumber))
-    return true;
-  else
-    return false;
+  int loopCount = getTotalWordsCountInString(company_numbers);
+  for (int i = 0; i < loopCount; i++) {
+    if (isIn(mobileNumber, getWordInString(mobileNumber, i)))
+      return true;
+  }
+  return false;
 }
 
 void sendWhatsappMsg(String message) {
@@ -2322,6 +2330,7 @@ void updatePackageSubscribedDate(int retries) {
     log("New string for new package is: " + String(updatedDate));
     println("!!!!!!!!!!***!!!!!!!!!!\n");
     updateSPIFFS("packageExpiryDate", String(updatedDate));
+    sms_allowed = hasPackage();
   } else {
     rise("Package update error" + getRTC_Time() + " reties: " + String(retries),
          "2288");
@@ -2496,4 +2505,82 @@ String remove_quotes(String input) {
     // Return the original string if quotes are not found
     return input;
   }
+}
+
+bool isValidString(String tempStr) {
+  int validWords = 0, inValidWords = 0;
+  int totalWordsInString = getTotalWordsCountInString(tempStr);
+  for (int i = 0; i < totalWordsInString; i++)
+    isValidWord(getWordInString(tempStr, i)) ? validWords += 1
+                                             : inValidWords += 1;
+  return validWords > inValidWords;
+}
+
+String getWordInString(String str, int index) {
+  /* if user send this string:
+  ("this is test message from phone",3)
+  then this function ill return this string: "message" */
+  int found = 0;
+  int startIndex = 0;
+  int endIndex = -1;
+
+  for (int i = 0; i <= str.length(); i++) {
+    if (str[i] == ' ' || i == str.length()) {
+      found++;
+      if (found == index + 1) {
+        endIndex = i - 1;
+        break;
+      }
+      startIndex = i + 1;
+    }
+  }
+
+  if (endIndex == -1) {
+    return ""; // or handle out of bounds appropriately
+  } else {
+    return str.substring(startIndex, endIndex + 1);
+  }
+}
+
+int getTotalWordsCountInString(String str) {
+  // Return 3 for string "this is test"
+  int wordCount = 0;
+  bool inWord = false;
+
+  for (int i = 0; i < str.length(); i++) {
+    if (str[i] != ' ' && !inWord) {
+      inWord = true;
+      wordCount++;
+    } else if (str[i] == ' ') {
+      inWord = false;
+    }
+  }
+
+  return wordCount;
+}
+
+bool isValidWord(String tempStr) {
+  // if the word is not the HEX
+  if (tempStr.length() > 10)
+    return false;
+  bool ret = false;
+  for (int i = 0; i <= tempStr.length(); i++)
+    if (!((tempStr[i] >= 'A' && tempStr[i] <= 'F') ||
+          (tempStr[i] >= '0' && tempStr[i] <= '9')))
+      ret = true;
+    else
+      return false;
+  return ret;
+}
+
+bool isInteger(String tempStr) {
+  if (tempStr.length() > 10)
+    return false;
+  bool ret = false;
+  for (int i = 0; i <= tempStr.length(); i++)
+    if ((tempStr[i] >= '0' && tempStr[i] <= '9'))
+      ret = true;
+    else
+      return false;
+  return ret;
 }
