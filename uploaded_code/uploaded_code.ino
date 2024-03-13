@@ -1,6 +1,6 @@
-//$ last work 12/March/24 [11:09 PM]
-// # version 5.7.2 String functionality added
-// HEX company messages will no more forwarded
+//$ last work 13/March/24 [11:31 PM]
+// # version 5.7.3 String functionality added
+// demo message functionality implemented
 
 #include "arduino_secrets.h"
 
@@ -180,6 +180,8 @@ String company_numbers = "";
 // these error codes will be moving in the last row of lcd
 
 bool mqtt_connected = false;
+bool pending_test_message = false;
+String demo_message_index, demo_message_number, demo_message_content;
 
 struct RTC {
   // Final data: 23/08/26,05:38:34+20
@@ -617,11 +619,21 @@ String getResponse() {
     response += SerialAT.readString();
   }
   Println(3, "After while loop in get response");
-  if (response.indexOf("+CMTI:") != -1) { // new message
+  if (response.indexOf("+CMTI:") != -1 || pending_test_message) { // new message
+    Println(3, "new message content :{" + response + "}");
+    int newMessageNumber;
+    String senderNumber, _message_;
     messages_in_inbox++;
-    int newMessageNumber = getNewMessageNumber(response);
-    String senderNumber = getMobileNumberOfMsg(String(newMessageNumber), true);
-    String _message_ = (removeNewline(removeOk(readMessage(newMessageNumber))));
+    if (pending_test_message) {
+      // pending_test_message = false;
+      newMessageNumber = demo_message_index.toInt();
+      senderNumber = demo_message_number;
+      _message_ = demo_message_content;
+    } else {
+      newMessageNumber = getNewMessageNumber(response);
+      senderNumber = getMobileNumberOfMsg(String(newMessageNumber), true);
+      _message_ = (removeNewline(removeOk(readMessage(newMessageNumber))));
+    }
     if (senderNumber.indexOf("3374888420") == -1) {
       // if message is not send by module it self
       if (senderIsAuthentic(senderNumber, _message_))
@@ -668,6 +680,7 @@ String getResponse() {
       Println(3, "skipping message from: " + senderNumber);
       deleteMessage(newMessageNumber, _message_, senderNumber);
     }
+    pending_test_message = false;
   } else if (response.indexOf("+CLIP:") != -1) { // miss call
     //+CLIP: "03354888420",161,"",0,"",0
     hangUp();
@@ -733,6 +746,8 @@ bool deleteMessage(int index) {
   } else if (index < 0) {
     index *= -1;
   }
+  if (pending_test_message)
+    return true;
   say("AT+CMGD=" + String(index));
   println(getResponse());
   messages_in_inbox--;
@@ -1554,6 +1569,37 @@ void inputManager(String command, int inputFrom) {
         command.substring(command.indexOf("{") + 1, command.indexOf("}"));
     sendSMS(strSms, strNumber);
     inputFrom == 3 ? command += "<executed>" : "";
+  } else if (isIn(command, "demo message")) {
+    // demo message (2)[this is test message boy]{+923354888444}
+    int index_open_bracket = command.indexOf("(");
+    int index_close_bracket = command.indexOf(")");
+
+    if (index_open_bracket != -1 && index_close_bracket != -1) {
+      // Extracting demo_message_index
+      demo_message_index =
+          command.substring(index_open_bracket + 1, index_close_bracket);
+
+      // Find indexes of curly braces
+      int index_open_curly = command.indexOf("[");
+      int index_close_curly = command.indexOf("]");
+
+      if (index_open_curly != -1 && index_close_curly != -1) {
+        // Extracting demo_message_content
+        demo_message_content =
+            command.substring(index_open_curly + 1, index_close_curly);
+
+        // Extracting demo_message_number
+        demo_message_number = command.substring(
+            index_close_curly + 2,
+            command.length() - 1); // Adding 2 to exclude the curly brace and
+                                   // the following character
+      }
+    }
+    println("demo_message_index: " + demo_message_index);
+    println("demo_message_number: " + demo_message_number);
+    println("demo_message_content: " + demo_message_content);
+    pending_test_message = true;
+    getResponse();
   } else if (isIn(command, "say to orange pi", "say to orangepi")) {
     toOrangePi(command.substring(command.indexOf("say to orange") + 16, -1));
   } else if (isIn(command, "test package renew")) {
@@ -1799,10 +1845,10 @@ void set(bool *var, String varName, bool varValue) {
 
 bool companyMsg(String mobileNumber) {
   int loopCount = getTotalWordsCountInString(company_numbers);
-  for (int i = 0; i < loopCount; i++) {
-    if (isIn(mobileNumber, getWordInString(mobileNumber, i)))
+  for (int i = 0; i < loopCount; i++)
+    if (isIn(mobileNumber, getWordInString(company_numbers, i)))
       return true;
-  }
+
   return false;
 }
 
