@@ -1,6 +1,5 @@
-//$ last work 12/March/24 [11:09 PM]
-// # version 5.7.2 String functionality added
-// HEX company messages will no more forwarded
+//$ last work 16/March/24 [12:45 AM]
+// # version 5.7.4 untrained messages rework
 
 #include "arduino_secrets.h"
 
@@ -180,6 +179,8 @@ String company_numbers = "";
 // these error codes will be moving in the last row of lcd
 
 bool mqtt_connected = false;
+bool pending_test_message = false;
+String demo_message_index, demo_message_number, demo_message_content;
 
 struct RTC {
   // Final data: 23/08/26,05:38:34+20
@@ -617,49 +618,53 @@ String getResponse() {
     response += SerialAT.readString();
   }
   Println(3, "After while loop in get response");
-  if (response.indexOf("+CMTI:") != -1) { // new message
+  if (response.indexOf("+CMTI:") != -1 || pending_test_message) { // new message
+    Println(3, "new message content :{" + response + "}");
+    int newMessageNumber;
+    String senderNumber, _message_;
     messages_in_inbox++;
-    int newMessageNumber = getNewMessageNumber(response);
-    String senderNumber = getMobileNumberOfMsg(String(newMessageNumber), true);
-    String _message_ = (removeNewline(removeOk(readMessage(newMessageNumber))));
-    if (senderNumber.indexOf("3374888420") == -1) {
+    if (pending_test_message) {
+      // pending_test_message = false;
+      newMessageNumber = demo_message_index.toInt();
+      senderNumber = demo_message_number;
+      _message_ = demo_message_content;
+    } else {
+      newMessageNumber = getNewMessageNumber(response);
+      senderNumber = getMobileNumberOfMsg(String(newMessageNumber), true);
+      _message_ = (removeNewline(removeOk(readMessage(newMessageNumber))));
+    }
+    if (!isIn(senderNumber, "3374888420")) {
       // if message is not send by module it self
-      if (senderIsAuthentic(senderNumber, _message_))
-        _message_ = executeCommand(_message_);
+      String messageState = "";
+      bool authenticSender = senderIsAuthentic(senderNumber, _message_);
+      if (authenticSender)
+        messageState = executeCommand(_message_);
       else
         println("Unauthorize sender, message {" + _message_ + "} not executed");
       println("New message [ " + _message_ + "]");
-      if (_message_.indexOf("<executed>") != -1)
+      if (isIn(messageState, "<executed>"))
         deleteMessage(newMessageNumber, _message_, senderNumber);
       else { // message is not executed
         if (!companyMsg(senderNumber)) {
-          if (newPackageSubscribed(_message_)) {
-            // ~ part not belongs to this condition just for testing
-            // increment 30 days in date and month or just month
-            updatePackageSubscribedDate();
-          }
           sendSMS("<Unable to execute sms no. {" + String(newMessageNumber) +
-                  "} message: > [ " +
-                  removeNewline(_message_.substring(
-                      0, _message_.indexOf(" <not executed>"))) +
+                  "} message: > [ " + removeNewline(_message_) +
                   " ] from: " + senderNumber);
-          toOrangePi("untrained_message:" + removeNewline(_message_) +
-                     " from: {_" + senderNumber + "_}<_" +
-                     String(newMessageNumber) + "_>");
+          authenticSender
+              ? toOrangePi("untrained_message: _[_" + removeNewline(_message_) +
+                           (pending_test_message ? "isDemo" : "") +
+                           "_]_ from: _{_" + senderNumber + "_}_ index: _(_" +
+                           String(newMessageNumber) + "_)_")
+              : log("skipping unauthorized message from: " + senderNumber);
         } else {
           Println(3, "Company message received deleting it...");
-          if (isValidString(_message_))
-            sendSMS(
-                "<Company message received sms no. {" +
-                String(newMessageNumber) + "} message: > [ " +
-                _message_.substring(0, _message_.indexOf(" <not executed>")) +
-                " ] from: " + senderNumber + ". deleting it...");
-          else
+          if (isValidString(_message_)) {
+            sendSMS("<Company message received sms no. {" +
+                    String(newMessageNumber) + "} message: > [ " + _message_ +
+                    " ] from: " + senderNumber + ". deleting it...");
+            if (newPackageSubscribed(_message_))
+              updatePackageSubscribedDate();
+          } else
             print("Message not send as it marked as HEX message");
-          if (newPackageSubscribed(_message_)) { // ~ part belongs to else part
-            // increment 30 days in date and month or just month
-            updatePackageSubscribedDate();
-          }
           if (sms_allowed)
             deleteMessage(newMessageNumber, _message_, senderNumber);
         }
@@ -668,6 +673,7 @@ String getResponse() {
       Println(3, "skipping message from: " + senderNumber);
       deleteMessage(newMessageNumber, _message_, senderNumber);
     }
+    pending_test_message = false;
   } else if (response.indexOf("+CLIP:") != -1) { // miss call
     //+CLIP: "03354888420",161,"",0,"",0
     hangUp();
@@ -733,6 +739,8 @@ bool deleteMessage(int index) {
   } else if (index < 0) {
     index *= -1;
   }
+  if (pending_test_message)
+    return true;
   say("AT+CMGD=" + String(index));
   println(getResponse());
   messages_in_inbox--;
@@ -1547,7 +1555,38 @@ void inputManager(String command, int inputFrom) {
   // sure you dont make any conflict with pre use strings.
   println("Working on: " + command);
   //  inputFrom tell who's this function user 1:BLE, 2:Serial or 3:sms
-  if (command.indexOf("smsTo") != -1) {
+  if (isIn(command, "demo message")) {
+    //$ demo message (2)[time?]{+923354888444}
+    int index_open_bracket = command.indexOf("(");
+    int index_close_bracket = command.indexOf(")");
+
+    if (index_open_bracket != -1 && index_close_bracket != -1) {
+      // Extracting demo_message_index
+      demo_message_index =
+          command.substring(index_open_bracket + 1, index_close_bracket);
+
+      // Find indexes of curly braces
+      int index_open_curly = command.indexOf("[");
+      int index_close_curly = command.indexOf("]");
+
+      if (index_open_curly != -1 && index_close_curly != -1) {
+        // Extracting demo_message_content
+        demo_message_content =
+            command.substring(index_open_curly + 1, index_close_curly);
+
+        // Extracting demo_message_number
+        demo_message_number = command.substring(
+            index_close_curly + 2,
+            command.length() - 1); // Adding 2 to exclude the curly brace and
+                                   // the following character
+      }
+    }
+    println("demo_message_index: " + demo_message_index);
+    println("demo_message_number: " + demo_message_number);
+    println("demo_message_content: " + demo_message_content);
+    pending_test_message = true;
+    getResponse();
+  } else if (command.indexOf("smsTo") != -1) {
     String strSms =
         command.substring(command.indexOf("[") + 1, command.indexOf("]"));
     String strNumber =
@@ -1556,12 +1595,6 @@ void inputManager(String command, int inputFrom) {
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (isIn(command, "say to orange pi", "say to orangepi")) {
     toOrangePi(command.substring(command.indexOf("say to orange") + 16, -1));
-  } else if (isIn(command, "test package renew")) {
-    String _message_ = "Your Offer with 0 Onnet Mins 0 Other Network Mins 0 "
-                       "MBs 10000 SMS with 30day validity ";
-    if (newPackageSubscribed(_message_)) {
-      updatePackageSubscribedDate();
-    }
   } else if (isIn(command, "test orange pi logs")) {
     saveItOrangePi(command.substring(command.indexOf("test orange") + 19, -1));
   } else if (command.indexOf("switch") != -1 &&
@@ -1573,6 +1606,7 @@ void inputManager(String command, int inputFrom) {
     sms_allowed = hasPackage();
     println(String("SMS sending is ") +
             (sms_allowed ? "allowed!" : "not allowed!"));
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("py_time:") != -1) {
     println("***Received time from terminal setting up time...");
     rtc = command.substring(command.indexOf("py_time:") + 8, -1);
@@ -1612,6 +1646,7 @@ void inputManager(String command, int inputFrom) {
     Println(7, "\t\t ###leaving else part #### \n");
   } else if (command.indexOf("time?") != -1) {
     println(getRTC_Time());
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("debug:") != -1) {
     // this part will enable/disable debugging, and print debugging status
     int index = fetchNumber(getCompleteString(command, "debug:"));
@@ -1633,11 +1668,13 @@ void inputManager(String command, int inputFrom) {
         String(allowed_debugging[5] ? ", 5->BLE" : " ") +
         String(allowed_debugging[6] ? ", 6->SPIFFS" : " ")) +
         String(allowed_debugging[7] ? ", 7->Orange pi" : " ");
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if ((command.indexOf("debug") != -1) &&
              (command.indexOf("option") != -1)) {
     println("Here the the debugging index:\n\t-> Wifi: 0, LCD: 1, SIM800L "
             ": 2, ThingSpeak: 3, Whatsapp: 4, BLE: 5, SPIFFS: 6, Orange pi "
             ": 7");
+    inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("debug?") != -1) {
     println("Here is the debugging status: ");
     Serial.println(
@@ -1799,10 +1836,10 @@ void set(bool *var, String varName, bool varValue) {
 
 bool companyMsg(String mobileNumber) {
   int loopCount = getTotalWordsCountInString(company_numbers);
-  for (int i = 0; i < loopCount; i++) {
-    if (isIn(mobileNumber, getWordInString(mobileNumber, i)))
+  for (int i = 0; i < loopCount; i++)
+    if (isIn(mobileNumber, getWordInString(company_numbers, i)))
       return true;
-  }
+
   return false;
 }
 
@@ -2363,10 +2400,10 @@ int getMonthDaysCount(int month, int year) {
 bool senderIsAuthentic(String number, String message) {
   if (companyMsg(number))
     return false;
-  if (String(AUTHENTIC_NUMBERS).indexOf(number) != -1)
+  if (isIn(String(AUTHENTIC_NUMBERS), number))
     return true;
   else if (number.length() > 10) {
-    if (message.indexOf(BYPASS_KEY) != -1)
+    if (isIn(message, BYPASS_KEY))
       return true;
 
     byPass_key_from_orangePi.length() <= 0
