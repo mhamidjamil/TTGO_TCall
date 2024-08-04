@@ -1151,8 +1151,8 @@ void wait(unsigned int miliSeconds) {
     }
     if (getMint() > last_ts_update_time) {
       // jobs which have to be execute after every 5 minutes
-      if (wifiConnected() && THINGSPEAK_ENABLE) {
-        if (wifi_working) {
+      if (wifiConnected()) {
+        if (wifi_working && THINGSPEAK_ENABLE) {
           Println(4, "Before Temperature Update");
           updateThingSpeak(temperature, humidity);
           last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
@@ -1160,9 +1160,11 @@ void wait(unsigned int miliSeconds) {
           if (display_working) {
             updateBatteryParameters(updateBatteryStatus());
           }
-          condition = true;
-          updateMQTT((int)temperature, humidity);
         }
+        Delay(1000);
+        condition = false;
+        i += 1000;
+        updateMQTT((int)temperature, humidity);
       } else if (THINGSPEAK_ENABLE) {
         connect_wifi();
         if (wifiConnected()) {
@@ -1996,7 +1998,7 @@ void updateMQTT(int temperature_, int humidity_) {
                  ("{temperature:" + String(temperature_) +
                   ",humidity:" + String(humidity_) + "}")
                      .c_str());
-  Println(4, "MQTT updated");
+  Println(7, "MQTT updated");
 }
 
 void toOrangePi(String str) { println("{hay orange-pi! " + str + "}"); }
@@ -2032,20 +2034,20 @@ bool updateTime() {
       println("@2 Fetching time from: <" + rtc + ">");
       setTime();
     } else {
-      Println(5, "Unable to execute pi response : [" + piResponse + "]");
+      Println(7, "Unable to execute pi response : [" + piResponse + "]");
       return false;
     }
-    Println(5, "Time updated successfully");
+    Println(7, "Time updated successfully");
     return true;
   } else {
-    Println(5, "Failed to update time");
+    Println(7, "Failed to update time");
     return false;
   }
 }
 
 void askTime() {
   // this will ask for updated time from orange pi
-  Println(5, "Asking time from Orange Pi");
+  Println(7, "Asking time from Orange Pi");
   toOrangePi("send time");
 }
 
