@@ -7,9 +7,11 @@
 #include <TinyGsmClient.h>
 #include <Wire.h>
 #include "ModemManager.h"
+#include "DisplayManager.h"
 #include "arduino_secrets.h" // Include your secrets
 
 ModemManager modemManager;
+DisplayManager displayManager;
 
 void serialTask(void *pvParameters) {
     while (true) {
@@ -20,10 +22,15 @@ void serialTask(void *pvParameters) {
 
 void setup() {
     modemManager.initialize();
+    displayManager.initialize();
     xTaskCreate(serialTask, "SerialTask", 4096, NULL, 1, NULL);
 }
 
 void loop() {
+    // Update the display with a random message
+    String message = "Hello World! " + String(random(99));
+    displayManager.updateDisplay(message);
+
     // Main loop can be used for other tasks
     vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
