@@ -11,6 +11,36 @@
 #include "DHTManager.h"
 #include "arduino_secrets.h" // Include your secrets
 
+#include <WiFi.h>
+#include <ThingSpeak.h>
+
+// Wi-Fi credentials
+const char* ssid = MY_SSID;
+const char* password = MY_PASSWORD;
+const unsigned long ts_channel_id = MY_CHANNEL_ID;
+const char *ts_api_key = THINGSPEAK_API;
+
+WiFiClient espClient;
+
+void connect_wifi() {
+  // if (String(ssid).indexOf("skip") != -1 && wifi_working) {
+  //   return;
+  // }
+  WiFi.begin(ssid, password); // Connect to Wi-Fi
+  for (int i = 0; !wifiConnected(); i++) {
+    if (i > 10) {
+      // println("Timeout: Unable to connect to WiFi");
+      break;
+    }
+    // Delay(500);
+  }
+  if (wifiConnected()) {
+    // println("Wi-Fi connected successfully");
+  } else {
+    // digitalWrite(LED, LOW);
+  }
+}
+
 #define DHTPIN 33 // Change the pin if necessary
 #define DHTTYPE DHT11
 
@@ -29,7 +59,8 @@ void setup() {
     modemManager.initialize();
     displayManager.initialize();
     dhtManager.initialize();
-
+    connect_wifi();
+    initThingSpeak();
     // Show boot message
     displayManager.showBootMessage();
 
@@ -53,7 +84,36 @@ void loop() {
 
     // Update the display
     displayManager.updateDisplay(line1, line2, status);
+    updateThingSpeak(temperature, humidity);
 
     // Main loop can be used for other tasks
     vTaskDelay(1000 / portTICK_PERIOD_MS);
+}
+void initThingSpeak() {
+  // println("\nThingSpeak initializing...\n");
+  ThingSpeak.begin(espClient); // Initialize ThingSpeak
+  delay(500);
+}
+
+void updateThingSpeak(float temperature, int humidity) {
+  if (humidity < 110) {
+    ThingSpeak.setField(1, temperature); // Set temperature value
+    ThingSpeak.setField(2, humidity);    // Set humidity value
+    // Println(4, "After setting up fields");
+
+    int updateStatus = ThingSpeak.writeFields(ts_channel_id, ts_api_key);
+    if (updateStatus == 200) {
+      // Println(4, "ThingSpeak update successful");
+      // successMsg();
+    } else {
+      // Println(4, "Error updating ThingSpeak. Status: " + String(updateStatus));
+      // errorMsg();
+    }
+  } else {
+    // digitalWrite(LED, LOW);
+  }
+}
+
+bool wifiConnected() {
+  return (WiFi.status() == WL_CONNECTED);
 }
