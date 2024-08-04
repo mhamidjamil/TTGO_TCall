@@ -270,7 +270,7 @@ void writeThingSpeakData();
 unsigned int getMint();
 String getHTTPString(String message);
 //! outdated
-// TODO: update functions and add there discription
+// TODO: update functions and add there description
 //  # ......... < functions .......
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -918,7 +918,7 @@ void deleteIndexFromStack(int messageNumber) {
 int getLastIndexToTerminate() {
   arrangeStack();
   if (current_target_index == 0) {
-    // mean this function is runing first time lets read all messages and get
+    // mean this function is running first time lets read all messages and get
     // the last message number
     messageStack[0] = lastMessageIndex();
     return messageStack[0];
@@ -1164,7 +1164,7 @@ void updateVariablesValues(String str) {
   int newValues = findOccurrences(str, "<");
   if (newValues == 0) {
     println("No new value to be update");
-    println("response recived to work on: [" + str + "]");
+    println("response received to work on: [" + str + "]");
     return;
   } else {
     println("Updating " + String(newValues) + " values");
@@ -1959,7 +1959,7 @@ void writeThingSpeakData() {
 unsigned int getMint() { return ((millis() / 1000) / 60); }
 
 String getHTTPString(String message) {
-  Println(5, "\n@ -> recived message string:{" + message + "}");
+  Println(5, "\n@ -> received message string:{" + message + "}");
   String tempStr = "";
   for (int i = 0; i < message.length(); i++) {
     if (message[i] == ' ' || message[i] == '\n' || message[i] == '\r')

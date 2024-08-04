@@ -1,0 +1,18 @@
+Data in SPIFFS : version 6.1
+packageExpiryDate: 240902
+WIFI_debug: 0
+LCD_debug: 0
+SIM800L_debug: 1
+THINGSPEAK_debug: 0
+WHATSAPP_debug: 0
+BLE_debug: 1
+SPIFFS_debug: 0
+DEBUGGER: 0
+OrangePi_debug: 1
+message_saving_mode: 0
+COMPANY_NUMBERS: "PTA pta Telenor Warid Zong Ufone ufone JAZZ Jazz 8011 8558 NDMA 1PaisaOffer 6055"
+DEBUGGING: 0
+thingspeak_enabled: 1
+thingsboard_enabled: 0
+
+blynk_servo_pin: 1
