@@ -6,7 +6,7 @@ OrangePiCommManager::OrangePiCommManager(DebugManager& debugManager)
 void OrangePiCommManager::sendData(const String& data) {
     if (WiFi.status() == WL_CONNECTED) {
         HTTPClient http;
-        http.begin(serverName);
+        http.begin(String(ORANGEPI_SERVER) + "/save");
         http.addHeader("Content-Type", "application/json");
 
         int httpResponseCode = http.POST(data);

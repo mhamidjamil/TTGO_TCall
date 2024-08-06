@@ -5,6 +5,7 @@
 #include <ThingSpeak.h>
 #include "arduino_secrets.h" // Include your secrets
 #include "DebugManager.h"
+#include "OrangePiCommManager.h"
 
 class ThingSpeakManager {
 public:

@@ -1,5 +1,3 @@
-#define TARGETED_NUMBER "+923354888420"
-
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
 #define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
@@ -12,7 +10,6 @@
 #include "ThingSpeakManager.h"
 #include "DebugManager.h"
 #include "WiFiManager.h"
-#include "OrangePiCommManager.h"
 
 #define DHTPIN 33 // Change the pin if necessary
 #define DHTTYPE DHT11
@@ -23,7 +20,6 @@ DHTManager dhtManager(DHTPIN, DHTTYPE);
 DebugManager debugManager;
 ThingSpeakManager thingSpeakManager(debugManager);
 WiFiManager wifiManager(debugManager);
-OrangePiCommManager orangePiCommManager(debugManager);
 
 void serialTask(void *pvParameters) {
     while (true) {
