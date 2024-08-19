@@ -1,78 +1,71 @@
-#define TARGETED_NUMBER "+923354888420"
-
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
 #define TINY_GSM_RX_BUFFER 1024 // Set RX buffer to 1Kb
 
 #include <TinyGsmClient.h>
 #include <Wire.h>
+#include "ModemManager.h"
+#include "DisplayManager.h"
+#include "DHTManager.h"
+#include "ThingSpeakManager.h"
+#include "DebugManager.h"
+#include "WiFiManager.h"
 
-// TTGO T-Call pins
-#define MODEM_RST 5
-#define MODEM_PWKEY 4
-#define MODEM_POWER_ON 23
-#define MODEM_TX 27
-#define MODEM_RX 26
-#define I2C_SDA 21
-#define I2C_SCL 22
+#define DHTPIN 33 // Change the pin if necessary
+#define DHTTYPE DHT11
 
-#define SerialMon Serial
-#define SerialAT Serial1
+ModemManager modemManager;
+DisplayManager displayManager;
+DHTManager dhtManager(DHTPIN, DHTTYPE);
+DebugManager debugManager;
+ThingSpeakManager thingSpeakManager(debugManager);
+WiFiManager wifiManager(debugManager);
 
-#ifdef DUMP_AT_COMMANDS
-#include <StreamDebugger.h>
-StreamDebugger debugger(SerialAT, SerialMon);
-TinyGsm modem(debugger);
-#else
-TinyGsm modem(SerialAT);
-#endif
-
-#define IP5306_ADDR 0x75
-#define IP5306_REG_SYS_CTL0 0x00
-
-bool setPowerBoostKeepOn(int en) {
-  Wire.beginTransmission(IP5306_ADDR);
-  Wire.write(IP5306_REG_SYS_CTL0);
-  if (en) {
-    Wire.write(0x37); // Set bit1: 1 enable 0 disable boost keep on
-  } else {
-    Wire.write(0x35); // 0x37 is default reg value
-  }
-  return Wire.endTransmission() == 0;
+void serialTask(void *pvParameters) {
+    while (true) {
+        modemManager.handleSerialCommunication();
+        vTaskDelay(10 / portTICK_PERIOD_MS); // Short delay to avoid WDT reset
+    }
 }
 
 void setup() {
-  // Set console baud rate
-  SerialMon.begin(115200);
+    Serial.begin(115200);
+    modemManager.initialize();
+    displayManager.initialize();
+    dhtManager.initialize();
+    wifiManager.connect();
+    thingSpeakManager.initialize();
+    // Show boot message
+    displayManager.showBootMessage();
 
-  // Keep power when running from battery
-  Wire.begin(I2C_SDA, I2C_SCL);
-  bool isOk = setPowerBoostKeepOn(1);
-  SerialMon.println(String("IP5306 KeepOn ") + (isOk ? "OK" : "FAIL"));
-
-  // Set modem reset, enable, power pins
-  pinMode(MODEM_PWKEY, OUTPUT);
-  pinMode(MODEM_RST, OUTPUT);
-  pinMode(MODEM_POWER_ON, OUTPUT);
-  digitalWrite(MODEM_PWKEY, LOW);
-  digitalWrite(MODEM_RST, HIGH);
-  digitalWrite(MODEM_POWER_ON, HIGH);
-
-  // Set GSM module baud rate and UART pins
-  SerialAT.begin(115200, SERIAL_8N1, MODEM_RX, MODEM_TX);
-  delay(3000);
-  SerialMon.println("Initializing modem...");
-  modem.restart();
+    xTaskCreate(serialTask, "SerialTask", 4096, NULL, 1, NULL);
 }
 
 void loop() {
-  if (SerialMon.available()) {
-    char c = SerialMon.read();
-    SerialAT.write(c);
-  }
+    // Read temperature and humidity
+    float temperature = dhtManager.readTemperature();
+    float humidity = dhtManager.readHumidity();
 
-  if (SerialAT.available()) {
-    char c = SerialAT.read();
-    SerialMon.write(c);
-  }
+    // Prepare status string
+    String status = "sample message here";
+    // status += "SMS: " + String(sms_allowed ? "_A" : "_N") + " ";
+    // status += "Battery: " + String(battery_percentage) + "% ";
+    // status += "Time: " + String(myRTC.hour) + ":" + String(myRTC.minutes) + ":" + String(myRTC.seconds);
+
+    // Prepare lines for display
+    String line1 = String(temperature) + " C, " + String(humidity) + " %";
+    String line2 = "sample message here too";
+
+    // Update the display
+    displayManager.updateDisplay(line1, line2, status);
+
+    // Update ThingSpeak every 3 minutes
+    static unsigned long lastUpdateTime = 0;
+    if (millis() - lastUpdateTime >= 180000) { // 180000 milliseconds = 3 minutes
+        thingSpeakManager.update(temperature, humidity);
+        lastUpdateTime = millis();
+    }
+
+    // Main loop can be used for other tasks
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
