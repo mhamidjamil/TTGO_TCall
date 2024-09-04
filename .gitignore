@@ -2,4 +2,8 @@ temp.ino
 uploaded_code
 *uploaded_code.ino
 .vscode/c_cpp_properties.json
+<<<<<<< Updated upstream
 *secrets.h
+=======
+Modules_test/api_work/arduino_secrets.h
+>>>>>>> Stashed changes
