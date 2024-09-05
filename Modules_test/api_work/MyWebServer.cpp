@@ -33,7 +33,6 @@ void MyWebServer::handlePostRequest() {
     lastReceivedData = server.arg("plain"); // Store the received data
     server.send(200, "application/json",
                 "{\"received\":\"" + lastReceivedData + "\"}");
-    sendDataToPythonServer(lastReceivedData);
   } else {
     server.send(400, "application/json",
                 "{\"error\":\"No message body received\"}");

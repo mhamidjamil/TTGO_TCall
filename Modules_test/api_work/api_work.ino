@@ -25,22 +25,17 @@ void setup() {
 void loop() {
   myServer.handleClient();
 
-  // Print the last received data from the POST request
+  // Receive data from the Python server
   String receivedData = myServer.getLastReceivedData();
   if (receivedData.length() > 0) {
     Serial.println("Received data from Python server: " + receivedData);
     myServer.clearLastReceivedData();
   }
 
-  // Example: Send data to Python server
-  // String dataToSend = "Hello from ESP32";
-
-  if (Serial.available()) {
+  // Send data to the Python server from serial port
+  if (Serial.available() > 0) {
     String dataToSend = Serial.readString();
     Serial.println("i get: " + dataToSend);
     myServer.sendDataToPythonServer(dataToSend);
   }
-
-  // Add a delay to avoid spamming the server
-  // delay(5000);  // Send data every 5 seconds
 }
