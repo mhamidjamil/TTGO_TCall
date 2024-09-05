@@ -1,5 +1,6 @@
 #include "MyWebServer.h"
 #include "arduino_secrets.h"
+#include <ArduinoJson.h>
 #include <WiFi.h>
 
 const char *ssid = MY_SSID;
@@ -28,7 +29,20 @@ void loop() {
   // Receive data from the Python server
   String receivedData = myServer.getLastReceivedData();
   if (receivedData.length() > 0) {
-    Serial.println("Received data from Python server: " + receivedData);
+    // Parse the received JSON data
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, receivedData);
+
+    if (error) {
+      Serial.print("Failed to parse JSON: ");
+      Serial.println(error.c_str());
+    } else {
+      // Extract the "data" field
+      String data = doc["data"];
+      Serial.println("Extracted data from Python server: " + data);
+    }
+
+    // Clear the received data after processing
     myServer.clearLastReceivedData();
   }
 
