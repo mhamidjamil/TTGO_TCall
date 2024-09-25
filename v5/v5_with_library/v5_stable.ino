@@ -33,9 +33,11 @@ String server = "https://api.callmebot.com/whatsapp.php?phone=";
 #include <WiFiUdp.h>
 #include <random>
 
+#include "MyWebServer.h"
 #include "SPIFFS.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <ArduinoJson.h>
 #include <PubSubClient.h>
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
@@ -182,6 +184,8 @@ bool mqtt_connected = false;
 bool pending_test_message = false;
 String demo_message_index, demo_message_number, demo_message_content;
 
+String pi_incoming = "";
+
 struct RTC {
   // Final data: 23/08/26,05:38:34+20
   int year = 0; // year will be 23
@@ -193,6 +197,8 @@ struct RTC {
   int seconds = 0; // seconds will be 34
 };
 RTC myRTC;
+
+MyWebServer myServer(80);
 
 // # ......... functions > .......
 void println(String str);
@@ -251,7 +257,7 @@ void Delay(int milliSeconds);
 bool isNum(String num);
 void deleteMessages(String index);
 void inputManager(String input, int inputFrom); // 1 = BLE, 2 = Loop, 3 = SMS
-void initBLE();
+// void initBLE();
 void BLE_inputManager(String input);
 bool isNum(String num);
 bool wapdaOn();
@@ -272,71 +278,72 @@ String getHTTPString(String message);
 //! outdated
 // TODO: update functions and add there description
 //  # ......... < functions .......
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
+// #include <BLEDevice.h>
+// #include <BLEServer.h>
+// #include <BLEUtils.h>
 
-BLEServer *pServer = NULL;
-BLECharacteristic *pCharacteristic = NULL;
-bool deviceConnected = false;
-bool oldDeviceConnected = false;
-std::string receivedData = "";
+// BLEServer *pServer = NULL;
+// BLECharacteristic *pCharacteristic = NULL;
+// bool deviceConnected = false;
+// bool oldDeviceConnected = false;
+// std::string receivedData = "";
 
-class MyServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer *pServer) { deviceConnected = true; }
+// class MyServerCallbacks : public BLEServerCallbacks {
+//   void onConnect(BLEServer *pServer) { deviceConnected = true; }
 
-  void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
-};
+//   void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
+// };
 
-class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *pCharacteristic) {
-    std::string value = pCharacteristic->getValue();
-    if (value.length() > 0) {
-      receivedData = value;
-      Serial.print("Received from BLE: ");
-      Serial.println(receivedData.c_str());
-      BLE_inputManager(String(receivedData.c_str()));
+// class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
+//   void onWrite(BLECharacteristic *pCharacteristic) {
+//     std::string value = pCharacteristic->getValue();
+//     if (value.length() > 0) {
+//       receivedData = value;
+//       Serial.print("Received from BLE: ");
+//       Serial.println(receivedData.c_str());
+//       BLE_inputManager(String(receivedData.c_str()));
 
-      // Print the received data back to the BLE connection
-      receivedData = BLE_Output.c_str();
-      pCharacteristic->setValue("BLE: " + receivedData);
-      pCharacteristic->notify();
-    }
-  }
-};
+//       // Print the received data back to the BLE connection
+//       receivedData = BLE_Output.c_str();
+//       pCharacteristic->setValue("BLE: " + receivedData);
+//       pCharacteristic->notify();
+//     }
+//   }
+// };
 
-void BLE_inputManager(String input) {
-  bool time_out =
-      BLE_Input != "" && (10 < ((millis() / 1000) - BLE_last_receive_time));
-  if (input.indexOf("#") != -1 || time_out) {
-    // means string is now fetched completely
-    if (!isIn(input, "_nil_"))
-      BLE_Input += input.substring(0, input.indexOf("#"));
-    println("Executing (BLE input): {" + BLE_Input + "}");
-    inputManager(removeNewline(BLE_Input), 1);
-    BLE_Input = "";
-    BLE_last_receive_time = 0;
-  } else if (input.length() > 0 && !isIn(input, "_nil_")) {
-    if (BLE_Input == "")
-      BLE_last_receive_time = (millis() / 1000);
-    BLE_Input += input;
-    if (BLE_Input.length() > 50) {
-      println("BLE input is getting to large , here is the current string (" +
-              BLE_Input + ") flushing it...");
-      BLE_Input = "";
-    }
-  } else {
-    if (!isIn(input, "_nil_"))
-      rise("Unexpected flow in BLE input manager", "324");
-  }
-}
+// void BLE_inputManager(String input) {
+//   bool time_out =
+//       BLE_Input != "" && (10 < ((millis() / 1000) - BLE_last_receive_time));
+//   if (input.indexOf("#") != -1 || time_out) {
+//     // means string is now fetched completely
+//     if (!isIn(input, "_nil_"))
+//       BLE_Input += input.substring(0, input.indexOf("#"));
+//     println("Executing (BLE input): {" + BLE_Input + "}");
+//     inputManager(removeNewline(BLE_Input), 1);
+//     BLE_Input = "";
+//     BLE_last_receive_time = 0;
+//   } else if (input.length() > 0 && !isIn(input, "_nil_")) {
+//     if (BLE_Input == "")
+//       BLE_last_receive_time = (millis() / 1000);
+//     BLE_Input += input;
+//     if (BLE_Input.length() > 50) {
+//       println("BLE input is getting to large , here is the current string ("
+//       +
+//               BLE_Input + ") flushing it...");
+//       BLE_Input = "";
+//     }
+//   } else {
+//     if (!isIn(input, "_nil_"))
+//       rise("Unexpected flow in BLE input manager", "324");
+//   }
+// }
 
 //! * # # # # # # # # # # # # * !
 
 void setup() {
   SerialMon.begin(115200);
   Println("####  Setup ####");
-  initBLE();
+  // initBLE();
   Println("After BLE init");
   Wire.begin(I2C_SDA, I2C_SCL);
   bool isOk = setPowerBoostKeepOn(1);
@@ -411,6 +418,7 @@ void setup() {
   pinMode(LED, OUTPUT);
   delay(100);
   if (wifi_working) {
+    myServer.begin();
     initThingSpeak();
   }
   Println("\nAfter ThingSpeak");
@@ -424,28 +432,29 @@ void setup() {
   thingsboard_enabled ? initThingsBoard() : alert("Thingsboard is not enabled");
   SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + getRTC_Time())
                      : Println("");
-  setBypassKey(askOrangPi("send bypass key"));
+  askOrangPi("send bypass key");
 }
 
 void loop() {
+  handleAPIS();
   Println("in loop");
-  if (BLE_Input != "")
-    BLE_inputManager("_nil_");
-  client.loop(); // ensure that the MQTT client remains responsive
-  if (deviceConnected) {
-    if (!oldDeviceConnected) {
-      Serial.println("Connected to device");
-      oldDeviceConnected = true;
-    }
-  } else {
-    if (oldDeviceConnected) {
-      Serial.println("Disconnected from device");
-      Delay(500);
-      pServer->startAdvertising(); // restart advertising
-      Serial.println("Restart advertising");
-      oldDeviceConnected = false;
-    }
-  }
+  // if (BLE_Input != "")
+  //   BLE_inputManager("_nil_");
+  // client.loop(); // ensure that the MQTT client remains responsive
+  // if (deviceConnected) {
+  //   if (!oldDeviceConnected) {
+  //     Serial.println("Connected to device");
+  //     oldDeviceConnected = true;
+  //   }
+  // } else {
+  //   if (oldDeviceConnected) {
+  //     Serial.println("Disconnected from device");
+  //     Delay(500);
+  //     pServer->startAdvertising(); // restart advertising
+  //     Serial.println("Restart advertising");
+  //     oldDeviceConnected = false;
+  //   }
+  // }
 
   Delay(100);
   if (SerialMon.available()) {
@@ -486,9 +495,9 @@ void loop() {
 void println(String str) {
   SerialMon.println(str);
   BLE_Output = str;
-  receivedData = BLE_Output.c_str();
-  pCharacteristic->setValue("BLE: " + receivedData);
-  pCharacteristic->notify();
+  // receivedData = BLE_Output.c_str();
+  // pCharacteristic->setValue("BLE: " + receivedData);
+  // pCharacteristic->notify();
 }
 
 void Println(String str) {
@@ -516,9 +525,9 @@ void Println(int debuggerID, String str) {
 void print(String str) {
   SerialMon.print(str);
   BLE_Output = str;
-  receivedData = BLE_Output.c_str();
-  pCharacteristic->setValue("BLE: " + receivedData);
-  pCharacteristic->notify();
+  // receivedData = BLE_Output.c_str();
+  // pCharacteristic->setValue("BLE: " + receivedData);
+  // pCharacteristic->notify();
 }
 
 void say(String str) { SerialAT.println(str); }
@@ -1452,29 +1461,30 @@ String fetchDetails(String str, String begin, String end, int padding) {
                                  beginOfTarget.indexOf(end) - (padding - 1));
 }
 
-void initBLE() {
-  BLEDevice::init("TTGO T-Call BLE");
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
+// void initBLE() {
+//   BLEDevice::init("TTGO T-Call BLE");
+//   pServer = BLEDevice::createServer();
+//   pServer->setCallbacks(new MyServerCallbacks());
 
-  BLEService *pService = pServer->createService(
-      BLEUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b")); // Custom service UUID
-  pCharacteristic = pService->createCharacteristic(
-      BLEUUID("beb5483e-36e1-4688-b7f5-ea07361b26a8"), // Custom
-                                                       // characteristic UUID
-      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
-  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+//   BLEService *pService = pServer->createService(
+//       BLEUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b")); // Custom service
+//       UUID
+//   pCharacteristic = pService->createCharacteristic(
+//       BLEUUID("beb5483e-36e1-4688-b7f5-ea07361b26a8"), // Custom
+//                                                        // characteristic UUID
+//       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+//   pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
 
-  pService->start();
+//   pService->start();
 
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(pService->getUUID());
-  pAdvertising->setScanResponse(true);
-  pAdvertising->setMinPreferred(0x06); // sets the minimum advertising interval
-  BLEDevice::startAdvertising();
+//   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+//   pAdvertising->addServiceUUID(pService->getUUID());
+//   pAdvertising->setScanResponse(true);
+//   pAdvertising->setMinPreferred(0x06); // sets the minimum advertising
+//   interval BLEDevice::startAdvertising();
 
-  Serial.println("Waiting for Bluetooth connection...");
-}
+//   Serial.println("Waiting for Bluetooth connection...");
+// }
 
 bool isNum(String num) {
   if (num.toInt() > -9999 && num.toInt() < 9999)
@@ -1554,7 +1564,9 @@ void inputManager(String command, int inputFrom) {
   // when you ant to ad new command just try to add as above as you can and make
   // sure you dont make any conflict with pre use strings.
   println("Working on: " + command);
-  //  inputFrom tell who's this function user 1:BLE, 2:Serial or 3:sms
+  //  inputFrom tell who's this function user 1:BLE, 2:Serial, 3:sms or 4:
+  //  orange-pi
+
   if (isIn(command, "demo message")) {
     //$ demo message (2)[time?]{+923354888444}
     int index_open_bracket = command.indexOf("(");
@@ -1586,7 +1598,9 @@ void inputManager(String command, int inputFrom) {
     println("demo_message_content: " + demo_message_content);
     pending_test_message = true;
     getResponse();
-  } else if (command.indexOf("smsTo") != -1) {
+  } else if (isIn(command, "bypass key:")) {
+    setBypassKey(command);
+  } else if (isIn(command, "smsTo")) {
     String strSms =
         command.substring(command.indexOf("[") + 1, command.indexOf("]"));
     String strNumber =
@@ -1597,8 +1611,8 @@ void inputManager(String command, int inputFrom) {
     toOrangePi(command.substring(command.indexOf("say to orange") + 16, -1));
   } else if (isIn(command, "test orange pi logs")) {
     saveItOrangePi(command.substring(command.indexOf("test orange") + 19, -1));
-  } else if (command.indexOf("switch") != -1 &&
-             (command.indexOf("off") != -1 || command.indexOf("on") != -1)) {
+  } else if (isIn(command, "switch") &&
+             (isIn(command, "off") || isIn(command, "on"))) {
     relayControllerManager(command);
     inputFrom == 3 ? command += "<executed>" : "";
   } else if ((command.indexOf("check sms sending") != -1) ||
@@ -1781,10 +1795,11 @@ void inputManager(String command, int inputFrom) {
     else
       println("Message not Exists");
   } else if (command.indexOf("my_ip") != -1 || command.indexOf("my ip") != -1) {
-    String response = askOrangPi("send ip");
+    askOrangPi("send ip");
+    // TODO: after upgrading to API work this part was affected
     if (inputFrom == 3) {
       command += "<executed>";
-      sendSMS(response);
+      // sendSMS(response);
     }
   } else if (command.indexOf("enable") != -1) {
     if (command.indexOf("thingspeak") != -1 ||
@@ -2245,24 +2260,25 @@ void updateMQTT(int temperature_, int humidity_) {
 }
 
 void toOrangePi(String str) {
-  println("{hay orange-pi! " + removeNewline(str) + "}");
+  // println("{hay orange-pi! " + removeNewline(str) + "}");
+  myServer.sendDataToPythonServer("{hay orange-pi! " + removeNewline(str) +
+                                  "}");
 }
 
 void saveItOrangePi(String str) {
-  String _logger_ =
+  String logs_for_pi =
       "{hay orange-pi! [#SaveIt]: \n"
       "---------------------------------------------------------->>\n "
       "TimeStamp: " +
       String(millis() / 1000) + "\nMessage:\n" + str +
       "\n<<----------------------------------------------------------\n "
       "end_of_file }";
-  println(_logger_);
+  myServer.sendDataToPythonServer(logs_for_pi);
 }
 
-String askOrangPi(String str) {
+void askOrangPi(String str) {
   toOrangePi(str + "?");
   wait(500);
-  return replyOfOrangePi();
 }
 
 String replyOfOrangePi() {
@@ -2271,8 +2287,9 @@ String replyOfOrangePi() {
   while (
       (!(reply.indexOf("hay ttgo-tcall!") != -1 && reply.indexOf("}") != -1)) &&
       (millis() / 1000) - startTime < ORANGEPI_RESPONSE_WAIT_TIME) {
-    if (SerialMon.available()) {
-      reply += SerialMon.readString();
+    // if (SerialMon.available()) {
+    if (pi_incoming.length() > 0) {
+      reply += pi_incoming;
     }
   }
   println("Reply of Orange Pi: {" + reply + "}");
@@ -2303,8 +2320,9 @@ bool updateTime() {
         i -= 10;
         delay(100);
       }
-      formattedDate = timeClient.getFormattedDate();
-      updateOnlineTime(formattedDate);
+      // formattedDate = timeClient.getFormattedDate();
+      // updateOnlineTime(formattedDate);
+      // TODO: this part is not working on new machine
       println("Online updated time: " + getRTC_Time());
       if (myRTC.month == 0)
         return false;
@@ -2407,12 +2425,12 @@ bool senderIsAuthentic(String number, String message) {
       return true;
 
     byPass_key_from_orangePi.length() <= 0
-        ? setBypassKey(askOrangPi("send bypass key")),
-        "module ask bypass key from orange-pi"
-        : "module already have initialized with bypass key";
-    if (message.indexOf(byPass_key_from_orangePi) != -1) {
-      return true;
-    }
+        ? print("module ask bypass key from orange-pi")
+        : print("module already have initialized with bypass key");
+    askOrangPi("send bypass key");
+    return false;
+
+    return isIn(message, byPass_key_from_orangePi);
     if (byPass_key_from_orangePi.length() > 0) {
       sendSMS("Unauthorized number: {" + number +
               "} tried to access your device if he is "
@@ -2620,4 +2638,30 @@ bool isInteger(String tempStr) {
     else
       return false;
   return ret;
+}
+
+void handleAPIS() {
+  myServer.handleClient();
+
+  // Receive data from the Python server
+  String receivedData = myServer.getLastReceivedData();
+  if (receivedData.length() > 0) {
+    // Parse the received JSON data
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, receivedData);
+
+    if (error) {
+      Serial.print("Failed to parse JSON: ");
+      Serial.println(error.c_str());
+    } else {
+      // Extract the "data" field
+      String data = doc["data"];
+      Serial.println("Extracted data from Python server: " + data);
+      // pi_incoming += data;
+      inputManager(data, 4);
+    }
+
+    // Clear the received data after processing
+    myServer.clearLastReceivedData();
+  }
 }
