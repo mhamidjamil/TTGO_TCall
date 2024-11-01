@@ -1,5 +1,5 @@
-//$ last work 16/March/24 [12:45 AM]
-// # version 5.7.4 untrained messages rework
+//$ last work 25/Sep/24 [11:51 PM]
+// # version 5.7.5 Worked on API communication
 
 #include "arduino_secrets.h"
 
@@ -436,7 +436,7 @@ void setup() {
 }
 
 void loop() {
-  handleAPIS();
+  // handleAPIS();
   Println("in loop");
   // if (BLE_Input != "")
   //   BLE_inputManager("_nil_");
@@ -455,6 +455,12 @@ void loop() {
   //     oldDeviceConnected = false;
   //   }
   // }
+
+  if (pi_incoming.length() >= 1) {
+    String tempStr = pi_incoming;
+    pi_incoming = "";
+    inputManager(tempStr, 4);
+  }
 
   Delay(100);
   if (SerialMon.available()) {
@@ -551,6 +557,8 @@ void sendSMS(String sms) {
   if (sms_allowed) {
     if (modem.sendSMS(MY_NUMBER, sms)) {
       println("$send{" + sms + "}");
+      saveItOrangePi("Message send to: {" + MY_NUMBER + "}, message: [" + sms +
+                     "]");
     } else {
       println("SMS failed to send");
       println("\n!send{" + sms + "}!\n");
@@ -565,6 +573,8 @@ void sendSMS(String sms, String number) {
   if (sms_allowed) {
     if (modem.sendSMS(number, sms)) {
       println("sending: [" + sms + "] to: " + String(number));
+      saveItOrangePi("Message send to: {" + number + "}, message: [" + sms +
+                     "]");
     } else {
       println("SMS failed to send");
     }
@@ -853,35 +863,12 @@ void terminateLastMessage() {
   if (_message_.indexOf("<executed>") != -1) {
     deleteMessage(current_target_index, _message_, mobileNumber);
     println("Message {" + String(current_target_index) + "} deleted");
-  } else {                                   // if the message don't execute
-    if (!checkStack(current_target_index)) { // ?
-      if (senderIsAuthentic(mobileNumber, _message_)) {
-        sendSMS("!Unable to execute previous sms no. {" +
-                String(current_target_index) + "} message: [ " +
-                removeNewline(_message_) + " ] from: {" + mobileNumber +
-                "} Removing it from stack so it don't disturb you !");
-        toOrangePi("untrained_sender:" + removeNewline(_message_) +
-                   " from: {_" + mobileNumber + "_}<_" +
-                   String(current_target_index) + "_>");
-        Delay(600);
-      } else if (!companyMsg(mobileNumber) &&
-                 mobileNumber.indexOf("3374888420") == -1) {
-        // if its neither company nor self message
-        sendSMS("#Unable to execute previous sms no. {" +
-                String(current_target_index) + "} message: [ " +
-                removeNewline(_message_.substring(
-                    0, _message_.indexOf(" <not executed>"))) +
-                " ] from: " + mobileNumber + ", what to do ?");
-        Delay(600);
-      } else {
-        sendSMS("$Unable to execute previous sms no. {" +
-                String(current_target_index) + "} message: [ " +
-                _message_.substring(0, _message_.indexOf(" <not executed>")) +
-                " ] from: " + mobileNumber + ". deleting it...");
-        Delay(600);
-        deleteMessage(current_target_index, _message_, mobileNumber);
-      }
-    }
+  } else { // if the message don't execute
+    saveItOrangePi("#863 Deleting message: {" + _message_ + "} from: [" +
+                   mobileNumber + "]");
+    bool temp_status = deleteMessage(-1 * current_target_index);
+    saveItOrangePi("Message: (" + String(current_target_index) + ") was " +
+                   (temp_status ? "successfully" : "not") + " deleted");
   }
   println("\n\t*** terminator job end ***\n");
 }
@@ -1365,6 +1352,12 @@ void Delay(int milliseconds) {
   for (int i = 0; i < milliseconds; i += 10) {
     // most important task will be executed here
     delay(10);
+    handleAPIS();
+    if (pi_incoming.length() >= 1) {
+      String tempStr = pi_incoming;
+      pi_incoming = "";
+      inputManager(tempStr, 4);
+    }
   }
 
   myRTC.milliSeconds += milliseconds;
@@ -1409,7 +1402,8 @@ void deleteMessages(String deleteCommand, bool *message_deleted) {
   bool condition_ = true;
   for (int pointer_ = 0; condition_; pointer_++)
     if (targetCommand[pointer_] != ' ')
-      if (targetCommand[pointer_] >= '0' && targetCommand[pointer_] <= '9')
+      if ((targetCommand[pointer_] >= '0' && targetCommand[pointer_] <= '9') ||
+          targetCommand[pointer_] == '-')
         condition_ = false;
       else {
         alert("Unable to delete messages {" + targetCommand + "} #1322");
@@ -2267,7 +2261,7 @@ void toOrangePi(String str) {
 
 void saveItOrangePi(String str) {
   String logs_for_pi =
-      "{hay orange-pi! [#SaveIt]: \n"
+      "{hay orange-pi! [#SaveIt]:\n"
       "---------------------------------------------------------->>\n "
       "TimeStamp: " +
       String(millis() / 1000) + "\nMessage:\n" + str +
@@ -2657,8 +2651,8 @@ void handleAPIS() {
       // Extract the "data" field
       String data = doc["data"];
       Serial.println("Extracted data from Python server: " + data);
-      // pi_incoming += data;
-      inputManager(data, 4);
+      pi_incoming += data;
+      // inputManager(data, 4);
     }
 
     // Clear the received data after processing
