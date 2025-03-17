@@ -1,5 +1,5 @@
-//$ last work 17/March/25
-// # version 5.7.6 Utilize smsSend function
+//$ last work 17/March/25 [6:05 PM]
+// # version 5.8.1 Updates whatsapp messaging
 
 #include "arduino_secrets.h"
 
@@ -8,15 +8,9 @@ const char simPIN[] = "";
 String MY_NUMBER = PHONE_NUMBER;
 String byPass_key_from_orangePi = "";
 
-String whatsapp_numbers[4] = {WHATSAPP_NUMBER_1, WHATSAPP_NUMBER_2,
-                              WHATSAPP_NUMBER_3, WHATSAPP_NUMBER_4};
-
-String API[4] = {WHATSAPP_API_1, WHATSAPP_API_2, WHATSAPP_API_3,
-                 WHATSAPP_API_4};
-
 const char *mqtt_server = MY_MQTT_SERVER_IP;
 
-String server = "https://api.callmebot.com/whatsapp.php?phone=";
+String whatsAppServerPath = "https://whatsapp.hamidjamil.online/send";
 
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
@@ -558,6 +552,8 @@ void sendSMS(String sms) {
 }
 
 void sendSMS(String sms, String number) {
+  sendWhatsappMsg(sms, number);
+
   if (!sms_allowed) {
     println("SMS sending is not allowed");
     return;
@@ -683,7 +679,7 @@ String getResponse() {
       deleteMessage(newMessageNumber, _message_, senderNumber);
     }
     pending_test_message = false;
-  } else if (response.indexOf("+CLIP:") != -1) { // miss call
+  } else if (response.indexOf("+CLIP:") != -1) { // incoming call
     //+CLIP: "03354888420",161,"",0,"",0
     hangUp();
     delay(500);
@@ -1756,15 +1752,10 @@ void inputManager(String command, int inputFrom) {
     updateTime() ? alert("Time updated successfully #1550")
                  : sendSMS("#setTime", "+923374888420");
     inputFrom == 3 ? command += "<executed>" : "";
-  } else if (command.indexOf("whatsapp") != -1) {
-    if (command.length() <= 10) {
-      Println(5, "Sending test message from esp32");
-      sendWhatsappMsg("test_message_from_esp32");
-    } else {
-      Println(5, "-> [" + String(command.length()) + "]Sending message: " +
-                     command.substring(command.indexOf("whatsapp") + 9, -1));
-      sendWhatsappMsg(command.substring(command.indexOf("whatsapp") + 9, -1));
-    }
+  } else if (command.indexOf("test whatsapp") != -1) {
+    Println(5, "Sending test message from esp32");
+    sendWhatsappMsg("test_message_from_esp32");
+
     inputFrom == 3 ? command += "<executed>" : "";
   } else if (command.indexOf("readSPIFFS") != -1) {
     println("Data in SPIFFS: " + readSPIFFS());
@@ -1843,79 +1834,48 @@ bool companyMsg(String mobileNumber) {
 }
 
 void sendWhatsappMsg(String message) {
-  if (myRTC.date == 0) {
-    println(
-        "myRTC not updated yet so wait for it to avoid unexpected behaviour");
-    updateTime() ? sendWhatsappMsg(message)
-                 : println("Unable send message, time not updated");
-  } else if (!wifiConnected()) {
-    println("Wifi not connected unable to send whatsapp message");
+  sendWhatsappMsg(message, MY_NUMBER);
+}
+
+
+void sendWhatsappMsg(String message, String number) {
+  println("######## Sending WhatsApp Message ########");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    println("WiFi not connected!");
     return;
   }
-  Println(5, "########_______________________________#########");
+
   HTTPClient http;
-  String serverPath = getServerPath(getHTTPString(message));
-  Println(5, "Working on this HTTP: \n->{" + serverPath + "}");
-  Delay(3000);
-  http.begin(serverPath);
-  int httpResponseCode = http.GET();
+  http.begin(whatsAppServerPath);
+  http.addHeader("Content-Type", "application/json");
+
+  // Create JSON payload
+  StaticJsonDocument<200> jsonDoc;
+  jsonDoc["number"] = number;
+  jsonDoc["message"] = message;
+  jsonDoc["sender"] = "TTGO-TCall";
+
+  String jsonPayload;
+  serializeJson(jsonDoc, jsonPayload);
+
+  println("Sending request: " + jsonPayload);
+
+  // Send POST request
+  int httpResponseCode = http.POST(jsonPayload);
+
   if (httpResponseCode > 0) {
     print("HTTP Response code: ");
-    println(String(httpResponseCode));
+    println(httpResponseCode);
     String payload = http.getString();
-    println(payload);
-    updateWhatsappMessageCounter();
+    println("Response: " + payload);
   } else {
-    print("Error code: ");
-    println(String(httpResponseCode));
+    print("Error sending message. HTTP code: ");
+    println(httpResponseCode);
   }
+
   http.end();
-  Println(5, "########_______________________________#########");
-}
-
-String getServerPath(String message) {
-  String whatsappNumber;
-  String api;
-  if (whatsapp_message_number == -1) {
-    whatsapp_message_number = getMessagesCounter();
-    if (whatsapp_message_number < 0 && whatsapp_message_number > 100) {
-      println("Unexpected behaviour in getMessagesCounter()");
-      addError("1608");
-    }
-    whatsappNumber = whatsapp_numbers[whatsapp_message_number / 25];
-    api = API[whatsapp_message_number / 25];
-
-  } else {
-    whatsappNumber = whatsapp_numbers[whatsapp_message_number / 25];
-    api = API[whatsapp_message_number / 25];
-    Println(5, "Using " + whatsappNumber +
-                   "for whatsapp message: " + String(whatsapp_message_number));
-  }
-  String serverPath = server + whatsappNumber + getHTTPString(message) + api;
-  Println(5, "returning mobile number: " + String(whatsappNumber));
-  Println(5, "returning api: " + String(api));
-  return serverPath;
-}
-
-int getMessagesCounter() {
-  if (!thingspeak_enabled) {
-    return -1;
-  }
-  int todayMessages = -1;
-  int lastUpdateOfThingSpeakMessageCounter =
-      getThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD);
-  if (lastUpdateOfThingSpeakMessageCounter != myRTC.date) {
-    Println(5, "Day changed initiating new counter");
-    setThingSpeakFieldData(TS_MSG_SEND_DATE_FIELD, myRTC.date);
-    setThingSpeakFieldData(TS_MSG_COUNTER_FIELD, 1);
-    writeThingSpeakData();
-    todayMessages = 1;
-  } else {
-    todayMessages = getThingSpeakFieldData(TS_MSG_COUNTER_FIELD);
-    Println(5, "Else: Fetched data: " + String(todayMessages));
-  }
-  Println(5, "Returning Counter: " + String(todayMessages));
-  return todayMessages;
+  println("######## Message Sent ########");
 }
 
 int getThingSpeakFieldData(int fieldNumber) {
