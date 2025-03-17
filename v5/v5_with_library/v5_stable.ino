@@ -1,5 +1,5 @@
-//$ last work 25/Sep/24 [11:51 PM]
-// # version 5.7.5 Worked on API communication
+//$ last work 17/March/25
+// # version 5.7.6 Utilize smsSend function
 
 #include "arduino_secrets.h"
 
@@ -554,34 +554,24 @@ void call(String number) {
 }
 
 void sendSMS(String sms) {
-  if (sms_allowed) {
-    if (modem.sendSMS(MY_NUMBER, sms)) {
-      println("$send{" + sms + "}");
-      saveItOrangePi("Message send to: {" + MY_NUMBER + "}, message: [" + sms +
-                     "]");
-    } else {
-      println("SMS failed to send");
-      println("\n!send{" + sms + "}!\n");
-    }
-    Delay(500);
-  } else {
-    println("SMS sending is not allowed");
-  }
+  sendSMS(sms, MY_NUMBER);
 }
 
 void sendSMS(String sms, String number) {
-  if (sms_allowed) {
-    if (modem.sendSMS(number, sms)) {
-      println("sending: [" + sms + "] to: " + String(number));
-      saveItOrangePi("Message send to: {" + number + "}, message: [" + sms +
-                     "]");
-    } else {
-      println("SMS failed to send");
-    }
-    Delay(500);
-  } else {
+  if (!sms_allowed) {
     println("SMS sending is not allowed");
+    return;
   }
+
+  if (modem.sendSMS(number, sms)) {
+    println("sending: [" + sms + "] to: " + number);
+    saveItOrangePi("Message sent to: {" + number + "}, message: [" + sms + "]");
+  } else {
+    println("SMS failed to send");
+    println("\n!send{" + sms + "}!\n");
+  }
+
+  Delay(500);
 }
 
 void updateSerial() {
