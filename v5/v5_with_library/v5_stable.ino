@@ -547,9 +547,7 @@ void call(String number) {
   updateSerial();
 }
 
-void sendSMS(String sms) {
-  sendSMS(sms, MY_NUMBER);
-}
+void sendSMS(String sms) { sendSMS(sms, MY_NUMBER); }
 
 void sendSMS(String sms, String number) {
   sendWhatsappMsg(sms, number);
@@ -1833,10 +1831,7 @@ bool companyMsg(String mobileNumber) {
   return false;
 }
 
-void sendWhatsappMsg(String message) {
-  sendWhatsappMsg(message, MY_NUMBER);
-}
-
+void sendWhatsappMsg(String message) { sendWhatsappMsg(message, MY_NUMBER); }
 
 void sendWhatsappMsg(String message, String number) {
   println("######## Sending WhatsApp Message ########");
@@ -1866,12 +1861,12 @@ void sendWhatsappMsg(String message, String number) {
 
   if (httpResponseCode > 0) {
     print("HTTP Response code: ");
-    println(httpResponseCode);
+    println(String(httpResponseCode));
     String payload = http.getString();
     println("Response: " + payload);
   } else {
     print("Error sending message. HTTP code: ");
-    println(httpResponseCode);
+    println(String(httpResponseCode));
   }
 
   http.end();
