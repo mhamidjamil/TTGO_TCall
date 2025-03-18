@@ -10,7 +10,7 @@ String byPass_key_from_orangePi = "";
 
 const char *mqtt_server = MY_MQTT_SERVER_IP;
 
-String whatsAppServerPath = "https://whatsapp.hamidjamil.online/send";
+String whatsAppServerPath = WHATSAPP_SERVER_PATH;
 
 // Configure TinyGSM library
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
