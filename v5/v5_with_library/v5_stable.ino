@@ -76,7 +76,6 @@ TinyGsm modem(SerialAT);
 #define IP5306_REG_SYS_CTL0 0x00
 
 bool thingspeak_enabled = true;
-bool thingsboard_enabled = true;
 bool thingspeak_turn = false;
 #define MAX_MESSAGES 15
 #define UPDATE_THING_SPEAK_TH_AFTER 5
@@ -423,7 +422,6 @@ void setup() {
   Println("after syncSPIFFS: ");
   updateTime();
   Println("after time request");
-  thingsboard_enabled ? initThingsBoard() : alert("Thingsboard is not enabled");
   SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + getRTC_Time())
                      : Println("");
   askOrangPi("send bypass key");
@@ -1226,28 +1224,7 @@ void wait(unsigned int miliSeconds) {
     }
     if (getMint() > last_ts_update_time) {
       // jobs which have to be execute after every 5 minutes
-      if (wifiConnected()) {
-        if (wifi_working && (thingspeak_enabled || thingsboard_enabled)) {
-          if (thingspeak_enabled && (thingspeak_turn || !thingsboard_enabled)) {
-            Println(4, "Before Temperature Update");
-            updateThingSpeak(temperature, humidity);
-            last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
-            Println(4, "After temperature update");
-          }
-          if (display_working) {
-            updateBatteryParameters(updateBatteryStatus());
-          }
-          if (thingsboard_enabled &&
-              (!thingspeak_turn || !thingspeak_enabled)) {
-            Delay(3000);
-            i += 3000;
-            Println(7, "Before MQTT update");
-            updateMQTT((int)temperature, humidity);
-            Println(7, "After MQTT update");
-          }
-          thingspeak_turn = !thingspeak_turn;
-        }
-      } else if (thingspeak_enabled) {
+      if (thingspeak_enabled) {
         connect_wifi();
         if (wifiConnected()) {
           wifi_working = true;
@@ -1779,30 +1756,23 @@ void inputManager(String command, int inputFrom) {
         command.indexOf("thingSpeak") != -1) {
       set(&thingspeak_enabled, "thingspeak_enabled", true);
       initThingSpeak();
-    } else if (command.indexOf("thingsboard") != -1 ||
-               command.indexOf("thingsBoard") != -1) {
-      set(&thingsboard_enabled, "thingsboard_enabled", true);
-      initThingsBoard();
     } else if (isIn(command, "message_saving_mode") ||
                isIn(command, "message saving mode")) {
       set(&message_saving_mode, "message_saving_mode", true);
     } else {
       println("You can only enable these services: "
-              "\n\t->thingspeak\n\t->thingsboard\n\t->message_saving_mode");
+              "\n\t->thingspeak\n\t->message_saving_mode");
     }
   } else if (command.indexOf("disable") != -1) {
     if (command.indexOf("thingspeak") != -1 ||
         command.indexOf("thingSpeak") != -1) {
       set(&thingspeak_enabled, "thingspeak_enabled", false);
-    } else if (command.indexOf("thingsboard") != -1 ||
-               command.indexOf("thingsBoard") != -1) {
-      set(&thingsboard_enabled, "thingsboard_enabled", false);
     } else if (isIn(command, "message_saving_mode") ||
                isIn(command, "message saving mode")) {
       set(&message_saving_mode, "message_saving_mode", false);
     } else {
       println("You can only disable these services: "
-              "\n\t->thingspeak\n\t->thingsboard\n\t->message_saving_mode");
+              "\n\t->thingspeak\n\t->message_saving_mode");
     }
   }
   // TODO: help command should return all executable commands
@@ -2147,9 +2117,6 @@ void syncSPIFFS() {
   thingspeak_enabled =
       getFileVariableValue("thingspeak_enabled", true).toInt() == 1 ? true
                                                                     : false;
-  thingsboard_enabled =
-      getFileVariableValue("thingsboard_enabled", true).toInt() == 1 ? true
-                                                                     : false;
   message_saving_mode =
       getFileVariableValue("message_saving_mode", true).toInt() == 1 ? true
                                                                      : false;
@@ -2287,11 +2254,6 @@ void alert(String msg) {
 String removeNewline(String str) {
   str.replace("\n", " ");
   return str;
-}
-
-void initThingsBoard() {
-  println("\nThingsBoard initializing...\n");
-  client.setServer(mqtt_server, 1883);
 }
 
 void initThingSpeak() {
