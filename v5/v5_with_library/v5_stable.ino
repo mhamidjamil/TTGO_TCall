@@ -116,6 +116,7 @@ String end_value = "=";
 String line_1 = "098 ";
 String line_2 = "786";
 String last_line = "Not initialized";
+String gate_esp_url = "192.168.100.75";
 
 String received_message = ""; // Global variable to store received message
 double battery_voltage = 0;
@@ -680,21 +681,33 @@ String getResponse() {
     hangUp();
     delay(500);
     String callerNumber = fetchDetails(response, "\"", 1);
-    String temp_str = "Missed call from: " + callerNumber;
-    if (callerNumber.length() > 10 &&
-        (callerNumber.startsWith("+92") || callerNumber.startsWith("03"))) {
-      delay(200);
-      sendSMS("AOA, this is " + OWNER_NAME +
-                  "'s secondary number. This message is auto-generated, as I "
-                  "am currently unable to take calls on this device. For "
-                  "urgent matters, please contact me at " +
-                  MY_NUMBER + ". Thank you for your understanding.",
-              callerNumber);
-      temp_str += " asked him to contact you.";
+    String last10Digits = callerNumber.substring(callerNumber.length() - 10);
+
+    bool gate_should_open = false;
+    if (isIn(ADMIN_USERS_NUMBERS, last10Digits)) {
+      println("## Number is in the list: " + last10Digits);
+      if (!notifyGateESP(gate_esp_url))
+        sendWhatsappMsg("#2244 open gate",
+                        callerNumber); //! not a valid approach
     } else {
-      temp_str += " unable to ask him to contact you!";
+      println("Number is not in the list: " + last10Digits);
+
+      String temp_str = "Missed call from: " + callerNumber;
+      if (callerNumber.length() > 10 &&
+          (callerNumber.startsWith("+92") || callerNumber.startsWith("03"))) {
+        delay(200);
+        sendSMS("AOA, this is " + OWNER_NAME +
+                    "'s secondary number. This message is auto-generated, as I "
+                    "am currently unable to take calls on this device. For "
+                    "urgent matters, please contact me at " +
+                    MY_NUMBER + ". Thank you for your understanding.",
+                callerNumber);
+        temp_str += " asked him to contact you.";
+      } else {
+        temp_str += " unable to ask him to contact you!";
+      }
+      sendSMS(temp_str);
     }
-    sendSMS(temp_str);
 
     // println(temp_str);
   }
@@ -1225,7 +1238,8 @@ void wait(unsigned int miliSeconds) {
     if (getMint() > last_ts_update_time) {
       // jobs which have to be execute after every 5 minutes
       if (thingspeak_enabled) {
-        connect_wifi();
+        if (!wifiConnected())
+          connect_wifi();
         if (wifiConnected()) {
           wifi_working = true;
           ThingSpeak.begin(espClient);            // Initialize ThingSpeak
@@ -2121,6 +2135,8 @@ void syncSPIFFS() {
       getFileVariableValue("message_saving_mode", true).toInt() == 1 ? true
                                                                      : false;
   company_numbers = remove_quotes(getFileVariableValue("COMPANY_NUMBERS"));
+
+  gate_esp_url = remove_quotes(getFileVariableValue("GATE_ESP_URL", true));
 }
 
 void updateDebugger() {
@@ -2565,4 +2581,26 @@ void handleAPIS() {
     // Clear the received data after processing
     myServer.clearLastReceivedData();
   }
+}
+
+bool notifyGateESP(String gate_esp_url) {
+  gate_esp_url.trim();
+  WiFiClient client;
+  HTTPClient http;
+  String url = "http://" + gate_esp_url + "/state?value=true";
+  url.trim();
+  Serial.print("Trying to notify URL: ");
+  Serial.println(url);
+
+  http.begin(client, url); // Important: pass client
+  int httpResponseCode = http.GET();
+  if (httpResponseCode > 0) {
+    Serial.println("Gate ESP notified successfully.");
+    return true;
+  } else {
+    Serial.print("Failed to notify Gate ESP. HTTP error: ");
+    Serial.println(httpResponseCode);
+    return false;
+  }
+  http.end();
 }
