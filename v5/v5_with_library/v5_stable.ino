@@ -1,5 +1,5 @@
-//$ last work 17/March/25 [6:05 PM]
-// # version 5.8.1 Updates whatsapp messaging
+//$ last work 16/June/25 [12:06 PM]
+// # version 5.8.2 Adds LEDs control
 
 #include "arduino_secrets.h"
 
@@ -56,6 +56,13 @@ String formattedDate;
 
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
+
+#define RED_PIN 12
+#define GREEN_PIN 14
+#define BLUE_PIN 27
+
+uint8_t brightness = 100; // Percentage (1-100)
+uint8_t currentR = 0, currentG = 0, currentB = 0;
 
 #define IP5306_ADDR 0x75
 #define IP5306_REG_SYS_CTL0 0x00
@@ -426,6 +433,10 @@ void setup() {
   SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + getRTC_Time())
                      : Println("");
   askOrangPi("send bypass key");
+
+  pinMode(RED_PIN, OUTPUT);
+  pinMode(GREEN_PIN, OUTPUT);
+  pinMode(BLUE_PIN, OUTPUT);
 }
 
 void loop() {
@@ -1536,7 +1547,11 @@ void inputManager(String command, int inputFrom) {
   //  inputFrom tell who's this function user 1:BLE, 2:Serial, 3:sms or 4:
   //  orange-pi
 
-  if (isIn(command, "demo message")) {
+  if (isIn(command, "lcd help")) {
+    printHelp();
+  } else if (handleColorCommand(command)) {
+    print("\n\n\t &&& lcd manage this input &&&\n");
+  } else if (isIn(command, "demo message")) {
     //$ demo message (2)[time?]{+923354888444}
     int index_open_bracket = command.indexOf("(");
     int index_close_bracket = command.indexOf(")");
@@ -2603,4 +2618,116 @@ bool notifyGateESP(String gate_esp_url) {
     return false;
   }
   http.end();
+}
+
+void printHelp() {
+  println("\nAvailable Commands:");
+  println("1  - Red");
+  println("2  - Green");
+  println("3  - Blue");
+  println("4  - Yellow");
+  println("5  - Cyan");
+  println("6  - Magenta");
+  println("7  - White");
+  println("8  - Orange");
+  println("9  - Pink");
+  println("10 - Purple");
+  println("11 - Lime");
+  println("12 - Teal");
+  println("13 - Sky Blue");
+  println("14 - Brown");
+  println("15 - Gray");
+  println("420 - Off");
+  println("B:<value> or b:<value> - Set brightness (1-100)");
+  println("#RRGGBB - Custom color in HEX format (e.g., #FF00AA)");
+}
+
+void applyColor(uint8_t r, uint8_t g, uint8_t b) {
+  currentR = r;
+  currentG = g;
+  currentB = b;
+  updatePWM();
+}
+
+void updatePWM() {
+  // Apply brightness scaling
+  analogWrite(RED_PIN, map(currentR * brightness, 0, 255 * 100, 0, 255));
+  analogWrite(GREEN_PIN, map(currentG * brightness, 0, 255 * 100, 0, 255));
+  analogWrite(BLUE_PIN, map(currentB * brightness, 0, 255 * 100, 0, 255));
+}
+
+bool handleColorCommand(const String &inputRaw) {
+  String input = inputRaw;
+  input.trim();
+
+  // Brightness Command
+  if (input.startsWith("B:") || input.startsWith("b:")) {
+    int newBrightness = input.substring(2).toInt();
+    if (newBrightness >= 1 && newBrightness <= 100) {
+      brightness = newBrightness;
+      print("🔆 Brightness set to: ");
+      Serial.print(brightness);
+      println("%");
+      updatePWM();
+      return true;
+    } else {
+      println("⚠️ Brightness must be between 1 and 100.");
+      return true;
+    }
+  }
+
+  // Color = #RRGGBB (HEX input)
+  if (input.startsWith("color=#") && input.length() == 13) {
+    String hex = input.substring(6);
+    if (!hex.startsWith("#") || hex.length() != 7) {
+      println("⚠️ Invalid HEX format. Use color=#RRGGBB");
+      return true;
+    }
+    long hexColor = strtol(hex.c_str() + 1, NULL, 16);
+    if (hexColor == 0 && hex != "#000000") {
+      println("⚠️ Invalid HEX value.");
+      return true;
+    }
+    uint8_t r = (hexColor >> 16) & 0xFF;
+    uint8_t g = (hexColor >> 8) & 0xFF;
+    uint8_t b = hexColor & 0xFF;
+    Serial.printf("🎨 Custom color - R:%d G:%d B:%d\n", r, g, b);
+    applyColor(r, g, b);
+    return true;
+  }
+
+  // Color = named color
+  if (input.startsWith("color=")) {
+    String colorName = input.substring(6);
+    colorName.toLowerCase();
+
+    struct ColorMap {
+      const char *name;
+      uint8_t r, g, b;
+      const char *emoji;
+    };
+    const ColorMap colors[] = {
+        {"red", 255, 0, 0, "🔴"},         {"green", 0, 255, 0, "🟢"},
+        {"blue", 0, 0, 255, "🔵"},        {"yellow", 255, 255, 0, "🟡"},
+        {"cyan", 0, 255, 255, "🟦"},      {"magenta", 255, 0, 255, "🟪"},
+        {"white", 255, 255, 255, "⚪"},   {"orange", 255, 165, 0, "🟧"},
+        {"pink", 255, 105, 180, "💗"},    {"purple", 128, 0, 128, "💜"},
+        {"lime", 191, 255, 0, "🟩"},      {"teal", 0, 128, 128, "🟫"},
+        {"skyblue", 135, 206, 235, "🌤"}, {"brown", 139, 69, 19, "🟤"},
+        {"gray", 128, 128, 128, "⚙️"},     {"off", 0, 0, 0, "❌"}};
+
+    for (const auto &c : colors) {
+      if (colorName == c.name) {
+        applyColor(c.r, c.g, c.b);
+        Serial.printf("%s %s\n", c.emoji, c.name);
+        return true;
+      }
+    }
+
+    println("⚠️ Unknown color name. Type 'help' for list.");
+    return true;
+  }
+
+  // Not a color-related command
+  return false;
 }
