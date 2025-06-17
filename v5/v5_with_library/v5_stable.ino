@@ -51,15 +51,14 @@ String formattedDate;
 #define MODEM_RX 26
 #define I2C_SDA 21
 #define I2C_SCL 22
-#define LED                                                                    \
-  13 // indicate that data is uploaded successfully last time on thingSpeak
+#define LED 13 // indicate thingSpeak linked
 
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
 
 #define RED_PIN 12
 #define GREEN_PIN 14
-#define BLUE_PIN 27
+#define BLUE_PIN 32
 
 uint8_t brightness = 100; // Percentage (1-100)
 uint8_t currentR = 0, currentG = 0, currentB = 0;
@@ -368,6 +367,12 @@ void setup() {
   Println("Before Display functionality");
   //`...............................
   delay(2000);
+
+  pinMode(RED_PIN, OUTPUT);
+  pinMode(GREEN_PIN, OUTPUT);
+  pinMode(BLUE_PIN, OUTPUT);
+  clearAllColors();
+
   if (display_working) {
     if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
       Serial.println(F("SSD1306 allocation failed"));
@@ -432,10 +437,6 @@ void setup() {
   SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + getRTC_Time())
                      : Println("");
   askOrangPi("send bypass key");
-
-  pinMode(RED_PIN, OUTPUT);
-  pinMode(GREEN_PIN, OUTPUT);
-  pinMode(BLUE_PIN, OUTPUT);
 }
 
 void loop() {
@@ -2248,25 +2249,9 @@ bool updateTime() {
     Println(8, "Time updated successfully");
     return true;
   } else {
-    println("Failed to update time from orange pi trying to update online");
-    if (wifi_working) {
-      int i = 100;
-      while (!timeClient.update() && i > 0) {
-        timeClient.forceUpdate();
-        i -= 10;
-        delay(100);
-      }
-      // formattedDate = timeClient.getFormattedDate();
-      // updateOnlineTime(formattedDate);
-      // TODO: this part is not working on new machine
-      println("Online updated time: " + getRTC_Time());
-      if (myRTC.month == 0)
-        return false;
-      else
-        return true;
-    }
-    return false;
+    println("Failed to update time from orange pi");
   }
+  return false;
 }
 
 void askTime() {
@@ -2639,6 +2624,9 @@ void printHelp() {
   println("420 - Off");
   println("B:<value> or b:<value> - Set brightness (1-100)");
   println("#RRGGBB - Custom color in HEX format (e.g., #FF00AA)");
+  println("color=red,solid,3 → Show red for 3 seconds then off");
+  println("color=red,blink,5 → Blink red LED 5 times");
+  println("color=red,fade,3 → Fade red in/out 3 times");
 }
 
 void applyColor(uint8_t r, uint8_t g, uint8_t b) {
@@ -2649,84 +2637,145 @@ void applyColor(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void updatePWM() {
-  // Apply brightness scaling
-  analogWrite(RED_PIN, map(currentR * brightness, 0, 255 * 100, 0, 255));
-  analogWrite(GREEN_PIN, map(currentG * brightness, 0, 255 * 100, 0, 255));
-  analogWrite(BLUE_PIN, map(currentB * brightness, 0, 255 * 100, 0, 255));
+  // Apply brightness scaling (fixed calculation)
+  analogWrite(RED_PIN, (currentR * brightness) / 100);
+  analogWrite(GREEN_PIN, (currentG * brightness) / 100);
+  analogWrite(BLUE_PIN, (currentB * brightness) / 100);
+}
+
+void updatePWMWithColor(uint8_t r, uint8_t g, uint8_t b) {
+  analogWrite(RED_PIN, (r * brightness) / 100);
+  analogWrite(GREEN_PIN, (g * brightness) / 100);
+  analogWrite(BLUE_PIN, (b * brightness) / 100);
+}
+
+void clearAllColors() {
+  analogWrite(RED_PIN, 0);
+  analogWrite(GREEN_PIN, 0);
+  analogWrite(BLUE_PIN, 0);
 }
 
 bool handleColorCommand(const String &inputRaw) {
   String input = inputRaw;
   input.trim();
 
-  // Brightness Command
   if (input.startsWith("B:") || input.startsWith("b:")) {
     int newBrightness = input.substring(2).toInt();
     if (newBrightness >= 1 && newBrightness <= 100) {
       brightness = newBrightness;
-      print("🔆 Brightness set to: ");
-      Serial.print(brightness);
-      println("%");
+      Serial.printf("🔆 Brightness set to: %d%%\n", brightness);
       updatePWM();
       return true;
     } else {
-      println("⚠️ Brightness must be between 1 and 100.");
+      Serial.println("⚠️ Brightness must be 1-100.");
       return true;
     }
   }
 
-  // Color = #RRGGBB (HEX input)
-  if (input.startsWith("color=#") && input.length() == 13) {
-    String hex = input.substring(6);
-    if (!hex.startsWith("#") || hex.length() != 7) {
-      println("⚠️ Invalid HEX format. Use color=#RRGGBB");
-      return true;
-    }
-    long hexColor = strtol(hex.c_str() + 1, NULL, 16);
-    if (hexColor == 0 && hex != "#000000") {
-      println("⚠️ Invalid HEX value.");
-      return true;
-    }
-    uint8_t r = (hexColor >> 16) & 0xFF;
-    uint8_t g = (hexColor >> 8) & 0xFF;
-    uint8_t b = hexColor & 0xFF;
-    Serial.printf("🎨 Custom color - R:%d G:%d B:%d\n", r, g, b);
-    applyColor(r, g, b);
-    return true;
-  }
-
-  // Color = named color
   if (input.startsWith("color=")) {
-    String colorName = input.substring(6);
-    colorName.toLowerCase();
+    String payload = input.substring(6);
+    payload.trim();
 
-    struct ColorMap {
-      const char *name;
-      uint8_t r, g, b;
-      const char *emoji;
-    };
-    const ColorMap colors[] = {
-        {"red", 255, 0, 0, "🔴"},         {"green", 0, 255, 0, "🟢"},
-        {"blue", 0, 0, 255, "🔵"},        {"yellow", 255, 255, 0, "🟡"},
-        {"cyan", 0, 255, 255, "🟦"},      {"magenta", 255, 0, 255, "🟪"},
-        {"white", 255, 255, 255, "⚪"},   {"orange", 255, 165, 0, "🟧"},
-        {"pink", 255, 105, 180, "💗"},    {"purple", 128, 0, 128, "💜"},
-        {"lime", 191, 255, 0, "🟩"},      {"teal", 0, 128, 128, "🟫"},
-        {"skyblue", 135, 206, 235, "🌤"}, {"brown", 139, 69, 19, "🟤"},
-        {"gray", 128, 128, 128, "⚙️"},     {"off", 0, 0, 0, "❌"}};
+    String colorStr, modeStr = "direct", argStr = "";
+    int firstComma = payload.indexOf(',');
+    int secondComma = payload.indexOf(',', firstComma + 1);
 
-    for (const auto &c : colors) {
-      if (colorName == c.name) {
-        applyColor(c.r, c.g, c.b);
-        Serial.printf("%s %s\n", c.emoji, c.name);
-        return true;
+    if (firstComma == -1) {
+      colorStr = payload;
+    } else {
+      colorStr = payload.substring(0, firstComma);
+      if (secondComma == -1) {
+        modeStr = payload.substring(firstComma + 1);
+      } else {
+        modeStr = payload.substring(firstComma + 1, secondComma);
+        argStr = payload.substring(secondComma + 1);
       }
     }
 
-    println("⚠️ Unknown color name. Type 'help' for list.");
+    colorStr.toLowerCase();
+    modeStr.toLowerCase();
+
+    uint8_t r = 0, g = 0, b = 0;
+    bool colorValid = false;
+
+    if (colorStr.startsWith("#") && colorStr.length() == 7) {
+      long hexColor = strtol(colorStr.c_str() + 1, NULL, 16);
+      if (!(hexColor == 0 && colorStr != "#000000")) {
+        r = (hexColor >> 16) & 0xFF;
+        g = (hexColor >> 8) & 0xFF;
+        b = hexColor & 0xFF;
+        colorValid = true;
+      }
+    } else {
+      struct ColorMap {
+        const char *name;
+        uint8_t r, g, b;
+      };
+      const ColorMap colors[] = {
+          {"red", 255, 0, 0},         {"green", 0, 255, 0},
+          {"blue", 0, 0, 255},        {"yellow", 255, 255, 0},
+          {"cyan", 0, 255, 255},      {"magenta", 255, 0, 255},
+          {"white", 255, 255, 255},   {"orange", 255, 165, 0},
+          {"pink", 255, 105, 180},    {"purple", 128, 0, 128},
+          {"lime", 191, 255, 0},      {"teal", 0, 128, 128},
+          {"skyblue", 135, 206, 235}, {"brown", 139, 69, 19},
+          {"gray", 128, 128, 128},    {"off", 0, 0, 0}};
+      for (const auto &c : colors) {
+        if (colorStr == c.name) {
+          r = c.r;
+          g = c.g;
+          b = c.b;
+          colorValid = true;
+          break;
+        }
+      }
+    }
+
+    if (!colorValid) {
+      Serial.println("⚠️ Invalid color name or hex.");
+      return true;
+    }
+
+    if (modeStr == "solid") {
+      int duration = argStr.toInt();
+      Serial.printf("🟥 Solid color for %d seconds\n", duration);
+      applyColor(r, g, b);
+      Delay(duration * 1000);
+      applyColor(0, 0, 0);
+    } else if (modeStr == "blink") {
+      int count = argStr.toInt();
+      Serial.printf("🟦 Blinking %d times\n", count);
+      for (int i = 0; i < count; i++) {
+        applyColor(r, g, b);
+        Delay(500);
+        applyColor(0, 0, 0);
+        Delay(500);
+      }
+    } else if (modeStr == "fade") {
+      int count = argStr.toInt();
+      Serial.printf("🌫️ Fading %d times\n", count);
+      uint8_t originalBrightness = brightness;
+      for (int i = 0; i < count; i++) {
+        for (int level = 0; level <= 100; level++) {
+          brightness = level;
+          updatePWMWithColor(r, g, b);
+          Delay(10);
+        }
+        for (int level = 100; level >= 0; level--) {
+          brightness = level;
+          updatePWMWithColor(r, g, b);
+          Delay(10);
+        }
+      }
+      brightness = originalBrightness;
+      updatePWM();
+    } else {
+      Serial.printf("🎨 Color set to %s\n", colorStr.c_str());
+      applyColor(r, g, b);
+    }
+
     return true;
   }
 
-  // Not a color-related command
   return false;
 }
