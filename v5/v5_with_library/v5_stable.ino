@@ -279,65 +279,64 @@ String getHTTPString(String message);
 //! outdated
 // TODO: update functions and add there description
 //  # ......... < functions .......
-// #include <BLEDevice.h>
-// #include <BLEServer.h>
-// #include <BLEUtils.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
 
-// BLEServer *pServer = NULL;
-// BLECharacteristic *pCharacteristic = NULL;
-// bool deviceConnected = false;
-// bool oldDeviceConnected = false;
-// std::string receivedData = "";
+BLEServer *pServer = NULL;
+BLECharacteristic *pCharacteristic = NULL;
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+String receivedData = "";
 
-// class MyServerCallbacks : public BLEServerCallbacks {
-//   void onConnect(BLEServer *pServer) { deviceConnected = true; }
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *pServer) { deviceConnected = true; }
 
-//   void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
-// };
+  void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
+};
 
-// class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
-//   void onWrite(BLECharacteristic *pCharacteristic) {
-//     std::string value = pCharacteristic->getValue();
-//     if (value.length() > 0) {
-//       receivedData = value;
-//       Serial.print("Received from BLE: ");
-//       Serial.println(receivedData.c_str());
-//       BLE_inputManager(String(receivedData.c_str()));
+class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) {
+    String value = pCharacteristic->getValue();
+    if (value.length() > 0) {
+      receivedData = value;
+      Serial.print("Received from BLE: ");
+      Serial.println(receivedData);
+      BLE_inputManager(receivedData);
 
-//       // Print the received data back to the BLE connection
-//       receivedData = BLE_Output.c_str();
-//       pCharacteristic->setValue("BLE: " + receivedData);
-//       pCharacteristic->notify();
-//     }
-//   }
-// };
+      // Print the received data back to the BLE connection
+      receivedData = BLE_Output.c_str();
+      pCharacteristic->setValue("BLE: " + receivedData);
+      pCharacteristic->notify();
+    }
+  }
+};
 
-// void BLE_inputManager(String input) {
-//   bool time_out =
-//       BLE_Input != "" && (10 < ((millis() / 1000) - BLE_last_receive_time));
-//   if (input.indexOf("#") != -1 || time_out) {
-//     // means string is now fetched completely
-//     if (!isIn(input, "_nil_"))
-//       BLE_Input += input.substring(0, input.indexOf("#"));
-//     println("Executing (BLE input): {" + BLE_Input + "}");
-//     inputManager(removeNewline(BLE_Input), 1);
-//     BLE_Input = "";
-//     BLE_last_receive_time = 0;
-//   } else if (input.length() > 0 && !isIn(input, "_nil_")) {
-//     if (BLE_Input == "")
-//       BLE_last_receive_time = (millis() / 1000);
-//     BLE_Input += input;
-//     if (BLE_Input.length() > 50) {
-//       println("BLE input is getting to large , here is the current string ("
-//       +
-//               BLE_Input + ") flushing it...");
-//       BLE_Input = "";
-//     }
-//   } else {
-//     if (!isIn(input, "_nil_"))
-//       rise("Unexpected flow in BLE input manager", "324");
-//   }
-// }
+void BLE_inputManager(String input) {
+  bool time_out =
+      BLE_Input != "" && (10 < ((millis() / 1000) - BLE_last_receive_time));
+  if (input.indexOf("#") != -1 || time_out) {
+    // means string is now fetched completely
+    if (!isIn(input, "_nil_"))
+      BLE_Input += input.substring(0, input.indexOf("#"));
+    println("Executing (BLE input): {" + BLE_Input + "}");
+    inputManager(removeNewline(BLE_Input), 1);
+    BLE_Input = "";
+    BLE_last_receive_time = 0;
+  } else if (input.length() > 0 && !isIn(input, "_nil_")) {
+    if (BLE_Input == "")
+      BLE_last_receive_time = (millis() / 1000);
+    BLE_Input += input;
+    if (BLE_Input.length() > 50) {
+      println("BLE input is getting to large , here is the current string (" +
+              BLE_Input + ") flushing it...");
+      BLE_Input = "";
+    }
+  } else {
+    if (!isIn(input, "_nil_"))
+      rise("Unexpected flow in BLE input manager", "324");
+  }
+}
 
 //! * # # # # # # # # # # # # * !
 
@@ -442,23 +441,23 @@ void setup() {
 void loop() {
   // handleAPIS();
   Println("in loop");
-  // if (BLE_Input != "")
-  //   BLE_inputManager("_nil_");
-  // client.loop(); // ensure that the MQTT client remains responsive
-  // if (deviceConnected) {
-  //   if (!oldDeviceConnected) {
-  //     Serial.println("Connected to device");
-  //     oldDeviceConnected = true;
-  //   }
-  // } else {
-  //   if (oldDeviceConnected) {
-  //     Serial.println("Disconnected from device");
-  //     Delay(500);
-  //     pServer->startAdvertising(); // restart advertising
-  //     Serial.println("Restart advertising");
-  //     oldDeviceConnected = false;
-  //   }
-  // }
+  if (BLE_Input != "")
+    BLE_inputManager("_nil_");
+  client.loop(); // ensure that the MQTT client remains responsive
+  if (deviceConnected) {
+    if (!oldDeviceConnected) {
+      Serial.println("Connected to device");
+      oldDeviceConnected = true;
+    }
+  } else {
+    if (oldDeviceConnected) {
+      Serial.println("Disconnected from device");
+      Delay(500);
+      pServer->startAdvertising(); // restart advertising
+      Serial.println("Restart advertising");
+      oldDeviceConnected = false;
+    }
+  }
 
   if (pi_incoming.length() >= 1) {
     String tempStr = pi_incoming;
