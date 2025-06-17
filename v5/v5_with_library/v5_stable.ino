@@ -2659,6 +2659,7 @@ bool handleColorCommand(const String &inputRaw) {
   String input = inputRaw;
   input.trim();
 
+  // --- Standalone brightness handling ---
   if (input.startsWith("B:") || input.startsWith("b:")) {
     int newBrightness = input.substring(2).toInt();
     if (newBrightness >= 1 && newBrightness <= 100) {
@@ -2672,29 +2673,40 @@ bool handleColorCommand(const String &inputRaw) {
     }
   }
 
+  // --- Color command with optional pattern and brightness ---
   if (input.startsWith("color=")) {
-    String payload = input.substring(6);
-    payload.trim();
+    String colorBlock = input.substring(6);
+    colorBlock.trim();
 
+    // --- Optional brightness within the same line ---
+    String brightnessPart = "";
+    int ampIndex = colorBlock.indexOf('&');
+    if (ampIndex != -1) {
+      brightnessPart = colorBlock.substring(ampIndex + 1);
+      colorBlock = colorBlock.substring(0, ampIndex);
+    }
+
+    // Parse color and pattern
     String colorStr, modeStr = "direct", argStr = "";
-    int firstComma = payload.indexOf(',');
-    int secondComma = payload.indexOf(',', firstComma + 1);
+    int firstComma = colorBlock.indexOf(',');
+    int secondComma = colorBlock.indexOf(',', firstComma + 1);
 
     if (firstComma == -1) {
-      colorStr = payload;
+      colorStr = colorBlock;
     } else {
-      colorStr = payload.substring(0, firstComma);
+      colorStr = colorBlock.substring(0, firstComma);
       if (secondComma == -1) {
-        modeStr = payload.substring(firstComma + 1);
+        modeStr = colorBlock.substring(firstComma + 1);
       } else {
-        modeStr = payload.substring(firstComma + 1, secondComma);
-        argStr = payload.substring(secondComma + 1);
+        modeStr = colorBlock.substring(firstComma + 1, secondComma);
+        argStr = colorBlock.substring(secondComma + 1);
       }
     }
 
     colorStr.toLowerCase();
     modeStr.toLowerCase();
 
+    // --- Decode color name or hex ---
     uint8_t r = 0, g = 0, b = 0;
     bool colorValid = false;
 
@@ -2736,15 +2748,27 @@ bool handleColorCommand(const String &inputRaw) {
       return true;
     }
 
+    // --- Apply inline brightness if exists ---
+    if (brightnessPart.startsWith("b:") || brightnessPart.startsWith("B:")) {
+      int newBrightness = brightnessPart.substring(2).toInt();
+      if (newBrightness >= 1 && newBrightness <= 100) {
+        brightness = newBrightness;
+        Serial.printf("🌓 Inline brightness set to: %d%%\n", brightness);
+      } else {
+        Serial.println("⚠️ Inline brightness invalid (1–100).");
+      }
+    }
+
+    // --- Pattern handling ---
     if (modeStr == "solid") {
       int duration = argStr.toInt();
-      Serial.printf("🟥 Solid color for %d seconds\n", duration);
+      Serial.printf("🟥 Solid %s for %d sec\n", colorStr.c_str(), duration);
       applyColor(r, g, b);
       Delay(duration * 1000);
       applyColor(0, 0, 0);
     } else if (modeStr == "blink") {
       int count = argStr.toInt();
-      Serial.printf("🟦 Blinking %d times\n", count);
+      Serial.printf("🟦 Blink %s x%d\n", colorStr.c_str(), count);
       for (int i = 0; i < count; i++) {
         applyColor(r, g, b);
         Delay(500);
@@ -2753,7 +2777,7 @@ bool handleColorCommand(const String &inputRaw) {
       }
     } else if (modeStr == "fade") {
       int count = argStr.toInt();
-      Serial.printf("🌫️ Fading %d times\n", count);
+      Serial.printf("🌫️ Fade %s x%d\n", colorStr.c_str(), count);
       uint8_t originalBrightness = brightness;
       for (int i = 0; i < count; i++) {
         for (int level = 0; level <= 100; level++) {
@@ -2770,7 +2794,7 @@ bool handleColorCommand(const String &inputRaw) {
       brightness = originalBrightness;
       updatePWM();
     } else {
-      Serial.printf("🎨 Color set to %s\n", colorStr.c_str());
+      Serial.printf("🎨 Color %s set directly\n", colorStr.c_str());
       applyColor(r, g, b);
     }
 
