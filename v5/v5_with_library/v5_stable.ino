@@ -1,5 +1,5 @@
-//$ last work 17/March/25 [6:05 PM]
-// # version 5.8.1 Updates whatsapp messaging
+//$ last work 16/June/25 [12:06 PM]
+// # version 5.8.2 Adds LEDs control
 
 #include "arduino_secrets.h"
 
@@ -51,11 +51,17 @@ String formattedDate;
 #define MODEM_RX 26
 #define I2C_SDA 21
 #define I2C_SCL 22
-#define LED                                                                    \
-  13 // indicate that data is uploaded successfully last time on thingSpeak
+#define LED 13 // indicate thingSpeak linked
 
 #define DHTPIN 33 // Change the pin if necessary
 DHT dht(DHTPIN, DHT11);
+
+#define RED_PIN 12
+#define GREEN_PIN 14
+#define BLUE_PIN 32
+
+uint8_t brightness = 100; // Percentage (1-100)
+uint8_t currentR = 0, currentG = 0, currentB = 0;
 
 #define IP5306_ADDR 0x75
 #define IP5306_REG_SYS_CTL0 0x00
@@ -76,7 +82,6 @@ TinyGsm modem(SerialAT);
 #define IP5306_REG_SYS_CTL0 0x00
 
 bool thingspeak_enabled = true;
-bool thingsboard_enabled = true;
 bool thingspeak_turn = false;
 #define MAX_MESSAGES 15
 #define UPDATE_THING_SPEAK_TH_AFTER 5
@@ -117,6 +122,7 @@ String end_value = "=";
 String line_1 = "098 ";
 String line_2 = "786";
 String last_line = "Not initialized";
+String gate_esp_url = "192.168.100.75";
 
 String received_message = ""; // Global variable to store received message
 double battery_voltage = 0;
@@ -272,65 +278,64 @@ String getHTTPString(String message);
 //! outdated
 // TODO: update functions and add there description
 //  # ......... < functions .......
-// #include <BLEDevice.h>
-// #include <BLEServer.h>
-// #include <BLEUtils.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
 
-// BLEServer *pServer = NULL;
-// BLECharacteristic *pCharacteristic = NULL;
-// bool deviceConnected = false;
-// bool oldDeviceConnected = false;
-// std::string receivedData = "";
+BLEServer *pServer = NULL;
+BLECharacteristic *pCharacteristic = NULL;
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+String receivedData = "";
 
-// class MyServerCallbacks : public BLEServerCallbacks {
-//   void onConnect(BLEServer *pServer) { deviceConnected = true; }
+class MyServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *pServer) { deviceConnected = true; }
 
-//   void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
-// };
+  void onDisconnect(BLEServer *pServer) { deviceConnected = false; }
+};
 
-// class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
-//   void onWrite(BLECharacteristic *pCharacteristic) {
-//     std::string value = pCharacteristic->getValue();
-//     if (value.length() > 0) {
-//       receivedData = value;
-//       Serial.print("Received from BLE: ");
-//       Serial.println(receivedData.c_str());
-//       BLE_inputManager(String(receivedData.c_str()));
+class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pCharacteristic) {
+    String value = pCharacteristic->getValue();
+    if (value.length() > 0) {
+      receivedData = value;
+      Serial.print("Received from BLE: ");
+      Serial.println(receivedData);
+      BLE_inputManager(receivedData);
 
-//       // Print the received data back to the BLE connection
-//       receivedData = BLE_Output.c_str();
-//       pCharacteristic->setValue("BLE: " + receivedData);
-//       pCharacteristic->notify();
-//     }
-//   }
-// };
+      // Print the received data back to the BLE connection
+      receivedData = BLE_Output.c_str();
+      pCharacteristic->setValue("BLE: " + receivedData);
+      pCharacteristic->notify();
+    }
+  }
+};
 
-// void BLE_inputManager(String input) {
-//   bool time_out =
-//       BLE_Input != "" && (10 < ((millis() / 1000) - BLE_last_receive_time));
-//   if (input.indexOf("#") != -1 || time_out) {
-//     // means string is now fetched completely
-//     if (!isIn(input, "_nil_"))
-//       BLE_Input += input.substring(0, input.indexOf("#"));
-//     println("Executing (BLE input): {" + BLE_Input + "}");
-//     inputManager(removeNewline(BLE_Input), 1);
-//     BLE_Input = "";
-//     BLE_last_receive_time = 0;
-//   } else if (input.length() > 0 && !isIn(input, "_nil_")) {
-//     if (BLE_Input == "")
-//       BLE_last_receive_time = (millis() / 1000);
-//     BLE_Input += input;
-//     if (BLE_Input.length() > 50) {
-//       println("BLE input is getting to large , here is the current string ("
-//       +
-//               BLE_Input + ") flushing it...");
-//       BLE_Input = "";
-//     }
-//   } else {
-//     if (!isIn(input, "_nil_"))
-//       rise("Unexpected flow in BLE input manager", "324");
-//   }
-// }
+void BLE_inputManager(String input) {
+  bool time_out =
+      BLE_Input != "" && (10 < ((millis() / 1000) - BLE_last_receive_time));
+  if (input.indexOf("#") != -1 || time_out) {
+    // means string is now fetched completely
+    if (!isIn(input, "_nil_"))
+      BLE_Input += input.substring(0, input.indexOf("#"));
+    println("Executing (BLE input): {" + BLE_Input + "}");
+    inputManager(removeNewline(BLE_Input), 1);
+    BLE_Input = "";
+    BLE_last_receive_time = 0;
+  } else if (input.length() > 0 && !isIn(input, "_nil_")) {
+    if (BLE_Input == "")
+      BLE_last_receive_time = (millis() / 1000);
+    BLE_Input += input;
+    if (BLE_Input.length() > 50) {
+      println("BLE input is getting to large , here is the current string (" +
+              BLE_Input + ") flushing it...");
+      BLE_Input = "";
+    }
+  } else {
+    if (!isIn(input, "_nil_"))
+      rise("Unexpected flow in BLE input manager", "324");
+  }
+}
 
 //! * # # # # # # # # # # # # * !
 
@@ -362,6 +367,12 @@ void setup() {
   Println("Before Display functionality");
   //`...............................
   delay(2000);
+
+  pinMode(RED_PIN, OUTPUT);
+  pinMode(GREEN_PIN, OUTPUT);
+  pinMode(BLUE_PIN, OUTPUT);
+  clearAllColors();
+
   if (display_working) {
     if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
       Serial.println(F("SSD1306 allocation failed"));
@@ -423,7 +434,6 @@ void setup() {
   Println("after syncSPIFFS: ");
   updateTime();
   Println("after time request");
-  thingsboard_enabled ? initThingsBoard() : alert("Thingsboard is not enabled");
   SEND_MSG_ON_REBOOT ? sendSMS("Device rebooted at: " + getRTC_Time())
                      : Println("");
   askOrangPi("send bypass key");
@@ -432,23 +442,23 @@ void setup() {
 void loop() {
   // handleAPIS();
   Println("in loop");
-  // if (BLE_Input != "")
-  //   BLE_inputManager("_nil_");
-  // client.loop(); // ensure that the MQTT client remains responsive
-  // if (deviceConnected) {
-  //   if (!oldDeviceConnected) {
-  //     Serial.println("Connected to device");
-  //     oldDeviceConnected = true;
-  //   }
-  // } else {
-  //   if (oldDeviceConnected) {
-  //     Serial.println("Disconnected from device");
-  //     Delay(500);
-  //     pServer->startAdvertising(); // restart advertising
-  //     Serial.println("Restart advertising");
-  //     oldDeviceConnected = false;
-  //   }
-  // }
+  if (BLE_Input != "")
+    BLE_inputManager("_nil_");
+  client.loop(); // ensure that the MQTT client remains responsive
+  if (deviceConnected) {
+    if (!oldDeviceConnected) {
+      Serial.println("Connected to device");
+      oldDeviceConnected = true;
+    }
+  } else {
+    if (oldDeviceConnected) {
+      Serial.println("Disconnected from device");
+      Delay(500);
+      pServer->startAdvertising(); // restart advertising
+      Serial.println("Restart advertising");
+      oldDeviceConnected = false;
+    }
+  }
 
   if (pi_incoming.length() >= 1) {
     String tempStr = pi_incoming;
@@ -682,21 +692,33 @@ String getResponse() {
     hangUp();
     delay(500);
     String callerNumber = fetchDetails(response, "\"", 1);
-    String temp_str = "Missed call from: " + callerNumber;
-    if (callerNumber.length() > 10 &&
-        (callerNumber.startsWith("+92") || callerNumber.startsWith("03"))) {
-      delay(200);
-      sendSMS("AOA, this is " + OWNER_NAME +
-                  "'s secondary number. This message is auto-generated, as I "
-                  "am currently unable to take calls on this device. For "
-                  "urgent matters, please contact me at " +
-                  MY_NUMBER + ". Thank you for your understanding.",
-              callerNumber);
-      temp_str += " asked him to contact you.";
+    String last10Digits = callerNumber.substring(callerNumber.length() - 10);
+
+    bool gate_should_open = false;
+    if (isIn(ADMIN_USERS_NUMBERS, last10Digits)) {
+      println("## Number is in the list: " + last10Digits);
+      if (!notifyGateESP(gate_esp_url))
+        sendWhatsappMsg("#2244 open gate",
+                        callerNumber); //! not a valid approach
     } else {
-      temp_str += " unable to ask him to contact you!";
+      println("Number is not in the list: " + last10Digits);
+
+      String temp_str = "Missed call from: " + callerNumber;
+      if (callerNumber.length() > 10 &&
+          (callerNumber.startsWith("+92") || callerNumber.startsWith("03"))) {
+        delay(200);
+        sendSMS("AOA, this is " + OWNER_NAME +
+                    "'s secondary number. This message is auto-generated, as I "
+                    "am currently unable to take calls on this device. For "
+                    "urgent matters, please contact me at " +
+                    MY_NUMBER + ". Thank you for your understanding.",
+                callerNumber);
+        temp_str += " asked him to contact you.";
+      } else {
+        temp_str += " unable to ask him to contact you!";
+      }
+      sendSMS(temp_str);
     }
-    sendSMS(temp_str);
 
     // println(temp_str);
   }
@@ -1226,29 +1248,9 @@ void wait(unsigned int miliSeconds) {
     }
     if (getMint() > last_ts_update_time) {
       // jobs which have to be execute after every 5 minutes
-      if (wifiConnected()) {
-        if (wifi_working && (thingspeak_enabled || thingsboard_enabled)) {
-          if (thingspeak_enabled && (thingspeak_turn || !thingsboard_enabled)) {
-            Println(4, "Before Temperature Update");
-            updateThingSpeak(temperature, humidity);
-            last_ts_update_time = getMint() + UPDATE_THING_SPEAK_TH_AFTER;
-            Println(4, "After temperature update");
-          }
-          if (display_working) {
-            updateBatteryParameters(updateBatteryStatus());
-          }
-          if (thingsboard_enabled &&
-              (!thingspeak_turn || !thingspeak_enabled)) {
-            Delay(3000);
-            i += 3000;
-            Println(7, "Before MQTT update");
-            updateMQTT((int)temperature, humidity);
-            Println(7, "After MQTT update");
-          }
-          thingspeak_turn = !thingspeak_turn;
-        }
-      } else if (thingspeak_enabled) {
-        connect_wifi();
+      if (thingspeak_enabled) {
+        if (!wifiConnected())
+          connect_wifi();
         if (wifiConnected()) {
           wifi_working = true;
           ThingSpeak.begin(espClient);            // Initialize ThingSpeak
@@ -1545,7 +1547,11 @@ void inputManager(String command, int inputFrom) {
   //  inputFrom tell who's this function user 1:BLE, 2:Serial, 3:sms or 4:
   //  orange-pi
 
-  if (isIn(command, "demo message")) {
+  if (isIn(command, "lcd help")) {
+    printHelp();
+  } else if (handleColorCommand(command)) {
+    print("\n\n\t &&& lcd manage this input &&&\n");
+  } else if (isIn(command, "demo message")) {
     //$ demo message (2)[time?]{+923354888444}
     int index_open_bracket = command.indexOf("(");
     int index_close_bracket = command.indexOf(")");
@@ -1779,30 +1785,23 @@ void inputManager(String command, int inputFrom) {
         command.indexOf("thingSpeak") != -1) {
       set(&thingspeak_enabled, "thingspeak_enabled", true);
       initThingSpeak();
-    } else if (command.indexOf("thingsboard") != -1 ||
-               command.indexOf("thingsBoard") != -1) {
-      set(&thingsboard_enabled, "thingsboard_enabled", true);
-      initThingsBoard();
     } else if (isIn(command, "message_saving_mode") ||
                isIn(command, "message saving mode")) {
       set(&message_saving_mode, "message_saving_mode", true);
     } else {
       println("You can only enable these services: "
-              "\n\t->thingspeak\n\t->thingsboard\n\t->message_saving_mode");
+              "\n\t->thingspeak\n\t->message_saving_mode");
     }
   } else if (command.indexOf("disable") != -1) {
     if (command.indexOf("thingspeak") != -1 ||
         command.indexOf("thingSpeak") != -1) {
       set(&thingspeak_enabled, "thingspeak_enabled", false);
-    } else if (command.indexOf("thingsboard") != -1 ||
-               command.indexOf("thingsBoard") != -1) {
-      set(&thingsboard_enabled, "thingsboard_enabled", false);
     } else if (isIn(command, "message_saving_mode") ||
                isIn(command, "message saving mode")) {
       set(&message_saving_mode, "message_saving_mode", false);
     } else {
       println("You can only disable these services: "
-              "\n\t->thingspeak\n\t->thingsboard\n\t->message_saving_mode");
+              "\n\t->thingspeak\n\t->message_saving_mode");
     }
   }
   // TODO: help command should return all executable commands
@@ -2147,13 +2146,12 @@ void syncSPIFFS() {
   thingspeak_enabled =
       getFileVariableValue("thingspeak_enabled", true).toInt() == 1 ? true
                                                                     : false;
-  thingsboard_enabled =
-      getFileVariableValue("thingsboard_enabled", true).toInt() == 1 ? true
-                                                                     : false;
   message_saving_mode =
       getFileVariableValue("message_saving_mode", true).toInt() == 1 ? true
                                                                      : false;
   company_numbers = remove_quotes(getFileVariableValue("COMPANY_NUMBERS"));
+
+  gate_esp_url = remove_quotes(getFileVariableValue("GATE_ESP_URL", true));
 }
 
 void updateDebugger() {
@@ -2251,25 +2249,9 @@ bool updateTime() {
     Println(8, "Time updated successfully");
     return true;
   } else {
-    println("Failed to update time from orange pi trying to update online");
-    if (wifi_working) {
-      int i = 100;
-      while (!timeClient.update() && i > 0) {
-        timeClient.forceUpdate();
-        i -= 10;
-        delay(100);
-      }
-      // formattedDate = timeClient.getFormattedDate();
-      // updateOnlineTime(formattedDate);
-      // TODO: this part is not working on new machine
-      println("Online updated time: " + getRTC_Time());
-      if (myRTC.month == 0)
-        return false;
-      else
-        return true;
-    }
-    return false;
+    println("Failed to update time from orange pi");
   }
+  return false;
 }
 
 void askTime() {
@@ -2287,11 +2269,6 @@ void alert(String msg) {
 String removeNewline(String str) {
   str.replace("\n", " ");
   return str;
-}
-
-void initThingsBoard() {
-  println("\nThingsBoard initializing...\n");
-  client.setServer(mqtt_server, 1883);
 }
 
 void initThingSpeak() {
@@ -2603,4 +2580,226 @@ void handleAPIS() {
     // Clear the received data after processing
     myServer.clearLastReceivedData();
   }
+}
+
+bool notifyGateESP(String gate_esp_url) {
+  gate_esp_url.trim();
+  WiFiClient client;
+  HTTPClient http;
+  String url = "http://" + gate_esp_url + "/state?value=true";
+  url.trim();
+  Serial.print("Trying to notify URL: ");
+  Serial.println(url);
+
+  http.begin(client, url); // Important: pass client
+  int httpResponseCode = http.GET();
+  if (httpResponseCode > 0) {
+    Serial.println("Gate ESP notified successfully.");
+    return true;
+  } else {
+    Serial.print("Failed to notify Gate ESP. HTTP error: ");
+    Serial.println(httpResponseCode);
+    return false;
+  }
+  http.end();
+}
+
+void printHelp() {
+  println("\nAvailable Commands:");
+  println("1  - Red");
+  println("2  - Green");
+  println("3  - Blue");
+  println("4  - Yellow");
+  println("5  - Cyan");
+  println("6  - Magenta");
+  println("7  - White");
+  println("8  - Orange");
+  println("9  - Pink");
+  println("10 - Purple");
+  println("11 - Lime");
+  println("12 - Teal");
+  println("13 - Sky Blue");
+  println("14 - Brown");
+  println("15 - Gray");
+  println("420 - Off");
+  println("B:<value> or b:<value> - Set brightness (1-100)");
+  println("#RRGGBB - Custom color in HEX format (e.g., #FF00AA)");
+  println("color=red,solid,3 → Show red for 3 seconds then off");
+  println("color=red,blink,5 → Blink red LED 5 times");
+  println("color=red,fade,3 → Fade red in/out 3 times");
+}
+
+void applyColor(uint8_t r, uint8_t g, uint8_t b) {
+  currentR = r;
+  currentG = g;
+  currentB = b;
+  updatePWM();
+}
+
+void updatePWM() {
+  // Apply brightness scaling (fixed calculation)
+  analogWrite(RED_PIN, (currentR * brightness) / 100);
+  analogWrite(GREEN_PIN, (currentG * brightness) / 100);
+  analogWrite(BLUE_PIN, (currentB * brightness) / 100);
+}
+
+void updatePWMWithColor(uint8_t r, uint8_t g, uint8_t b) {
+  analogWrite(RED_PIN, (r * brightness) / 100);
+  analogWrite(GREEN_PIN, (g * brightness) / 100);
+  analogWrite(BLUE_PIN, (b * brightness) / 100);
+}
+
+void clearAllColors() {
+  analogWrite(RED_PIN, 0);
+  analogWrite(GREEN_PIN, 0);
+  analogWrite(BLUE_PIN, 0);
+}
+
+bool handleColorCommand(const String &inputRaw) {
+  String input = inputRaw;
+  input.trim();
+
+  // --- Standalone brightness handling ---
+  if (input.startsWith("B:") || input.startsWith("b:")) {
+    int newBrightness = input.substring(2).toInt();
+    if (newBrightness >= 1 && newBrightness <= 100) {
+      brightness = newBrightness;
+      Serial.printf("🔆 Brightness set to: %d%%\n", brightness);
+      updatePWM();
+      return true;
+    } else {
+      Serial.println("⚠️ Brightness must be 1-100.");
+      return true;
+    }
+  }
+
+  // --- Color command with optional pattern and brightness ---
+  if (input.startsWith("color=")) {
+    String colorBlock = input.substring(6);
+    colorBlock.trim();
+
+    // --- Optional brightness within the same line ---
+    String brightnessPart = "";
+    int ampIndex = colorBlock.indexOf('&');
+    if (ampIndex != -1) {
+      brightnessPart = colorBlock.substring(ampIndex + 1);
+      colorBlock = colorBlock.substring(0, ampIndex);
+    }
+
+    // Parse color and pattern
+    String colorStr, modeStr = "direct", argStr = "";
+    int firstComma = colorBlock.indexOf(',');
+    int secondComma = colorBlock.indexOf(',', firstComma + 1);
+
+    if (firstComma == -1) {
+      colorStr = colorBlock;
+    } else {
+      colorStr = colorBlock.substring(0, firstComma);
+      if (secondComma == -1) {
+        modeStr = colorBlock.substring(firstComma + 1);
+      } else {
+        modeStr = colorBlock.substring(firstComma + 1, secondComma);
+        argStr = colorBlock.substring(secondComma + 1);
+      }
+    }
+
+    colorStr.toLowerCase();
+    modeStr.toLowerCase();
+
+    // --- Decode color name or hex ---
+    uint8_t r = 0, g = 0, b = 0;
+    bool colorValid = false;
+
+    if (colorStr.startsWith("#") && colorStr.length() == 7) {
+      long hexColor = strtol(colorStr.c_str() + 1, NULL, 16);
+      if (!(hexColor == 0 && colorStr != "#000000")) {
+        r = (hexColor >> 16) & 0xFF;
+        g = (hexColor >> 8) & 0xFF;
+        b = hexColor & 0xFF;
+        colorValid = true;
+      }
+    } else {
+      struct ColorMap {
+        const char *name;
+        uint8_t r, g, b;
+      };
+      const ColorMap colors[] = {
+          {"red", 255, 0, 0},         {"green", 0, 255, 0},
+          {"blue", 0, 0, 255},        {"yellow", 255, 255, 0},
+          {"cyan", 0, 255, 255},      {"magenta", 255, 0, 255},
+          {"white", 255, 255, 255},   {"orange", 255, 165, 0},
+          {"pink", 255, 105, 180},    {"purple", 128, 0, 128},
+          {"lime", 191, 255, 0},      {"teal", 0, 128, 128},
+          {"skyblue", 135, 206, 235}, {"brown", 139, 69, 19},
+          {"gray", 128, 128, 128},    {"off", 0, 0, 0}};
+      for (const auto &c : colors) {
+        if (colorStr == c.name) {
+          r = c.r;
+          g = c.g;
+          b = c.b;
+          colorValid = true;
+          break;
+        }
+      }
+    }
+
+    if (!colorValid) {
+      Serial.println("⚠️ Invalid color name or hex.");
+      return true;
+    }
+
+    // --- Apply inline brightness if exists ---
+    if (brightnessPart.startsWith("b:") || brightnessPart.startsWith("B:")) {
+      int newBrightness = brightnessPart.substring(2).toInt();
+      if (newBrightness >= 1 && newBrightness <= 100) {
+        brightness = newBrightness;
+        Serial.printf("🌓 Inline brightness set to: %d%%\n", brightness);
+      } else {
+        Serial.println("⚠️ Inline brightness invalid (1–100).");
+      }
+    }
+
+    // --- Pattern handling ---
+    if (modeStr == "solid") {
+      int duration = argStr.toInt();
+      Serial.printf("🟥 Solid %s for %d sec\n", colorStr.c_str(), duration);
+      applyColor(r, g, b);
+      Delay(duration * 1000);
+      applyColor(0, 0, 0);
+    } else if (modeStr == "blink") {
+      int count = argStr.toInt();
+      Serial.printf("🟦 Blink %s x%d\n", colorStr.c_str(), count);
+      for (int i = 0; i < count; i++) {
+        applyColor(r, g, b);
+        Delay(500);
+        applyColor(0, 0, 0);
+        Delay(500);
+      }
+    } else if (modeStr == "fade") {
+      int count = argStr.toInt();
+      Serial.printf("🌫️ Fade %s x%d\n", colorStr.c_str(), count);
+      uint8_t originalBrightness = brightness;
+      for (int i = 0; i < count; i++) {
+        for (int level = 0; level <= 100; level++) {
+          brightness = level;
+          updatePWMWithColor(r, g, b);
+          Delay(10);
+        }
+        for (int level = 100; level >= 0; level--) {
+          brightness = level;
+          updatePWMWithColor(r, g, b);
+          Delay(10);
+        }
+      }
+      brightness = originalBrightness;
+      updatePWM();
+    } else {
+      Serial.printf("🎨 Color %s set directly\n", colorStr.c_str());
+      applyColor(r, g, b);
+    }
+
+    return true;
+  }
+
+  return false;
 }
