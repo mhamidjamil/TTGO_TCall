@@ -15,6 +15,7 @@
 ## Runtime Cloud Settings (v8.1)
 - `intervalOfDhtSeconds` controls telemetry push interval.
 - `showFirebasePushLogs` controls periodic success-log visibility.
+- On startup, firmware reads Firebase values first and keeps them when they already exist.
 - If a key is missing or invalid, firmware creates/heals it with default and logs that event on serial.
 - Runtime settings sync runs at startup, every 10 minutes, and on manual `sync` serial command.
 
