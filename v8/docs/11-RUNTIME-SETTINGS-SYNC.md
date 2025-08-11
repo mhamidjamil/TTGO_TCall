@@ -25,8 +25,8 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Default: `4900`
 
 ## Sync Strategy
-1. Startup: device fetches runtime settings.
-2. If missing/invalid: device creates or heals values in Firebase using defaults.
+1. Startup: device fetches runtime settings and uses the Firebase value when it already exists.
+2. If missing/invalid: device creates or heals only the missing key in Firebase using the default.
 3. Periodic: device refreshes runtime settings every 10 minutes.
 4. Manual: serial command `sync` forces immediate refresh.
 
@@ -36,6 +36,7 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 - The Firebase root should stay folder-only; runtime settings belong under `/ttgo_tcall/settings/runtime`.
 
 ## Acceptance Criteria
+- Existing runtime variables are never overwritten by startup defaults.
 - Missing runtime variables are auto-created.
 - Invalid runtime variables are auto-healed.
 - Startup and periodic sync both work.
