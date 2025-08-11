@@ -16,11 +16,13 @@ struct FirebaseCommand {
 struct FirebaseRuntimeSettings {
   uint32_t intervalOfDhtSeconds = 15;
   bool showFirebasePushLogs = true;
+  bool showThingSpeakPushLogs = true;
   int dailySmsLimit = 200;
   int weeklySmsLimit = 950;
   int monthlySmsLimit = 4900;
   bool createdIntervalOfDht = false;
   bool createdShowFirebasePushLogs = false;
+  bool createdShowThingSpeakPushLogs = false;
   bool createdDailySmsLimit = false;
   bool createdWeeklySmsLimit = false;
   bool createdMonthlySmsLimit = false;
@@ -48,9 +50,10 @@ public:
                            bool telemetryPushOk,
                            const String &telemetryMessage,
                            unsigned long epochSeconds);
-  bool fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
-                            uint32_t defaultIntervalOfDhtSeconds,
-                            bool defaultShowFirebasePushLogs);
+bool fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
+                             uint32_t defaultIntervalOfDhtSeconds,
+                             bool defaultShowFirebasePushLogs,
+                             bool defaultShowThingSpeakPushLogs = true);
   String lastError() const;
 
 private:
