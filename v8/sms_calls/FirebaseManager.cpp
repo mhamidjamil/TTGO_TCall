@@ -288,12 +288,7 @@ bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, in
     return false;
   }
 
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "counter fetch", statusCode, response);
-    return false;
-  }
-
-  if (response == "null") {
+  if (statusCode == 404 || response == "null") {
     dailyCount = 0;
     weeklyCount = 0;
     monthlyCount = 0;
@@ -302,6 +297,11 @@ bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, in
     }
     error = String();
     return true;
+  }
+
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "counter fetch", statusCode, response);
+    return false;
   }
 
   DynamicJsonDocument doc(512);
@@ -516,7 +516,8 @@ bool FirebaseManager::pushLandingSnapshot(float temperature,
 
 bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
                                            uint32_t defaultIntervalOfDhtSeconds,
-                                           bool defaultShowFirebasePushLogs) {
+                                           bool defaultShowFirebasePushLogs,
+                                           bool defaultShowThingSpeakPushLogs) {
   if (!ensureAuthenticated()) {
     return false;
   }
@@ -524,6 +525,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
   outSettings = FirebaseRuntimeSettings();
   outSettings.intervalOfDhtSeconds = defaultIntervalOfDhtSeconds;
   outSettings.showFirebasePushLogs = defaultShowFirebasePushLogs;
+  outSettings.showThingSpeakPushLogs = defaultShowThingSpeakPushLogs;
   outSettings.dailySmsLimit = config.dailySmsLimit;
   outSettings.weeklySmsLimit = config.weeklySmsLimit;
   outSettings.monthlySmsLimit = config.monthlySmsLimit;
@@ -535,18 +537,20 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     return false;
   }
 
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "runtime settings fetch", statusCode, response);
-    return false;
-  }
-
   DynamicJsonDocument writeDoc(384);
   bool shouldWriteBack = false;
 
-  if (response == "null") {
+  if (statusCode == 404 || response == "null") {
     outSettings.createdIntervalOfDht = true;
     outSettings.createdShowFirebasePushLogs = true;
+    outSettings.createdShowThingSpeakPushLogs = true;
+    outSettings.createdDailySmsLimit = true;
+    outSettings.createdWeeklySmsLimit = true;
+    outSettings.createdMonthlySmsLimit = true;
     shouldWriteBack = true;
+  } else if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "runtime settings fetch", statusCode, response);
+    return false;
   } else {
     DynamicJsonDocument readDoc(768);
     if (deserializeJson(readDoc, response)) {
@@ -568,6 +572,14 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       outSettings.showFirebasePushLogs = logsValue;
     } else {
       outSettings.createdShowFirebasePushLogs = true;
+      shouldWriteBack = true;
+    }
+
+    bool tsLogsValue = defaultShowThingSpeakPushLogs;
+    if (parseBoolVariant(root["showThingSpeakPushLogs"], tsLogsValue)) {
+      outSettings.showThingSpeakPushLogs = tsLogsValue;
+    } else {
+      outSettings.createdShowThingSpeakPushLogs = true;
       shouldWriteBack = true;
     }
 
@@ -599,6 +611,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
   if (shouldWriteBack) {
     writeDoc["intervalOfDhtSeconds"] = outSettings.intervalOfDhtSeconds;
     writeDoc["showFirebasePushLogs"] = outSettings.showFirebasePushLogs;
+    writeDoc["showThingSpeakPushLogs"] = outSettings.showThingSpeakPushLogs;
     writeDoc["dailySmsLimit"] = outSettings.dailySmsLimit;
     writeDoc["weeklySmsLimit"] = outSettings.weeklySmsLimit;
     writeDoc["monthlySmsLimit"] = outSettings.monthlySmsLimit;
@@ -624,40 +637,6 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
 
 bool FirebaseManager::bootstrapPaths() {
   if (!ensureAuthenticated()) {
-    return false;
-  }
-
-  DynamicJsonDocument doc(1024);
-  doc["commands"]["pending"] = JsonObject();
-  doc["commands"]["history"] = JsonObject();
-  doc["counters"]["sentToday"] = 0;
-  doc["counters"]["sentWeek"] = 0;
-  doc["counters"]["sentMonth"] = 0;
-  doc["counters"]["updatedAtMs"] = 0;
-  doc["status"]["firebaseReady"] = true;
-  doc["status"]["updatedAtMs"] = 0;
-  doc["telemetry"]["temperature"] = 0.0f;
-  doc["telemetry"]["humidity"] = 0.0f;
-  doc["telemetry"]["timestamp"] = 0;
-  doc["telemetry"]["updatedAtMs"] = 0;
-  doc["settings"]["runtime"]["intervalOfDhtSeconds"] = 15;
-  doc["settings"]["runtime"]["showFirebasePushLogs"] = true;
-  doc["settings"]["runtime"]["dailySmsLimit"] = 200;
-  doc["settings"]["runtime"]["weeklySmsLimit"] = 950;
-  doc["settings"]["runtime"]["monthlySmsLimit"] = 4900;
-  doc["settings"]["runtime"]["updatedAtMs"] = 0;
-
-  String payload;
-  serializeJson(doc, payload);
-
-  String response;
-  int statusCode = 0;
-  if (!httpPatchJson(buildPathUrl(rootPathFromConfig()), payload, response, statusCode)) {
-    return false;
-  }
-
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "bootstrap", statusCode, response);
     return false;
   }
 
