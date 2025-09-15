@@ -1,0 +1,22 @@
+# Enforce consistent LF endings for text files across platforms
+* text=auto eol=lf
+
+# Keep Windows scripts with CRLF if added later
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Common binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
