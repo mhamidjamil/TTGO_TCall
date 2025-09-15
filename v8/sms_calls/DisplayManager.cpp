@@ -52,25 +52,25 @@ void DisplayManager::update(float temperature, float humidity, const char *netwo
     display.print("%");
   }
 
-  display.setCursor(0, 14);
+  display.setCursor(0, 24);
   display.print("NET:");
   display.print(networkMode);
 
-  display.setCursor(64, 14);
+  display.setCursor(64, 24);
   display.print("CLD:");
   display.print(cloudMode);
 
-  display.setCursor(0, 30);
+  display.setCursor(0, 40);
   display.print("SENT D:");
   display.print(sentToday);
 
-  display.setCursor(0, 42);
+  display.setCursor(78, 40);
   display.print("W:");
   display.print(sentWeek);
   display.print(" M:");
   display.print(sentMonth);
 
-  display.setCursor(0, 54);
+  display.setCursor(0, 56);
   display.print("TTGO T-Call v8");
 
   display.display();
