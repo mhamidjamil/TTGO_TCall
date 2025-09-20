@@ -22,6 +22,7 @@ public:
   bool updateCommandStatus(const FirebaseCommand &command, const String &status, const String &errorReason = String());
   bool updateCounterSnapshot(int dailyCount, int weeklyCount, int monthlyCount);
   bool pushTelemetry(float temperature, float humidity, int sentToday, int sentWeek, int sentMonth, unsigned long epochSeconds);
+  bool pushStartupStatus(const String &bootTime, const String &wifiMode, const String &ipAddress, bool firebaseReady);
   String lastError() const;
 
 private:
