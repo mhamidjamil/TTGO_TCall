@@ -217,48 +217,70 @@ bool FirebaseManager::authenticate() {
     return false;
   }
 
-  String url;
-  DynamicJsonDocument authDoc(512);
-  if (config.firebaseUseAnonymous) {
-    url = String("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=") + config.firebaseApiKey;
-    authDoc["returnSecureToken"] = true;
-  } else {
-    url = String("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=") + config.firebaseApiKey;
-    authDoc["email"] = config.firebaseUserEmail;
-    authDoc["password"] = config.firebaseUserPassword;
-    authDoc["returnSecureToken"] = true;
-  }
-  String payload;
-  serializeJson(authDoc, payload);
+  auto authWithMode = [&](bool useAnonymous, String &outBody, int &outCode) -> bool {
+    String url;
+    DynamicJsonDocument authDoc(512);
+    if (useAnonymous) {
+      url = String("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=") + config.firebaseApiKey;
+      authDoc["returnSecureToken"] = true;
+    } else {
+      url = String("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=") + config.firebaseApiKey;
+      authDoc["email"] = config.firebaseUserEmail;
+      authDoc["password"] = config.firebaseUserPassword;
+      authDoc["returnSecureToken"] = true;
+    }
 
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  if (!http.begin(client, url)) {
-    error = "auth begin failed";
+    String payload;
+    serializeJson(authDoc, payload);
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    if (!http.begin(client, url)) {
+      error = "auth begin failed";
+      return false;
+    }
+
+    http.addHeader("Content-Type", "application/json");
+    outCode = http.POST(payload);
+    outBody = http.getString();
+    http.end();
+    return true;
+  };
+
+  String body;
+  int code = 0;
+  if (!authWithMode(config.firebaseUseAnonymous, body, code)) {
     return false;
   }
-
-  http.addHeader("Content-Type", "application/json");
-  int code = http.POST(payload);
-  String body = http.getString();
-  http.end();
 
   if (code < 200 || code >= 300) {
-    error = String("auth failed code=") + code;
-    return false;
+    error = String("auth failed code=") + code + String(" body=") + body;
+    if (config.firebaseUseAnonymous && String(config.firebaseUserEmail).length() > 0 && String(config.firebaseUserPassword).length() > 0) {
+      String fallbackBody;
+      int fallbackCode = 0;
+      if (authWithMode(false, fallbackBody, fallbackCode) && fallbackCode >= 200 && fallbackCode < 300) {
+        body = fallbackBody;
+        code = fallbackCode;
+      } else {
+        error = String("auth failed code=") + code + String(" body=") + body + String(" | fallback code=") + fallbackCode + String(" body=") + fallbackBody;
+        return false;
+      }
+    } else {
+      return false;
+    }
   }
 
   DynamicJsonDocument tokenDoc(1536);
   if (deserializeJson(tokenDoc, body)) {
-    error = "auth parse failed";
+    error = String("auth parse failed body=") + body;
     return false;
   }
 
   String token = tokenDoc["idToken"] | "";
   long expiresIn = String((const char *)(tokenDoc["expiresIn"] | "0")).toInt();
   if (token.length() == 0 || expiresIn <= 0) {
-    error = "auth token missing";
+    error = String("auth token missing body=") + body;
     return false;
   }
 
@@ -288,6 +310,30 @@ bool FirebaseManager::pushTelemetry(float temperature, float humidity, int sentT
   String response;
   int statusCode = 0;
   if (!httpPatchJson(buildPathUrl(String(config.firebaseTelemetryPath)), payload, response, statusCode)) {
+    return false;
+  }
+
+  return statusCode >= 200 && statusCode < 300;
+}
+
+bool FirebaseManager::pushStartupStatus(const String &bootTime, const String &wifiMode, const String &ipAddress, bool firebaseReady) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(512);
+  doc["bootTime"] = bootTime;
+  doc["wifiMode"] = wifiMode;
+  doc["ipAddress"] = ipAddress;
+  doc["firebaseReady"] = firebaseReady;
+  doc["updatedAtMs"] = millis();
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  if (!httpPatchJson(buildPathUrl(String(config.firebaseStatusPath)), payload, response, statusCode)) {
     return false;
   }
 
