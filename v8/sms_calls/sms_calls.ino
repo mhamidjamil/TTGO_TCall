@@ -33,6 +33,7 @@ static unsigned long lastUiRefresh = 0;
 static unsigned long lastCloudPoll = 0;
 static unsigned long lastTelemetryPush = 0;
 static V8Config runtimeConfig;
+static String startupBootTime;
 
 static void initializeModemHardware() {
   Wire.begin(I2C_SDA_PIN_DEFAULT, I2C_SCL_PIN_DEFAULT);
@@ -116,11 +117,50 @@ static void processPendingCommand() {
   firebaseManager.updateCommandStatus(cmd, "sent", String());
 }
 
+static void printDhtStatus(const char *source) {
+  float temperature = dhtManager.readTemperature();
+  float humidity = dhtManager.readHumidity();
+  Serial.print("[DHT] ");
+  Serial.print(source);
+  Serial.print(" temp=");
+  if (temperature <= -999.0f) {
+    Serial.print("NA");
+  } else {
+    Serial.print(temperature, 1);
+  }
+  Serial.print(" hum=");
+  if (humidity < 0.0f) {
+    Serial.println("NA");
+  } else {
+    Serial.println(humidity, 1);
+  }
+}
+
+static void handleSerialCommand(String command) {
+  command.trim();
+  command.toLowerCase();
+  if (command == "dht") {
+    printDhtStatus("serial");
+    return;
+  }
+  if (command == "status") {
+    Serial.print("[STATUS] wifi=");
+    Serial.print(wifiManager.modeName());
+    Serial.print(" ip=");
+    Serial.print(wifiManager.localIp().toString());
+    Serial.print(" firebase=");
+    Serial.println(firebaseManager.isReady() ? "ready" : "not_ready");
+    return;
+  }
+  Serial.println("[CMD] use: dht | status");
+}
+
 void setup() {
   Serial.begin(115200);
   delay(500);
 
   Logger::info("BOOT", "Starting v8 runtime");
+  startupBootTime = String(millis()) + String("ms");
 
   configManager.begin();
   runtimeConfig = configManager.get();
@@ -154,6 +194,14 @@ void setup() {
   String startupIp = wifiManager.localIp().toString();
   Logger::info("BOOT", startupIp.c_str());
   Logger::info("API", webDashboard.docsUrl().c_str());
+
+  if (firebaseManager.isReady()) {
+    if (firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), startupIp, true)) {
+      Logger::info("FIREBASE", "Startup status pushed");
+    } else {
+      Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
+    }
+  }
 }
 
 void loop() {
@@ -165,6 +213,11 @@ void loop() {
 
   callManager.loop();
   webDashboard.loop();
+
+  while (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    handleSerialCommand(command);
+  }
 
   if (millis() - lastUiRefresh > 3000) {
     lastUiRefresh = millis();
@@ -190,6 +243,7 @@ void loop() {
           rateLimitManager.weeklyCount(),
           rateLimitManager.monthlyCount(),
           epochSeconds);
+      Logger::info("FIREBASE", "Telemetry pushed");
     }
   }
 }
