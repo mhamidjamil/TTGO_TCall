@@ -1,5 +1,6 @@
 #include "WebDashboard.h"
 #include "secrets.h"
+#include "SPIFFSUtils.h"
 #include <ArduinoJson.h>
 #include <FS.h>
 #include <SPIFFS.h>
@@ -8,19 +9,31 @@
 #include <HTTPClient.h>
 
 WebDashboard::WebDashboard(ConfigManager &cfgMgr, SMSManager *sms, CallManager *call, int port)
-  : server(port), cfgMgr(cfgMgr), smsManager(sms), callManager(call) {}
+  : server(port), cfgMgr(cfgMgr), smsManager(sms), callManager(call), serverPort(port) {}
 
 void WebDashboard::begin() {
   // root serves a small info or redirect to /dashboard
-  server.on("/", [this]() { server.send(200, "text/plain", "SMS & Calls module running"); });
+  server.on("/", [this]() {
+    Serial.println("[WebDashboard] GET /");
+    server.send(200, "text/plain", "SMS & Calls module running");
+  });
   // Route /dashboard is protected and handled by handleDashboard
-  server.on("/dashboard", [this]() { this->handleDashboard(); });
+  server.on("/dashboard", [this]() {
+    Serial.printf("[WebDashboard] Request /dashboard from %s\n", server.client().remoteIP().toString().c_str());
+    this->handleDashboard();
+  });
   // Register API routes (handler checks request body/method as needed)
-  server.on("/api/config", [this]() { this->handleApiConfig(); });
-  server.on("/api/events", [this]() { this->handleApiEvents(); });
-  server.on("/api/send_sms", [this]() { this->handleSendSms(); });
-  server.on("/api/call", [this]() { this->handleCall(); });
-  server.on("/api/hangup", [this]() { this->handleHangup(); });
+  // Diagnostic endpoint to view SPIFFS /data dump (requires dashboard auth)
+  server.on("/spiffs_dump", [this]() {
+    if (!checkAuth()) { server.send(401, "text/plain", "unauthorized"); return; }
+    String dump = spiffsDumpDataDirToString();
+    server.send(200, "text/plain", dump);
+  });
+  server.on("/api/config", [this]() { Serial.println("[WebDashboard] /api/config"); this->handleApiConfig(); });
+  server.on("/api/events", [this]() { Serial.println("[WebDashboard] /api/events"); this->handleApiEvents(); });
+  server.on("/api/send_sms", [this]() { Serial.println("[WebDashboard] /api/send_sms"); this->handleSendSms(); });
+  server.on("/api/call", [this]() { Serial.println("[WebDashboard] /api/call"); this->handleCall(); });
+  server.on("/api/hangup", [this]() { Serial.println("[WebDashboard] /api/hangup"); this->handleHangup(); });
   server.on("/api/test_forward", [this]() {
     // inline handler
     if (!checkAuth()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
@@ -50,11 +63,15 @@ void WebDashboard::begin() {
     int code = http.POST(body); String resp = code>0?http.getString():String(); http.end(); StaticJsonDocument<256> out; out["code"]=code; out["response"]=resp; out["ok"]=(code>0); String s; serializeJson(out,s); server.send(200,"application/json",s);
   });
 
-  // serve static assets from SPIFFS /data folder
-  server.serveStatic("/dashboard.css", SPIFFS, "/data/dashboard.css");
-  server.serveStatic("/dashboard.js", SPIFFS, "/data/dashboard.js");
+  // serve static assets from SPIFFS /data folder if present, otherwise try root paths
+  if (SPIFFS.exists("/data/dashboard.css")) server.serveStatic("/dashboard.css", SPIFFS, "/data/dashboard.css");
+  else if (SPIFFS.exists("/dashboard.css")) server.serveStatic("/dashboard.css", SPIFFS, "/dashboard.css");
+  if (SPIFFS.exists("/data/dashboard.js")) server.serveStatic("/dashboard.js", SPIFFS, "/data/dashboard.js");
+  else if (SPIFFS.exists("/dashboard.js")) server.serveStatic("/dashboard.js", SPIFFS, "/dashboard.js");
 
   server.begin();
+  // Serial.printf sometimes isn't available depending on WebServer implementation; use stored port
+  Serial.printf("[WebDashboard] HTTP server started on port %d\n", serverPort);
 }
 
 void WebDashboard::handleClient() { server.handleClient(); }
@@ -63,10 +80,13 @@ bool WebDashboard::checkAuth() {
   // basic auth: check header 'X-Dashboard-Auth' or query param 'pw'
   if (server.hasHeader("X-Dashboard-Auth")) {
     String v = server.header("X-Dashboard-Auth");
-    if (v == String(DASHBOARD_PASSWORD)) return true;
+    Serial.printf("[WebDashboard] checkAuth: header X-Dashboard-Auth present (len=%d)\n", v.length());
+    if (v == String(DASHBOARD_PASSWORD)) { Serial.println("[WebDashboard] checkAuth: header auth OK"); return true; }
   }
   if (server.hasArg("pw")) {
-    if (server.arg("pw") == String(DASHBOARD_PASSWORD)) return true;
+    String p = server.arg("pw");
+    Serial.printf("[WebDashboard] checkAuth: form arg 'pw' present (len=%d)\n", p.length());
+    if (p == String(DASHBOARD_PASSWORD)) { Serial.println("[WebDashboard] checkAuth: form auth OK"); return true; }
   }
   return false;
 }
@@ -92,11 +112,18 @@ void WebDashboard::handleDashboard() {
   bool authOk = false;
   if (providedPw.length() && providedPw == String(DASHBOARD_PASSWORD)) authOk = true;
   if (!authOk && headerPw.length() && headerPw == String(DASHBOARD_PASSWORD)) authOk = true;
+  Serial.printf("[WebDashboard] handleDashboard: from %s providedPw_len=%d headerPw_len=%d authOk=%d\n",
+    server.client().remoteIP().toString().c_str(), providedPw.length(), headerPw.length(), authOk);
 
   if (authOk) {
+    Serial.println("[WebDashboard] Auth OK — attempting to serve SPIFFS dashboard");
     // Serve SPIFFS dashboard if present, otherwise embedded fallback
-    File f = SPIFFS.open("/data/dashboard.html", "r");
-    if (f) { server.streamFile(f, "text/html"); f.close(); return; }
+  // Try /data/dashboard.html first, then /dashboard.html at root (some uploaders write files to root)
+  File f = SPIFFS.open("/data/dashboard.html", "r");
+  if (f) { Serial.println("[WebDashboard] Serving /data/dashboard.html from SPIFFS"); server.streamFile(f, "text/html"); f.close(); return; }
+  f = SPIFFS.open("/dashboard.html", "r");
+  if (f) { Serial.println("[WebDashboard] Serving /dashboard.html from SPIFFS root"); server.streamFile(f, "text/html"); f.close(); return; }
+    Serial.println("[WebDashboard] /data/dashboard.html not found in SPIFFS — serving embedded fallback");
     const char *embedded = R"rawliteral(
 <!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -143,9 +170,13 @@ $('testCall').addEventListener('click',()=>{const body={number:$('callNum').valu
 
   // If header or querypw auth is present, validate and serve SPA
   if (checkAuth()) {
-    File f = SPIFFS.open("/data/dashboard.html", "r");
-    if (f) { server.streamFile(f, "text/html"); f.close(); return; }
+    Serial.println("[WebDashboard] Auth via header/query ok — serving SPIFFS or fallback");
+  File f = SPIFFS.open("/data/dashboard.html", "r");
+  if (f) { Serial.println("[WebDashboard] Serving /data/dashboard.html from SPIFFS"); server.streamFile(f, "text/html"); f.close(); return; }
+  f = SPIFFS.open("/dashboard.html", "r");
+  if (f) { Serial.println("[WebDashboard] Serving /dashboard.html from SPIFFS root"); server.streamFile(f, "text/html"); f.close(); return; }
     // serve embedded fallback without injected pw
+    Serial.println("[WebDashboard] /data/dashboard.html not found in SPIFFS (header auth path) — serving small fallback");
     const char *embedded2 = R"rawliteral(
 <!doctype html><html><body><p>Dashboard (fallback). Please use the header X-Dashboard-Auth to authenticate.</p></body></html>
 )rawliteral";
@@ -154,6 +185,7 @@ $('testCall').addEventListener('click',()=>{const body={number:$('callNum').valu
   }
 
   // No auth provided — serve a simple HTML password form so the browser can post
+  Serial.println("[WebDashboard] No auth provided — serving login form");
   const char *loginForm = "<html><body><h3>Enter Dashboard Password</h3>"
     "<form method='post' action='/dashboard'><input name='pw' type='password'/>"
     "<button type='submit'>Login</button></form></body></html>";
@@ -163,7 +195,8 @@ $('testCall').addEventListener('click',()=>{const body={number:$('callNum').valu
 void WebDashboard::handleApiConfig() {
   // If there's a request body (arg "plain") treat as POST to save; otherwise treat as GET
   if (!server.hasArg("plain")) {
-    if (!checkAuth()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+    Serial.println("[WebDashboard] handleApiConfig GET");
+    if (!checkAuth()) { Serial.println("[WebDashboard] handleApiConfig GET unauthorized"); server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
     Config c = cfgMgr.get();
     StaticJsonDocument<512> doc;
     doc["useApiSecret"] = c.useApiSecret;
@@ -179,7 +212,8 @@ void WebDashboard::handleApiConfig() {
   }
 
   // POST: save config
-  if (!checkAuth()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+  Serial.println("[WebDashboard] handleApiConfig POST");
+  if (!checkAuth()) { Serial.println("[WebDashboard] handleApiConfig POST unauthorized"); server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
   String body = server.arg("plain");
   StaticJsonDocument<512> doc;
   DeserializationError err = deserializeJson(doc, body);
@@ -212,6 +246,7 @@ void WebDashboard::handleSendSms() {
   StaticJsonDocument<256> doc; deserializeJson(doc, server.arg("plain"));
   String to = String((const char *)doc["to"].as<const char *>());
   String msg = String((const char *)doc["message"].as<const char *>());
+  Serial.printf("[WebDashboard] handleSendSms to=%s msg_len=%d\n", to.c_str(), msg.length());
   String err; bool ok = smsManager->sendSms(to, msg, err);
   if (ok) server.send(200, "application/json", "{\"ok\":true}");
   else server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + err + "\"}");
@@ -227,6 +262,7 @@ void WebDashboard::handleCall() {
   if (!server.hasArg("plain")) { server.send(400, "application/json", "{\"error\":\"no body\"}"); return; }
   StaticJsonDocument<128> doc; deserializeJson(doc, server.arg("plain"));
   String to = String((const char *)doc["to"].as<const char *>());
+  Serial.printf("[WebDashboard] handleCall to=%s\n", to.c_str());
   // TODO: callManager->call(to) - not implemented, placeholder just respond ok
   server.send(200, "application/json", "{\"ok\":true}\n");
 }
@@ -238,6 +274,7 @@ void WebDashboard::handleHangup() {
     if (h != c.apiSecret) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
   }
   if (!callManager) { server.send(500, "application/json", "{\"error\":\"no call manager\"}"); return; }
+  Serial.println("[WebDashboard] handleHangup");
   callManager->hangup();
   server.send(200, "application/json", "{\"ok\":true}\n");
 }

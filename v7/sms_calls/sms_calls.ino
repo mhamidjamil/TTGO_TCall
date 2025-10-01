@@ -10,6 +10,7 @@
 #include "WebDashboard.h"
 #include "SMSManager.h"
 #include "CallManager.h"
+#include "SPIFFSUtils.h"
 
 ConfigManager configManager;
 SMSManager smsManager(configManager);
@@ -21,9 +22,60 @@ void setup() {
   delay(1000);
   Serial.println("Starting SMS & Calls Project");
 
-  if (!SPIFFS.begin(true)) {
-    Serial.println("Failed to mount SPIFFS");
+  // Initialize SPIFFS via helper
+  if (!spiffsBegin(true)) {
+    Serial.println("Failed to mount SPIFFS (helper)");
   }
+
+  // Use helper to list root
+  spiffsListRoot();
+
+  // Check/read/create version file using helper
+  const char *verPath = "/version.txt";
+  if (spiffsExists(verPath)) {
+    Serial.println(String("Found existing version file: ") + verPath + " — reading (will not overwrite)");
+    String contents = spiffsReadRaw(verPath);
+    if (contents.length()) {
+      Serial.println("SPIFFS version file contents:");
+      Serial.print(contents);
+    } else {
+      Serial.println(String("Failed to read existing version file: ") + verPath);
+    }
+  } else if (false) {
+    // Create initial version file only if missing
+    String content = String("v7 sms_calls dashboard\n") + "built:" __DATE__ " " __TIME__ "\n";
+    if (spiffsWriteFileIfMissing(verPath, content)) {
+      Serial.println(String("Created SPIFFS version file: ") + verPath);
+    } else {
+      Serial.println(String("Failed to create SPIFFS version file: ") + verPath);
+    }
+  }
+
+  // Dump /data directory with helper
+  spiffsDumpDataDir();
+  // Print SPIFFS usage info
+  Serial.println("--- SPIFFS info ---");
+  Serial.print(spiffsInfo());
+
+  // Look for dashboard.html in several common locations (prefer /data/...)
+  const char *candidates[] = {"/data/dashboard.html", "/dashboard.html", "/data/index.html", "/index.html"};
+  String found = spiffsFindFile(candidates, 4);
+  String firstLines = "";
+  if (found.length()) {
+    Serial.println(String("Found dashboard candidate: ") + found);
+    firstLines = spiffsReadFirstLines(found.c_str(), 5);
+  }
+  if (firstLines.length()) {
+    Serial.println("--- First 5 lines of dashboard.html ---");
+    Serial.print(firstLines);
+    Serial.println("--- end first lines ---");
+  } else {
+    Serial.println("dashboard.html not found in common locations (first-lines check)");
+  }
+
+  // Print first 5 lines of every file at SPIFFS root (helpful when uploader placed files at root)
+  Serial.println("--- First 5 lines of root files ---");
+  Serial.print(spiffsDumpRootFirstLines(5));
 
   configManager.begin();
 
