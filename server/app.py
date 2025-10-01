@@ -1,0 +1,90 @@
+from flask import Flask, request, jsonify, send_file
+from flasgger import Swagger, swag_from
+from flask_httpauth import HTTPTokenAuth
+import requests
+import os
+from utils import append_message, ensure_workbook
+from config import Config
+
+app = Flask(__name__)
+app.config['SWAGGER'] = {
+    'title': 'ESP32 SMS Bridge',
+    'uiversion': 3
+}
+swagger = Swagger(app)
+auth = HTTPTokenAuth(scheme='ApiKey')
+
+# load config from env or file
+cfg = Config()
+
+@auth.verify_token
+def verify_token(token):
+    # Simple token check using dashboard password
+    return token == cfg.DASHBOARD_PASSWORD
+
+
+@app.route('/events', methods=['POST'])
+@swag_from({
+    'tags': ['events'],
+    'parameters': [
+        {
+            'name': 'body', 'in': 'body', 'required': True,
+            'schema': {'type': 'object',
+                       'properties': {'type': {'type': 'string'}, 'number': {'type': 'string'}, 'body': {'type': 'string'}}}
+        }
+    ],
+    'responses': {200: {'description': 'ok'}}
+})
+@auth.login_required
+def events():
+    j = request.get_json(force=True)
+    t = j.get('type')
+    number = j.get('number')
+    body = j.get('body')
+    # Append to excel log
+    ensure_workbook(cfg.LOG_FILE)
+    append_message(cfg.LOG_FILE, t, number, body)
+    return jsonify({'ok': True})
+
+
+@app.route('/send', methods=['POST'])
+@swag_from({
+    'tags': ['send'],
+    'parameters': [
+        {'name': 'body', 'in': 'body', 'required': True,
+         'schema': {'type': 'object', 'properties': {'to': {'type': 'string'}, 'message': {'type': 'string'}}}}
+    ],
+    'responses': {200: {'description': 'sent'}}
+})
+@auth.login_required
+def send():
+    j = request.get_json(force=True)
+    to = j.get('to')
+    msg = j.get('message')
+    if not to or not msg:
+        return jsonify({'error': 'missing fields'}), 400
+
+    # proxy to ESP32 device
+    device_url = f"http://{cfg.DEVICE_HOST}:{cfg.DEVICE_PORT}/api/send_sms"
+    headers = {'Content-Type': 'application/json'}
+    if cfg.USE_API_SECRET and cfg.API_SECRET:
+        headers['X-Api-Secret'] = cfg.API_SECRET
+
+    resp = requests.post(device_url, json={'to': to, 'message': msg}, headers=headers, timeout=10)
+    out = {'status_code': resp.status_code, 'text': resp.text}
+    # log outgoing message
+    ensure_workbook(cfg.LOG_FILE)
+    append_message(cfg.LOG_FILE, 'outgoing', to, msg)
+    return jsonify(out), resp.status_code
+
+
+@app.route('/download_log', methods=['GET'])
+@auth.login_required
+def download_log():
+    ensure_workbook(cfg.LOG_FILE)
+    return send_file(cfg.LOG_FILE, as_attachment=True)
+
+
+if __name__ == '__main__':
+    ensure_workbook(cfg.LOG_FILE)
+    app.run(host='0.0.0.0', port=cfg.SERVER_PORT)
