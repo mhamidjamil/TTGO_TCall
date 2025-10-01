@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <SPIFFS.h>
+// SPIFFS removed for v7 runtime; using embedded/dashboard defaults and secrets.h
 #include "secrets.h"
 #include <Wire.h>
 #define TINY_GSM_MODEM_SIM800   // Modem is SIM800
@@ -10,7 +10,7 @@
 #include "WebDashboard.h"
 #include "SMSManager.h"
 #include "CallManager.h"
-#include "SPIFFSUtils.h"
+// SPIFFSUtils removed from v7 runtime
 
 ConfigManager configManager;
 SMSManager smsManager(configManager);
@@ -22,62 +22,17 @@ void setup() {
   delay(1000);
   Serial.println("Starting SMS & Calls Project");
 
-  // Initialize SPIFFS via helper
-  if (!spiffsBegin(true)) {
-    Serial.println("Failed to mount SPIFFS (helper)");
-  }
-
-  // Use helper to list root
-  spiffsListRoot();
-
-  // Check/read/create version file using helper
-  const char *verPath = "/version.txt";
-  if (spiffsExists(verPath)) {
-    Serial.println(String("Found existing version file: ") + verPath + " — reading (will not overwrite)");
-    String contents = spiffsReadRaw(verPath);
-    if (contents.length()) {
-      Serial.println("SPIFFS version file contents:");
-      Serial.print(contents);
-    } else {
-      Serial.println(String("Failed to read existing version file: ") + verPath);
-    }
-  } else if (false) {
-    // Create initial version file only if missing
-    String content = String("v7 sms_calls dashboard\n") + "built:" __DATE__ " " __TIME__ "\n";
-    if (spiffsWriteFileIfMissing(verPath, content)) {
-      Serial.println(String("Created SPIFFS version file: ") + verPath);
-    } else {
-      Serial.println(String("Failed to create SPIFFS version file: ") + verPath);
-    }
-  }
-
-  // Dump /data directory with helper
-  spiffsDumpDataDir();
-  // Print SPIFFS usage info
-  Serial.println("--- SPIFFS info ---");
-  Serial.print(spiffsInfo());
-
-  // Look for dashboard.html in several common locations (prefer /data/...)
-  const char *candidates[] = {"/data/dashboard.html", "/dashboard.html", "/data/index.html", "/index.html"};
-  String found = spiffsFindFile(candidates, 4);
-  String firstLines = "";
-  if (found.length()) {
-    Serial.println(String("Found dashboard candidate: ") + found);
-    firstLines = spiffsReadFirstLines(found.c_str(), 5);
-  }
-  if (firstLines.length()) {
-    Serial.println("--- First 5 lines of dashboard.html ---");
-    Serial.print(firstLines);
-    Serial.println("--- end first lines ---");
-  } else {
-    Serial.println("dashboard.html not found in common locations (first-lines check)");
-  }
-
-  // Print first 5 lines of every file at SPIFFS root (helpful when uploader placed files at root)
-  Serial.println("--- First 5 lines of root files ---");
-  Serial.print(spiffsDumpRootFirstLines(5));
+  // SPIFFS disabled for v7 build — using embedded dashboard and secrets.h values
+  Serial.println("SPIFFS disabled in this build; using embedded dashboard and secrets.h for defaults");
 
   configManager.begin();
+
+  // After loading defaults from secrets.h and persisted settings, check remote settings once
+  if (configManager.checkAndApplyRemoteSettings()) {
+    Serial.println("Applied remote settings on startup");
+  } else {
+    Serial.println("No remote settings applied on startup");
+  }
 
   // --- Modem / power initialization (copied from v6 ModemManager)
   // pin definitions (adjust if your board wiring differs)

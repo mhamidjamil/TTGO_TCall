@@ -1,12 +1,10 @@
 #include "WebDashboard.h"
 #include "secrets.h"
-#include "SPIFFSUtils.h"
 #include <ArduinoJson.h>
-#include <FS.h>
-#include <SPIFFS.h>
+#include <Arduino.h>
+#include <HTTPClient.h>
 #include "SMSManager.h"
 #include "CallManager.h"
-#include <HTTPClient.h>
 
 WebDashboard::WebDashboard(ConfigManager &cfgMgr, SMSManager *sms, CallManager *call, int port)
   : server(port), cfgMgr(cfgMgr), smsManager(sms), callManager(call), serverPort(port) {}
@@ -23,12 +21,7 @@ void WebDashboard::begin() {
     this->handleDashboard();
   });
   // Register API routes (handler checks request body/method as needed)
-  // Diagnostic endpoint to view SPIFFS /data dump (requires dashboard auth)
-  server.on("/spiffs_dump", [this]() {
-    if (!checkAuth()) { server.send(401, "text/plain", "unauthorized"); return; }
-    String dump = spiffsDumpDataDirToString();
-    server.send(200, "text/plain", dump);
-  });
+  // SPIFFS removed: no spiffs diagnostics endpoint
   server.on("/api/config", [this]() { Serial.println("[WebDashboard] /api/config"); this->handleApiConfig(); });
   server.on("/api/events", [this]() { Serial.println("[WebDashboard] /api/events"); this->handleApiEvents(); });
   server.on("/api/send_sms", [this]() { Serial.println("[WebDashboard] /api/send_sms"); this->handleSendSms(); });
@@ -63,11 +56,15 @@ void WebDashboard::begin() {
     int code = http.POST(body); String resp = code>0?http.getString():String(); http.end(); StaticJsonDocument<256> out; out["code"]=code; out["response"]=resp; out["ok"]=(code>0); String s; serializeJson(out,s); server.send(200,"application/json",s);
   });
 
-  // serve static assets from SPIFFS /data folder if present, otherwise try root paths
-  if (SPIFFS.exists("/data/dashboard.css")) server.serveStatic("/dashboard.css", SPIFFS, "/data/dashboard.css");
-  else if (SPIFFS.exists("/dashboard.css")) server.serveStatic("/dashboard.css", SPIFFS, "/dashboard.css");
-  if (SPIFFS.exists("/data/dashboard.js")) server.serveStatic("/dashboard.js", SPIFFS, "/data/dashboard.js");
-  else if (SPIFFS.exists("/dashboard.js")) server.serveStatic("/dashboard.js", SPIFFS, "/dashboard.js");
+  // New endpoint: check remote settings URL and apply if version mismatch
+  server.on("/api/check_settings", [this]() {
+    if (!checkAuth()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+    bool applied = cfgMgr.checkAndApplyRemoteSettings();
+    if (applied) server.send(200, "application/json", "{\"ok\":true,\"applied\":true}");
+    else server.send(200, "application/json", "{\"ok\":true,\"applied\":false}");
+  });
+
+  // Static assets are embedded in the fallback HTML; SPIFFS not used
 
   server.begin();
   // Serial.printf sometimes isn't available depending on WebServer implementation; use stored port
@@ -116,14 +113,7 @@ void WebDashboard::handleDashboard() {
     server.client().remoteIP().toString().c_str(), providedPw.length(), headerPw.length(), authOk);
 
   if (authOk) {
-    Serial.println("[WebDashboard] Auth OK — attempting to serve SPIFFS dashboard");
-    // Serve SPIFFS dashboard if present, otherwise embedded fallback
-  // Try /data/dashboard.html first, then /dashboard.html at root (some uploaders write files to root)
-  File f = SPIFFS.open("/data/dashboard.html", "r");
-  if (f) { Serial.println("[WebDashboard] Serving /data/dashboard.html from SPIFFS"); server.streamFile(f, "text/html"); f.close(); return; }
-  f = SPIFFS.open("/dashboard.html", "r");
-  if (f) { Serial.println("[WebDashboard] Serving /dashboard.html from SPIFFS root"); server.streamFile(f, "text/html"); f.close(); return; }
-    Serial.println("[WebDashboard] /data/dashboard.html not found in SPIFFS — serving embedded fallback");
+    Serial.println("[WebDashboard] Auth OK — serving embedded dashboard");
     const char *embedded = R"rawliteral(
 <!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -137,10 +127,15 @@ void WebDashboard::handleDashboard() {
 <label>API Secret: <input id="apiSecret" type="text"></label>
 <label>Forward URL: <input id="forwardUrl" type="text"></label>
 <label>Forward API Key: <input id="forwardApiKey" type="text"></label>
+<label>Settings URL: <input id="settingsUrl" type="text"></label>
+<label>Settings Version: <input id="settingsVersion" type="text" readonly></label>
 <label><input id="allowSms" type="checkbox"> Allow SMS</label>
 <label><input id="allowCall" type="checkbox"> Allow Calls</label>
 <div><button id="save">Save</button></div>
 <pre id="saveResult"></pre>
+</section>
+<section id="remote"><h3>Remote Settings</h3>
+<div><button id="checkSettings">Check Settings</button> <span id="checkSettingsOut"></span></div>
 </section>
 <section id="tests"><h3>Tests</h3>
 <div><button id="testForward">Test Forward (simulate incoming SMS)</button><pre id="testForwardOut"></pre></div>
@@ -151,12 +146,14 @@ void WebDashboard::handleDashboard() {
 window._DASH_PW = window._DASH_PW || '';
 const headers = (window._DASH_PW)?{'X-Dashboard-Auth':window._DASH_PW,'Content-Type':'application/json'}:{'Content-Type':'application/json'};
 const $=(id)=>document.getElementById(id);
-function load(){fetch('/api/config',{headers}).then(r=>r.json()).then(j=>{ $('useApiSecret').checked=!!j.useApiSecret; $('apiSecret').value=j.apiSecret||''; $('forwardUrl').value=j.forwardUrl||''; $('forwardApiKey').value=j.forwardApiKey||''; $('allowSms').checked=!!j.allowSms; $('allowCall').checked=!!j.allowCall; }).catch(e=>alert('Failed to load config'))}
+function load(){fetch('/api/config',{headers}).then(r=>r.json()).then(j=>{ $('useApiSecret').checked=!!j.useApiSecret; $('apiSecret').value=j.apiSecret||''; $('forwardUrl').value=j.forwardUrl||''; $('forwardApiKey').value=j.forwardApiKey||''; $('allowSms').checked=!!j.allowSms; $('allowCall').checked=!!j.allowCall; $('settingsUrl').value=j.settingsUrl||''; $('settingsVersion').value=j.settingsVersion||''; }).catch(e=>alert('Failed to load config'))}
 load();
 $('save').addEventListener('click',()=>{const body={useApiSecret:$('useApiSecret').checked,apiSecret:$('apiSecret').value,forwardUrl:$('forwardUrl').value,forwardApiKey:$('forwardApiKey').value,allowSms:$('allowSms').checked,allowCall:$('allowCall').checked}; fetch('/api/config',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('saveResult').textContent=JSON.stringify(j)).catch(e=>$('saveResult').textContent='Save failed')});
+$('save').addEventListener('click',()=>{const body={useApiSecret:$('useApiSecret').checked,apiSecret:$('apiSecret').value,forwardUrl:$('forwardUrl').value,forwardApiKey:$('forwardApiKey').value,allowSms:$('allowSms').checked,allowCall:$('allowCall').checked,settingsUrl:$('settingsUrl').value,settingsVersion:$('settingsVersion').value}; fetch('/api/config',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('saveResult').textContent=JSON.stringify(j)).catch(e=>$('saveResult').textContent='Save failed')});
 $('testForward').addEventListener('click',()=>{fetch('/api/test_forward',{method:'POST',headers}).then(r=>r.json()).then(j=>$('testForwardOut').textContent=JSON.stringify(j)).catch(e=>$('testForwardOut').textContent='failed')});
 $('sendSms').addEventListener('click',()=>{const body={to:$('smsTo').value,message:$('smsMsg').value}; fetch('/api/send_sms',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('sendSmsOut').textContent=JSON.stringify(j)).catch(e=>$('sendSmsOut').textContent='send failed')});
 $('testCall').addEventListener('click',()=>{const body={number:$('callNum').value}; fetch('/api/test_call',{method:'POST',headers,body:JSON.stringify({number:$('callNum').value})}).then(r=>r.json()).then(j=>$('testCallOut').textContent=JSON.stringify(j)).catch(e=>$('testCallOut').textContent='failed')});
+$('checkSettings').addEventListener('click',()=>{fetch('/api/check_settings',{method:'POST',headers}).then(r=>r.json()).then(j=>{ $('checkSettingsOut').textContent=JSON.stringify(j); if (j.applied) load(); }).catch(e=>$('checkSettingsOut').textContent='failed')});
 </script>
 </main></body></html>
 )rawliteral";
@@ -170,13 +167,7 @@ $('testCall').addEventListener('click',()=>{const body={number:$('callNum').valu
 
   // If header or querypw auth is present, validate and serve SPA
   if (checkAuth()) {
-    Serial.println("[WebDashboard] Auth via header/query ok — serving SPIFFS or fallback");
-  File f = SPIFFS.open("/data/dashboard.html", "r");
-  if (f) { Serial.println("[WebDashboard] Serving /data/dashboard.html from SPIFFS"); server.streamFile(f, "text/html"); f.close(); return; }
-  f = SPIFFS.open("/dashboard.html", "r");
-  if (f) { Serial.println("[WebDashboard] Serving /dashboard.html from SPIFFS root"); server.streamFile(f, "text/html"); f.close(); return; }
-    // serve embedded fallback without injected pw
-    Serial.println("[WebDashboard] /data/dashboard.html not found in SPIFFS (header auth path) — serving small fallback");
+    Serial.println("[WebDashboard] Auth via header/query ok — serving embedded fallback");
     const char *embedded2 = R"rawliteral(
 <!doctype html><html><body><p>Dashboard (fallback). Please use the header X-Dashboard-Auth to authenticate.</p></body></html>
 )rawliteral";
@@ -205,6 +196,8 @@ void WebDashboard::handleApiConfig() {
     doc["forwardApiKey"] = c.forwardApiKey;
     doc["allowSms"] = c.allowSms;
     doc["allowCall"] = c.allowCall;
+  doc["settingsUrl"] = c.settingsUrl;
+  doc["settingsVersion"] = c.settingsVersion;
     String out;
     serializeJson(doc, out);
     server.send(200, "application/json", out);
@@ -225,6 +218,8 @@ void WebDashboard::handleApiConfig() {
   c.forwardApiKey = String((const char *)doc["forwardApiKey"].as<const char *>());
   c.allowSms = doc["allowSms"] | c.allowSms;
   c.allowCall = doc["allowCall"] | c.allowCall;
+  c.settingsUrl = String((const char *)doc["settingsUrl"].as<const char *>());
+  c.settingsVersion = String((const char *)doc["settingsVersion"].as<const char *>());
   if (cfgMgr.save(c)) server.send(200, "application/json", "{\"ok\":true}");
   else server.send(500, "application/json", "{\"ok\":false}\n");
 }
