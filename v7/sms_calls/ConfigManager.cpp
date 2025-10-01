@@ -7,15 +7,56 @@ ConfigManager::ConfigManager() {}
 void ConfigManager::begin() {
   // SPIFFS removed: keep config in-memory and initialize defaults
   // if api secret empty, set default from compile-time
+  // Apply compile-time defaults from secrets.h. These act as the initial
+  // values on a first run. Persisted NVS values (loaded below) will override
+  // these default values if present.
+
+#ifdef USE_API_SECRET_DEFAULT
+  cfg.useApiSecret = (USE_API_SECRET_DEFAULT != 0);
+#else
+  cfg.useApiSecret = false;
+#endif
+
 #ifdef API_SECRET_DEFAULT
-  if (cfg.apiSecret.length() == 0) cfg.apiSecret = String(API_SECRET_DEFAULT);
+  cfg.apiSecret = String(API_SECRET_DEFAULT);
+#else
+  cfg.apiSecret = String("");
 #endif
-// apply compile-time defaults for remote settings
+
+#ifdef FORWARD_URL_DEFAULT
+  cfg.forwardUrl = String(FORWARD_URL_DEFAULT);
+#else
+  cfg.forwardUrl = String("");
+#endif
+
+#ifdef FORWARD_API_KEY_DEFAULT
+  cfg.forwardApiKey = String(FORWARD_API_KEY_DEFAULT);
+#else
+  cfg.forwardApiKey = String("");
+#endif
+
+#ifdef ALLOW_SMS_DEFAULT
+  cfg.allowSms = (ALLOW_SMS_DEFAULT != 0);
+#else
+  cfg.allowSms = false;
+#endif
+
+#ifdef ALLOW_CALL_DEFAULT
+  cfg.allowCall = (ALLOW_CALL_DEFAULT != 0);
+#else
+  cfg.allowCall = false;
+#endif
+
 #ifdef SETTINGS_URL_DEFAULT
-  if (cfg.settingsUrl.length() == 0) cfg.settingsUrl = String(SETTINGS_URL_DEFAULT);
+  cfg.settingsUrl = String(SETTINGS_URL_DEFAULT);
+#else
+  cfg.settingsUrl = String("");
 #endif
+
 #ifdef SETTINGS_VERSION_DEFAULT
-  if (cfg.settingsVersion.length() == 0) cfg.settingsVersion = String(SETTINGS_VERSION_DEFAULT);
+  cfg.settingsVersion = String(SETTINGS_VERSION_DEFAULT);
+#else
+  cfg.settingsVersion = String("");
 #endif
   // load persisted config from NVS (Preferences)
   Preferences prefs;
