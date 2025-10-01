@@ -66,7 +66,51 @@ void WebDashboard::begin() {
 
   // Serve device API docs (simple HTML) protected by dashboard auth
   server.on("/docs", [this]() {
-    if (!checkAuth()) { server.send(401, "text/plain", "Unauthorized"); return; }
+    // If this is a POST login attempt, treat pw param as login
+    if (server.hasArg("pw")) {
+      String p = server.arg("pw");
+      if (p == String(DASHBOARD_PASSWORD)) {
+        // embed pw into JS so subsequent API calls from the docs page can use header
+        const char *docs = R"rawliteral(
+<html><head><meta charset="utf-8"><title>ESP32 API Docs</title></head><body>
+<h2>ESP32 SMS & Calls - API Reference</h2>
+<p>Use the REST examples below. The page will use the provided dashboard password when calling protected APIs.</p>
+<script>window._DASH_PW='" )rawliteral";
+        String page = String(docs) + p + String(R"rawliteral(';</script>
+<h3>GET /dashboard</h3>
+<p>Serve the dashboard UI (HTML). Use the password form or X-Dashboard-Auth header.</p>
+<h3>GET /api/config</h3>
+<p>Returns effective runtime configuration (includes compile-time defaults from secrets.h and persisted values if any).</p>
+<pre>{
+  "useApiSecret": true,
+  "apiSecret": "...",
+  "forwardUrl": "...",
+  "forwardApiKey": "...",
+  "allowSms": true,
+  "allowCall": true,
+  "settingsUrl": "...",
+  "settingsVersion": "..."
+}</pre>
+<h3>POST /api/send_sms</h3>
+<p>Send SMS: JSON body {"to":"+9233...","message":"text"}. If useApiSecret is enabled add header X-Api-Secret.</p>
+<h3>POST /api/check_settings</h3>
+<p>Trigger remote settings check and apply if version mismatch.</p>
+</body></html>
+)rawliteral");
+        server.send(200, "text/html", page);
+        return;
+      }
+      // bad pw - fall through to show login form
+    }
+
+    if (!checkAuth()) {
+      // Serve simple login form for docs
+      const char *login = "<html><body><h3>Enter Dashboard Password</h3>"
+                          "<form method='post' action='/docs'><input name='pw' type='password'/>"
+                          "<button type='submit'>Login</button></form></body></html>";
+      server.send(200, "text/html", login);
+      return;
+    }
     const char *docs = R"rawliteral(
 <html><head><meta charset="utf-8"><title>ESP32 API Docs</title></head><body>
 <h2>ESP32 SMS & Calls - API Reference</h2>
@@ -230,7 +274,7 @@ void WebDashboard::handleApiConfig() {
   // If there's a request body (arg "plain") treat as POST to save; otherwise treat as GET
   if (!server.hasArg("plain")) {
     Serial.println("[WebDashboard] handleApiConfig GET");
-    if (!checkAuth()) { Serial.println("[WebDashboard] handleApiConfig GET unauthorized"); server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+    // allow public GET so the UI can load defaults; mask apiSecret unless authenticated
     Config c = cfgMgr.get();
   // overlay compile-time defaults from secrets.h when fields are empty
 #ifdef USE_API_SECRET_DEFAULT
@@ -268,6 +312,10 @@ void WebDashboard::handleApiConfig() {
     doc["allowCall"] = c.allowCall;
   doc["settingsUrl"] = c.settingsUrl;
   doc["settingsVersion"] = c.settingsVersion;
+    // mask apiSecret unless auth provided
+    bool auth = false;
+    if (server.hasHeader("X-Dashboard-Auth") && server.header("X-Dashboard-Auth") == String(DASHBOARD_PASSWORD)) auth = true;
+    if (!auth) doc["apiSecret"] = "*****";
     String out;
     serializeJson(doc, out);
     server.send(200, "application/json", out);
