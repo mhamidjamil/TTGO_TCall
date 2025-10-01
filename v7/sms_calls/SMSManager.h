@@ -18,6 +18,10 @@ private:
   ConfigManager &cfgMgr;
   void handleIncomingSms(const String &from, const String &body);
   void forwardEvent(const String &type, const String &number, const String &body);
+  // Read SMS from modem storage by index and forward; delete on success
+  void readAndForwardSms(int index);
+  // Forward event and return true if server returned HTTP 200
+  bool forwardEventWithResult(const String &type, const String &number, const String &body);
 };
 
 #endif

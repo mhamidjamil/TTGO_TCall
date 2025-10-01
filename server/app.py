@@ -30,14 +30,39 @@ def verify_token(token):
         {
             'name': 'body', 'in': 'body', 'required': True,
             'schema': {'type': 'object',
-                       'properties': {'type': {'type': 'string'}, 'number': {'type': 'string'}, 'body': {'type': 'string'}}}
+                       'properties': {'type': {'type': 'string'}, 'number': {'type': 'string'}, 'body': {'type': 'string'}, 'secret': {'type': 'string'}}}
         }
     ],
     'responses': {200: {'description': 'ok'}}
 })
-@auth.login_required
 def events():
+    # Accept device posts if:
+    # - Authorization header (ApiKey) valid OR
+    # - X-Api-Secret header equals API_SECRET OR
+    # - JSON payload contains 'secret' that equals API_SECRET
+    auth_ok = False
+    # token auth
+    auth_header = request.headers.get('Authorization')
+    if auth_header and auth_header.startswith('ApiKey '):
+        token = auth_header.split(' ', 1)[1]
+        if token == cfg.DASHBOARD_PASSWORD:
+            auth_ok = True
+
+    # header secret
+    if not auth_ok and cfg.API_SECRET:
+        xsecret = request.headers.get('X-Api-Secret')
+        if xsecret and xsecret == cfg.API_SECRET:
+            auth_ok = True
+
     j = request.get_json(force=True)
+    # json secret
+    if not auth_ok and cfg.API_SECRET and isinstance(j, dict):
+        if j.get('secret') and j.get('secret') == cfg.API_SECRET:
+            auth_ok = True
+
+    if not auth_ok and cfg.USE_API_SECRET:
+        return jsonify({'error': 'unauthorized'}), 401
+
     t = j.get('type')
     number = j.get('number')
     body = j.get('body')
