@@ -12,6 +12,8 @@ public:
   // send SMS through modem - simple interface
   bool sendSms(const String &to, const String &message, String &err);
 
+// (SMSManager uses Serial1 to communicate with the modem)
+
 private:
   ConfigManager &cfgMgr;
   void handleIncomingSms(const String &from, const String &body);

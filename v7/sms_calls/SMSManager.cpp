@@ -5,22 +5,49 @@
 SMSManager::SMSManager(ConfigManager &cfgMgr) : cfgMgr(cfgMgr) {}
 
 void SMSManager::begin() {
-  // Setup modem serial if needed - placeholder
+  // Serial1 should already be configured in main sketch with modem TX/RX pins and baud
   Serial.println("SMSManager initialized");
 }
 
 void SMSManager::loop() {
-  // Placeholder: in a real project, read from modem serial for incoming SMS and call handleIncomingSms
+  // Could parse incoming modem responses if required
 }
 
 bool SMSManager::sendSms(const String &to, const String &message, String &err) {
   auto cfg = cfgMgr.get();
   if (!cfg.allowSms) { err = "Sending SMS disabled"; return false; }
-  // Here send AT commands to modem. For now we simulate success.
-  Serial.println("Pretend sending SMS to " + to + ": " + message);
-  // After sending, optionally forward event
-  forwardEvent("sent_sms", to, message);
-  return true;
+
+  Serial.printf("[SMSManager] Sending SMS to %s: %s\n", to.c_str(), message.c_str());
+
+  // Set text mode
+  Serial1.println("AT+CMGF=1");
+  delay(200);
+
+  // Start send
+  Serial1.print("AT+CMGS=\"");
+  Serial1.print(to);
+  Serial1.println("\"");
+  delay(200);
+
+  Serial1.print(message);
+  Serial1.write((char)26); // Ctrl+Z
+
+  // read response
+  unsigned long start = millis();
+  String resp;
+  while (millis() - start < 15000) {
+    while (Serial1.available()) resp += (char)Serial1.read();
+    if (resp.indexOf("OK") >= 0) break;
+    if (resp.indexOf("ERROR") >= 0) break;
+    delay(100);
+  }
+
+  if (resp.indexOf("OK") >= 0) {
+    forwardEvent("sent_sms", to, message);
+    return true;
+  }
+  err = resp;
+  return false;
 }
 
 void SMSManager::handleIncomingSms(const String &from, const String &body) {

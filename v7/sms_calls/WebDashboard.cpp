@@ -152,6 +152,19 @@ $('save').addEventListener('click',()=>{const body={useApiSecret:$('useApiSecret
 $('save').addEventListener('click',()=>{const body={useApiSecret:$('useApiSecret').checked,apiSecret:$('apiSecret').value,forwardUrl:$('forwardUrl').value,forwardApiKey:$('forwardApiKey').value,allowSms:$('allowSms').checked,allowCall:$('allowCall').checked,settingsUrl:$('settingsUrl').value,settingsVersion:$('settingsVersion').value}; fetch('/api/config',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('saveResult').textContent=JSON.stringify(j)).catch(e=>$('saveResult').textContent='Save failed')});
 $('testForward').addEventListener('click',()=>{fetch('/api/test_forward',{method:'POST',headers}).then(r=>r.json()).then(j=>$('testForwardOut').textContent=JSON.stringify(j)).catch(e=>$('testForwardOut').textContent='failed')});
 $('sendSms').addEventListener('click',()=>{const body={to:$('smsTo').value,message:$('smsMsg').value}; fetch('/api/send_sms',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('sendSmsOut').textContent=JSON.stringify(j)).catch(e=>$('sendSmsOut').textContent='send failed')});
+$('sendSms').addEventListener('click',()=>{
+  // client-side normalization: strip non-digits, handle local formats and prefix +92
+  let raw = $('smsTo').value || '';
+  let digits = raw.replace(/\D/g,'');
+  if (digits.startsWith('00')) digits = digits.substring(2);
+  if (digits.startsWith('0') && digits.length>10) digits = digits.substring(1);
+  if (digits.length === 10) digits = '92' + digits; // local without leading 0
+  if (digits.length < 11) { $('sendSmsOut').textContent='Invalid number'; return; }
+  const normalized = '+' + digits;
+  $('smsTo').value = normalized;
+  const body={to:normalized,message:$('smsMsg').value};
+  fetch('/api/send_sms',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('sendSmsOut').textContent=JSON.stringify(j)).catch(e=>$('sendSmsOut').textContent='send failed');
+});
 $('testCall').addEventListener('click',()=>{const body={number:$('callNum').value}; fetch('/api/test_call',{method:'POST',headers,body:JSON.stringify({number:$('callNum').value})}).then(r=>r.json()).then(j=>$('testCallOut').textContent=JSON.stringify(j)).catch(e=>$('testCallOut').textContent='failed')});
 $('checkSettings').addEventListener('click',()=>{fetch('/api/check_settings',{method:'POST',headers}).then(r=>r.json()).then(j=>{ $('checkSettingsOut').textContent=JSON.stringify(j); if (j.applied) load(); }).catch(e=>$('checkSettingsOut').textContent='failed')});
 </script>
@@ -239,9 +252,45 @@ void WebDashboard::handleSendSms() {
   if (!smsManager) { server.send(500, "application/json", "{\"error\":\"no sms manager\"}"); return; }
   if (!server.hasArg("plain")) { server.send(400, "application/json", "{\"error\":\"no body\"}"); return; }
   StaticJsonDocument<256> doc; deserializeJson(doc, server.arg("plain"));
-  String to = String((const char *)doc["to"].as<const char *>());
+  String rawTo = String((const char *)doc["to"].as<const char *>());
   String msg = String((const char *)doc["message"].as<const char *>());
-  Serial.printf("[WebDashboard] handleSendSms to=%s msg_len=%d\n", to.c_str(), msg.length());
+
+  // Normalize phone number: strip non-digits, handle leading 00, leading 0, or missing +92
+  auto normalizeNumber = [&](const String &in)->String {
+    String s = in;
+    String digits = "";
+    for (size_t i = 0; i < s.length(); ++i) {
+      char ch = s.charAt(i);
+      if (ch >= '0' && ch <= '9') digits += ch;
+    }
+    // remove leading international 00
+    if (digits.startsWith("00")) digits = digits.substring(2);
+    // if starts with single 0 (local), remove it
+    if (digits.startsWith("0") && digits.length() > 10) digits = digits.substring(1);
+    // If already has country code 92
+    if (digits.startsWith("92") && digits.length() >= 12) return String("+") + digits;
+    // If exactly 10 digits (local without leading 0), assume Pakistan and prefix 92
+    if (digits.length() == 10) return String("+92") + digits;
+    // If starts with 92 and length==12
+    if (digits.startsWith("92") && digits.length() == 12) return String("+") + digits;
+    // If longer than 10 and doesn't match above, assume it already contains country code
+    if (digits.length() > 10) return String("+") + digits;
+    // fallback to empty string (invalid)
+    return String("");
+  };
+
+  String to = normalizeNumber(rawTo);
+  if (to.length() == 0) {
+    server.send(400, "application/json", "{\"error\":\"invalid number\"}");
+    return;
+  }
+  // final length check: require at least 12 characters for +92XXXXXXXXXX
+  if (to.length() < 12) {
+    server.send(400, "application/json", "{\"error\":\"number too short\"}");
+    return;
+  }
+
+  Serial.printf("[WebDashboard] handleSendSms normalized to=%s msg_len=%d\n", to.c_str(), msg.length());
   String err; bool ok = smsManager->sendSms(to, msg, err);
   if (ok) server.send(200, "application/json", "{\"ok\":true}");
   else server.send(400, "application/json", String("{\"ok\":false,\"error\":\"") + err + "\"}");
