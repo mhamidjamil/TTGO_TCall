@@ -5,6 +5,7 @@
 #include <SPIFFS.h>
 #include "SMSManager.h"
 #include "CallManager.h"
+#include <HTTPClient.h>
 
 WebDashboard::WebDashboard(ConfigManager &cfgMgr, SMSManager *sms, CallManager *call, int port)
   : server(port), cfgMgr(cfgMgr), smsManager(sms), callManager(call) {}
@@ -20,6 +21,34 @@ void WebDashboard::begin() {
   server.on("/api/send_sms", [this]() { this->handleSendSms(); });
   server.on("/api/call", [this]() { this->handleCall(); });
   server.on("/api/hangup", [this]() { this->handleHangup(); });
+  server.on("/api/test_forward", [this]() {
+    // inline handler
+    if (!checkAuth()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+    Config c = cfgMgr.get();
+    if (c.forwardUrl.length() == 0) { server.send(400, "application/json", "{\"error\":\"no forward url\"}"); return; }
+    StaticJsonDocument<256> doc;
+    doc["type"] = "test_forward";
+    doc["number"] = "0000000000";
+    doc["body"] = "Test forward from dashboard";
+    if (c.useApiSecret) doc["secret"] = c.apiSecret;
+    String body; serializeJson(doc, body);
+    HTTPClient http; http.begin(c.forwardUrl);
+    http.addHeader("Content-Type", "application/json");
+    if (c.forwardApiKey.length()) http.addHeader("X-Api-Key", c.forwardApiKey);
+    int code = http.POST(body);
+    String resp = code>0?http.getString():String();
+    http.end();
+    StaticJsonDocument<256> out; out["code"]=code; out["response"]=resp; out["ok"] = (code>0);
+    String s; serializeJson(out,s); server.send(200,"application/json",s);
+  });
+  server.on("/api/test_call", [this]() {
+    if (!checkAuth()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+    Config c = cfgMgr.get();
+    if (c.forwardUrl.length() == 0) { server.send(400, "application/json", "{\"error\":\"no forward url\"}"); return; }
+    StaticJsonDocument<256> doc; doc["type"]="incoming_call"; doc["number"]="+1000000000"; if(c.useApiSecret) doc["secret"]=c.apiSecret; String body; serializeJson(doc,body);
+    HTTPClient http; http.begin(c.forwardUrl); http.addHeader("Content-Type","application/json"); if(c.forwardApiKey.length()) http.addHeader("X-Api-Key",c.forwardApiKey);
+    int code = http.POST(body); String resp = code>0?http.getString():String(); http.end(); StaticJsonDocument<256> out; out["code"]=code; out["response"]=resp; out["ok"]=(code>0); String s; serializeJson(out,s); server.send(200,"application/json",s);
+  });
 
   // serve static assets from SPIFFS /data folder
   server.serveStatic("/dashboard.css", SPIFFS, "/data/dashboard.css");
@@ -44,41 +73,83 @@ bool WebDashboard::checkAuth() {
 
 void WebDashboard::handleDashboard() {
   // If there's POST data (form pw or JSON/plain) treat it as login attempt
-  if (server.hasArg("pw") || server.hasArg("plain")) {
-    String pw;
-    if (server.hasArg("pw")) {
-      pw = server.arg("pw");
-    } else {
-      String body = server.arg("plain");
-      // body may be URL-encoded 'pw=...' or raw pw or JSON {"pw":"..."}
-      if (body.startsWith("pw=")) pw = body.substring(3);
-      else {
-        // try JSON
-        StaticJsonDocument<128> jd;
-        DeserializationError e = deserializeJson(jd, body);
-        if (!e && jd.containsKey("pw")) pw = String((const char *)jd["pw"].as<const char *>());
-        else pw = body;
+  String providedPw;
+  if (server.hasArg("pw")) providedPw = server.arg("pw");
+  else if (server.hasArg("plain")) {
+    String body = server.arg("plain");
+    if (body.startsWith("pw=")) providedPw = body.substring(3);
+    else {
+      StaticJsonDocument<128> jd;
+      if (deserializeJson(jd, body) == DeserializationError::Ok && jd.containsKey("pw")) {
+        providedPw = String((const char *)jd["pw"].as<const char *>());
+      } else {
+        providedPw = body;
       }
     }
+  }
 
-    if (pw == String(DASHBOARD_PASSWORD) || server.header("X-Dashboard-Auth") == String(DASHBOARD_PASSWORD)) {
-      // Serve the SPA directly after successful password
-      File f = SPIFFS.open("/data/dashboard.html", "r");
-      if (!f) { server.send(500, "text/plain", "Dashboard not found"); return; }
-      server.streamFile(f, "text/html");
-      f.close();
-      return;
-    }
-    server.send(401, "text/plain", "Unauthorized - wrong password");
+  String headerPw = server.header("X-Dashboard-Auth");
+  bool authOk = false;
+  if (providedPw.length() && providedPw == String(DASHBOARD_PASSWORD)) authOk = true;
+  if (!authOk && headerPw.length() && headerPw == String(DASHBOARD_PASSWORD)) authOk = true;
+
+  if (authOk) {
+    // Serve SPIFFS dashboard if present, otherwise embedded fallback
+    File f = SPIFFS.open("/data/dashboard.html", "r");
+    if (f) { server.streamFile(f, "text/html"); f.close(); return; }
+    const char *embedded = R"rawliteral(
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMS & Calls Dashboard</title>
+<style>body{font-family:Arial,sans-serif;padding:12px;background:#f7f7f7}main{max-width:900px;margin:18px auto;background:#fff;padding:18px;border-radius:6px}label{display:block;margin:8px 0}input[type=text]{width:100%;padding:8px;border:1px solid #ccc;border-radius:4px}button{padding:8px 12px;border:0;background:#007bff;color:#fff;border-radius:4px;margin-top:8px}pre{background:#eee;padding:8px;border-radius:4px}</style>
+</head><body><main>
+<h2>SMS & Calls Dashboard</h2>
+<section id="config">
+<h3>Settings</h3>
+<label><input id="useApiSecret" type="checkbox"> Use API Secret</label>
+<label>API Secret: <input id="apiSecret" type="text"></label>
+<label>Forward URL: <input id="forwardUrl" type="text"></label>
+<label>Forward API Key: <input id="forwardApiKey" type="text"></label>
+<label><input id="allowSms" type="checkbox"> Allow SMS</label>
+<label><input id="allowCall" type="checkbox"> Allow Calls</label>
+<div><button id="save">Save</button></div>
+<pre id="saveResult"></pre>
+</section>
+<section id="tests"><h3>Tests</h3>
+<div><button id="testForward">Test Forward (simulate incoming SMS)</button><pre id="testForwardOut"></pre></div>
+<div><h4>Send SMS</h4><label>To: <input id="smsTo" type="text"></label><label>Message: <input id="smsMsg" type="text"></label><button id="sendSms">Send SMS</button><pre id="sendSmsOut"></pre></div>
+<div><h4>Simulate Incoming Call</h4><label>Number: <input id="callNum" type="text" value="+1000000000"></label><button id="testCall">Simulate Call</button><pre id="testCallOut"></pre></div>
+</section>
+<script>
+window._DASH_PW = window._DASH_PW || '';
+const headers = (window._DASH_PW)?{'X-Dashboard-Auth':window._DASH_PW,'Content-Type':'application/json'}:{'Content-Type':'application/json'};
+const $=(id)=>document.getElementById(id);
+function load(){fetch('/api/config',{headers}).then(r=>r.json()).then(j=>{ $('useApiSecret').checked=!!j.useApiSecret; $('apiSecret').value=j.apiSecret||''; $('forwardUrl').value=j.forwardUrl||''; $('forwardApiKey').value=j.forwardApiKey||''; $('allowSms').checked=!!j.allowSms; $('allowCall').checked=!!j.allowCall; }).catch(e=>alert('Failed to load config'))}
+load();
+$('save').addEventListener('click',()=>{const body={useApiSecret:$('useApiSecret').checked,apiSecret:$('apiSecret').value,forwardUrl:$('forwardUrl').value,forwardApiKey:$('forwardApiKey').value,allowSms:$('allowSms').checked,allowCall:$('allowCall').checked}; fetch('/api/config',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('saveResult').textContent=JSON.stringify(j)).catch(e=>$('saveResult').textContent='Save failed')});
+$('testForward').addEventListener('click',()=>{fetch('/api/test_forward',{method:'POST',headers}).then(r=>r.json()).then(j=>$('testForwardOut').textContent=JSON.stringify(j)).catch(e=>$('testForwardOut').textContent='failed')});
+$('sendSms').addEventListener('click',()=>{const body={to:$('smsTo').value,message:$('smsMsg').value}; fetch('/api/send_sms',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('sendSmsOut').textContent=JSON.stringify(j)).catch(e=>$('sendSmsOut').textContent='send failed')});
+$('testCall').addEventListener('click',()=>{const body={number:$('callNum').value}; fetch('/api/test_call',{method:'POST',headers,body:JSON.stringify({number:$('callNum').value})}).then(r=>r.json()).then(j=>$('testCallOut').textContent=JSON.stringify(j)).catch(e=>$('testCallOut').textContent='failed')});
+</script>
+</main></body></html>
+)rawliteral";
+    String page = "";
+    if (providedPw.length()) page += "<script>window._DASH_PW='" + providedPw + "';</script>";
+    else if (headerPw.length()) page += "<script>window._DASH_PW='" + headerPw + "';</script>";
+    page += embedded;
+    server.send(200, "text/html", page);
     return;
   }
 
   // If header or querypw auth is present, validate and serve SPA
   if (checkAuth()) {
     File f = SPIFFS.open("/data/dashboard.html", "r");
-    if (!f) { server.send(500, "text/plain", "Dashboard not found"); return; }
-    server.streamFile(f, "text/html");
-    f.close();
+    if (f) { server.streamFile(f, "text/html"); f.close(); return; }
+    // serve embedded fallback without injected pw
+    const char *embedded2 = R"rawliteral(
+<!doctype html><html><body><p>Dashboard (fallback). Please use the header X-Dashboard-Auth to authenticate.</p></body></html>
+)rawliteral";
+    server.send(200, "text/html", embedded2);
     return;
   }
 
