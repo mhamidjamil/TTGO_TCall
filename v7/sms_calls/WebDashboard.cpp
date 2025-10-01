@@ -64,6 +64,36 @@ void WebDashboard::begin() {
     else server.send(200, "application/json", "{\"ok\":true,\"applied\":false}");
   });
 
+  // Serve device API docs (simple HTML) protected by dashboard auth
+  server.on("/docs", [this]() {
+    if (!checkAuth()) { server.send(401, "text/plain", "Unauthorized"); return; }
+    const char *docs = R"rawliteral(
+<html><head><meta charset="utf-8"><title>ESP32 API Docs</title></head><body>
+<h2>ESP32 SMS & Calls - API Reference</h2>
+<p>Protected by dashboard password. Use the header <code>X-Dashboard-Auth: &lt;password&gt;</code>.</p>
+<h3>GET /dashboard</h3>
+<p>Serve the dashboard UI (HTML). Use the password form or X-Dashboard-Auth header.</p>
+<h3>GET /api/config</h3>
+<p>Returns effective runtime configuration (includes compile-time defaults from secrets.h and persisted values if any).</p>
+<pre>{
+  "useApiSecret": true,
+  "apiSecret": "...",
+  "forwardUrl": "...",
+  "forwardApiKey": "...",
+  "allowSms": true,
+  "allowCall": true,
+  "settingsUrl": "...",
+  "settingsVersion": "..."
+}</pre>
+<h3>POST /api/send_sms</h3>
+<p>Send SMS: JSON body {"to":"+9233...","message":"text"}. If useApiSecret is enabled add header X-Api-Secret.</p>
+<h3>POST /api/check_settings</h3>
+<p>Trigger remote settings check and apply if version mismatch.</p>
+</body></html>
+)rawliteral";
+    server.send(200, "text/html", docs);
+  });
+
   // Static assets are embedded in the fallback HTML; SPIFFS not used
 
   server.begin();
@@ -202,6 +232,33 @@ void WebDashboard::handleApiConfig() {
     Serial.println("[WebDashboard] handleApiConfig GET");
     if (!checkAuth()) { Serial.println("[WebDashboard] handleApiConfig GET unauthorized"); server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
     Config c = cfgMgr.get();
+  // overlay compile-time defaults from secrets.h when fields are empty
+#ifdef USE_API_SECRET_DEFAULT
+  if (!c.useApiSecret) c.useApiSecret = (USE_API_SECRET_DEFAULT != 0);
+#endif
+#ifdef API_SECRET_DEFAULT
+  if (c.apiSecret.length() == 0) c.apiSecret = String(API_SECRET_DEFAULT);
+#endif
+#ifdef FORWARD_URL_DEFAULT
+  if (c.forwardUrl.length() == 0) c.forwardUrl = String(FORWARD_URL_DEFAULT);
+#endif
+#ifdef FORWARD_API_KEY_DEFAULT
+  if (c.forwardApiKey.length() == 0) c.forwardApiKey = String(FORWARD_API_KEY_DEFAULT);
+#endif
+#ifdef ALLOW_SMS_DEFAULT
+  // do not overwrite persisted boolean flags here; ConfigManager.loadFrom NVS
+  // already applied compile-time defaults at startup if needed.
+#endif
+#ifdef ALLOW_CALL_DEFAULT
+  // do not overwrite persisted boolean flags here; ConfigManager.loadFrom NVS
+  // already applied compile-time defaults at startup if needed.
+#endif
+#ifdef SETTINGS_URL_DEFAULT
+  if (c.settingsUrl.length() == 0) c.settingsUrl = String(SETTINGS_URL_DEFAULT);
+#endif
+#ifdef SETTINGS_VERSION_DEFAULT
+  if (c.settingsVersion.length() == 0) c.settingsVersion = String(SETTINGS_VERSION_DEFAULT);
+#endif
     StaticJsonDocument<512> doc;
     doc["useApiSecret"] = c.useApiSecret;
     doc["apiSecret"] = c.apiSecret;

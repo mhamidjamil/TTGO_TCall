@@ -28,6 +28,10 @@ Usage
 
 3. Open Swagger UI at http://localhost:5000/apidocs (or /docs depending on flasgger). Use the Dashboard password as the API token when prompted.
 
+Device docs
+-----------
+The ESP32 exposes a small documentation page at `http://<device-host>:<device-port>/docs` that mirrors the device endpoints and examples. That page is protected by the same dashboard password. Use the Dashboard password as the token/header when accessing both the Flask Swagger UI and the device `/docs`.
+
 Notes
 - The server stores messages in 'messages.xlsx' by default. Both incoming and outgoing messages are appended with UTC timestamp.
 - The /send endpoint proxies to the ESP32's /api/send_sms endpoint. Configure DEVICE_HOST and DEVICE_PORT accordingly.
