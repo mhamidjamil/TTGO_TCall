@@ -7,6 +7,8 @@ SMSManager::SMSManager(ConfigManager &cfgMgr) : cfgMgr(cfgMgr) {}
 void SMSManager::begin() {
   // Serial1 should already be configured in main sketch with modem TX/RX pins and baud
   Serial.println("SMSManager initialized");
+  // Try pinging the bridge/server to validate connectivity
+  pingBridge();
 }
 
 void SMSManager::loop() {
@@ -119,6 +121,25 @@ bool SMSManager::forwardEventWithResult(const String &type, const String &number
   }
   Serial.println("[SMSManager] Forward failed");
   return false;
+}
+
+void SMSManager::pingBridge() {
+  Config c = cfgMgr.get();
+  String url = c.forwardUrl;
+  if (url.length() == 0) {
+    Serial.println("[SMSManager] No forwardUrl configured, skipping ping");
+    return;
+  }
+  // Normalize URL to /ping
+  if (url.endsWith("/")) url = url.substring(0, url.length()-1);
+  String pingUrl = url + "/ping";
+  Serial.println("[SMSManager] Pinging bridge at " + pingUrl);
+  HTTPClient http;
+  http.begin(pingUrl);
+  int code = http.GET();
+  String resp = code>0?http.getString():String();
+  Serial.println("[SMSManager] Ping response code=" + String(code) + " body=" + resp);
+  http.end();
 }
 
 String SMSManager::readResponseFromSerial1(unsigned long timeoutMs) {

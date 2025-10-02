@@ -80,6 +80,14 @@ def forward_alias():
     return events()
 
 
+@app.route('/ping', methods=['GET'])
+def ping():
+    # Simple health check - returns OK and server time
+    from datetime import datetime
+    print(f"[BRIDGE] Ping received from {request.remote_addr} headers={dict(request.headers)}")
+    return jsonify({'ok': True, 'server_time': datetime.utcnow().isoformat() + 'Z'})
+
+
 @app.route('/send', methods=['POST'])
 @swag_from({
     'tags': ['send'],

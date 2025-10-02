@@ -24,6 +24,8 @@ private:
   bool forwardEventWithResult(const String &type, const String &number, const String &body);
   // Read response from Serial1 with timeout
   String readResponseFromSerial1(unsigned long timeoutMs);
+  // Ping the bridge server to validate connectivity
+  void pingBridge();
 };
 
 #endif

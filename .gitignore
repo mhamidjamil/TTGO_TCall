@@ -7,3 +7,4 @@ Modules_test/api_work/arduino_secrets.h
 server/messages.xlsx
 server/.env
 *pycache*
+server/messages.csv
