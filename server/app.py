@@ -129,32 +129,43 @@ def forward_alias():
 
 @app.route('/ping', methods=['GET', 'POST'])
 def ping():
-    # Health check + device ping. Accept POST to record device-provided 'set_ip'.
     from datetime import datetime
     print(f"[BRIDGE] Ping received from {request.remote_addr} headers={dict(request.headers)}")
 
+    # Always try to extract public IP from headers, regardless of method
+    public_ip = request.headers.get('X-Forwarded-For')
+    if public_ip:
+        public_ip = public_ip.split(',')[0].strip()
+    else:
+        public_ip = request.headers.get('Cf-Connecting-Ip')
+    if not public_ip:
+        public_ip = request.remote_addr
+
+    # Save public IP to ip-config.txt
+    try:
+        with open("ip-config.txt", "w") as file:
+            file.write(public_ip)
+        print(f"[BRIDGE] Updated ip-config.txt with public IP: {public_ip}")
+    except Exception as e:
+        print(f"[BRIDGE] Failed to update ip-config.txt: {e}")
+
+    # For POST, handle set_ip logic as before
     if request.method == 'POST':
         j = None
         try:
             j = request.get_json(force=True)
         except Exception:
             j = None
-
-        # If device provides a 'set_ip', store it keyed by device identity.
         set_ip = None
         if isinstance(j, dict) and 'set_ip' in j:
             set_ip = j.get('set_ip')
+            print(f"\nset_ip provided: {set_ip}\n")
+        else:
+            print("\nno json body\n")
 
         # If client asked for 'auto' or provided empty/true, try to extract public IP from headers
         if set_ip is not None:
-            # normalize booleans
-            if isinstance(set_ip, bool) and set_ip:
-                set_ip = 'auto'
-            if isinstance(set_ip, str) and set_ip.strip() == '':
-                set_ip = 'auto'
-            if isinstance(set_ip, (int, float)):
-                set_ip = str(set_ip)
-
+            # Extract public IP from headers if 'auto' is specified
             if isinstance(set_ip, str) and set_ip.lower() == 'auto':
                 xff = request.headers.get('X-Forwarded-For') or request.headers.get('X-Forwarded-For'.lower())
                 if xff:
@@ -162,6 +173,18 @@ def ping():
                     set_ip = xff.split(',')[0].strip()
                 else:
                     set_ip = request.remote_addr
+
+            # Ensure set_ip is valid
+            if set_ip:
+                # Update the IP in ip-config.txt
+                try:
+                    with open("ip-config.txt", "w") as file:
+                        file.write(set_ip)
+                    print(f"[BRIDGE] Updated ip-config.txt with IP: {set_ip}")
+                except Exception as e:
+                    print(f"[BRIDGE] Failed to update ip-config.txt: {e}")
+        else:
+            print("\nno set_ip provided\n")
 
         # Determine device key: prefer X-Api-Secret (if used), else use client remote addr
         device_key = None
@@ -185,10 +208,9 @@ def ping():
             }
             save_device_ips()
             print(f"[BRIDGE] Stored set_ip for {device_key} => {set_ip}")
-            return jsonify({'ok': True, 'stored_ip': set_ip, 'device_key': device_key, 'server_time': datetime.utcnow().isoformat() + 'Z'})
 
     # default GET or POST without set_ip: return basic ok + server_time
-    return jsonify({'ok': True, 'server_time': datetime.utcnow().isoformat() + 'Z'})
+    return jsonify({'ok': True, 'public_ip': public_ip, 'server_time': datetime.utcnow().isoformat() + 'Z'})
 
 
 @app.route('/settings', methods=['GET'])

@@ -8,3 +8,4 @@ server/messages.xlsx
 server/.env
 *pycache*
 server/messages.csv
+server/ip-config.txt

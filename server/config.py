@@ -5,7 +5,7 @@ load_dotenv()
 
 class Config:
     # ESP32 device host/port
-    DEVICE_HOST = os.getenv('DEVICE_HOST', '192.168.100.90')
+    # DEVICE_HOST = os.getenv('DEVICE_HOST', '192.168.100.90')
     DEVICE_PORT = int(os.getenv('DEVICE_PORT', '420'))
 
     # Dashboard password used by ESP32 and the Flask docs protection
@@ -27,3 +27,34 @@ class Config:
 
     # Log file
     LOG_FILE = os.getenv('LOG_FILE', 'messages.csv')
+
+# Function to update the IP in ip-config.txt
+def update_device_ip(new_ip):
+    ip_config_path = "ip-config.txt"
+    try:
+        with open(ip_config_path, "w") as file:
+            file.write(new_ip)
+        print(f"[CONFIG] Updated DEVICE_HOST to {new_ip}")
+    except Exception as e:
+        print(f"[CONFIG] Failed to update IP: {e}")
+
+# Function to load the IP from ip-config.txt
+def load_device_ip():
+    ip_config_path = "ip-config.txt"
+    try:
+        with open(ip_config_path, "r") as file:
+            return file.read().strip()
+    except FileNotFoundError:
+        print("[CONFIG] ip-config.txt not found. Using default IP.")
+        try:
+            with open(ip_config_path, "w") as file:
+                file.write('192.168.100.90')
+            print("[CONFIG] Created ip-config.txt with default IP.")
+        except Exception as e:
+            print(f"[CONFIG] Failed to create ip-config.txt: {e}")
+    except Exception as e:
+        print(f"[CONFIG] Failed to load IP: {e}")
+    return '192.168.100.90'
+
+# Update DEVICE_HOST dynamically
+Config.DEVICE_HOST = load_device_ip()
