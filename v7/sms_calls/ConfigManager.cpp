@@ -1,6 +1,9 @@
+#include <Arduino.h>
 #include "ConfigManager.h"
+#include <ArduinoJson.h>
 #include <Preferences.h>
 #include <HTTPClient.h>
+#include <SPIFFS.h>
 // Ensure compile-time defaults (WIFI_SSID, FORWARD_URL_DEFAULT, etc.) are available
 #include "secrets.h"
 #include <WiFi.h>
@@ -207,4 +210,54 @@ bool ConfigManager::checkAndApplyRemoteSettings() {
   Serial.println(String("[ConfigManager] After remote apply forwardUrl=") + cfg.forwardUrl);
   Serial.println(String("[ConfigManager] After remote apply apiSecret_len=") + cfg.apiSecret.length());
   return true;
+}
+
+#include <Preferences.h>
+
+Preferences preferences;
+
+void ConfigManager::loadFromNVS() {
+  Serial.println("Loading configuration from SPIFFS...");
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Failed to mount SPIFFS. Formatting...");
+    SPIFFS.format();
+  }
+
+  File file = SPIFFS.open(path, FILE_READ);
+  if (!file) {
+    Serial.println("Configuration file not found. Creating default configuration...");
+    setting1 = "default_value";
+    saveToNVS();
+    return;
+  }
+
+  StaticJsonDocument<512> doc;
+  DeserializationError error = deserializeJson(doc, file);
+  if (error) {
+    Serial.println("Failed to parse configuration file. Using default values.");
+    setting1 = "default_value";
+  } else {
+    setting1 = doc["setting1"].as<String>();
+    Serial.println("Loaded setting1: " + setting1);
+  }
+  file.close();
+}
+
+void ConfigManager::saveToNVS() {
+  Serial.println("Saving configuration to SPIFFS...");
+  File file = SPIFFS.open(path, FILE_WRITE);
+  if (!file) {
+    Serial.println("Failed to open configuration file for writing.");
+    return;
+  }
+
+  StaticJsonDocument<512> doc;
+  doc["setting1"] = setting1;
+
+  if (serializeJson(doc, file) == 0) {
+    Serial.println("Failed to write to configuration file.");
+  } else {
+    Serial.println("Configuration saved successfully.");
+  }
+  file.close();
 }

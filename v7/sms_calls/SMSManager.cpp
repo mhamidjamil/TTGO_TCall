@@ -2,16 +2,23 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
-SMSManager::SMSManager(ConfigManager &cfgMgr) : cfgMgr(cfgMgr) {}
+SMSManager::SMSManager(ConfigManager &cfgMgr) : cfgMgr(cfgMgr), lastPingTime(0) {}
 
 void SMSManager::begin() {
   // Serial1 should already be configured in main sketch with modem TX/RX pins and baud
   Serial.println("SMSManager initialized");
   // Try pinging the bridge/server to validate connectivity
   pingBridge();
+  lastPingTime = millis();
 }
 
 void SMSManager::loop() {
+  // Ping bridge every 5 minutes
+  if (millis() - lastPingTime > 5 * 60 * 1000UL) {
+    pingBridge();
+    lastPingTime = millis();
+  }
+
   // Poll Serial1 for modem unsolicited notifications like +CMTI using robust read
   String response = readResponseFromSerial1(200);
   if (response.length()) {
@@ -97,7 +104,6 @@ void SMSManager::readAndForwardSms(int index) {
 bool SMSManager::forwardEventWithResult(const String &type, const String &number, const String &body) {
   Config c = cfgMgr.get();
   if (c.forwardUrl.length() == 0) return false;
-  if (c.useApiSecret && c.apiSecret.length() == 0) return false;
 
   HTTPClient http;
   Serial.println("[SMSManager] Forwarding to: " + c.forwardUrl);
@@ -108,7 +114,6 @@ bool SMSManager::forwardEventWithResult(const String &type, const String &number
   doc["type"] = type;
   doc["number"] = number;
   doc["body"] = body;
-  if (c.useApiSecret) doc["secret"] = c.apiSecret;
   String b; serializeJson(doc, b);
   Serial.println("[SMSManager] Payload: " + b);
   int code = http.POST(b);
@@ -140,10 +145,6 @@ void SMSManager::pingBridge() {
   Serial.println("[SMSManager] Pinging bridge at " + pingUrl);
   HTTPClient http;
   http.begin(pingUrl);
-  // include api secret so server can authenticate this device if enabled
-  if (c.useApiSecret && c.apiSecret.length()) {
-    http.addHeader("X-Api-Secret", c.apiSecret);
-  }
   int code = http.GET();
   String resp = code>0?http.getString():String();
   Serial.println("[SMSManager] Ping response code=" + String(code) + " body=" + resp);
@@ -209,8 +210,7 @@ String SMSManager::listAllMessages() {
   Serial1.println("AT+CMGF=1");
   delay(200);
   // List all messages
-  Serial1.println("AT+CMGL=\"ALL\"\r
-");
+  Serial1.println("AT+CMGL=\"ALL\"\r");
   String resp = readResponseFromSerial1(3000);
   // Parse responses with lines starting +CMGL: index,"<stat>","<number>",... then body on next line
   DynamicJsonDocument out(2048);
@@ -258,8 +258,7 @@ bool SMSManager::deleteAllMessages() {
   // List indices and delete each
   Serial1.println("AT+CMGF=1");
   delay(200);
-  Serial1.println("AT+CMGL=\"ALL\"\r
-");
+  Serial1.println("AT+CMGL=\"ALL\"\r");
   String resp = readResponseFromSerial1(3000);
   int pos = 0;
   bool any = false;
@@ -289,7 +288,6 @@ void SMSManager::handleIncomingSms(const String &from, const String &body) {
 void SMSManager::forwardEvent(const String &type, const String &number, const String &body) {
   Config c = cfgMgr.get();
   if (c.forwardUrl.length() == 0) return;
-  if (c.useApiSecret && c.apiSecret.length() == 0) return;
 
   HTTPClient http;
   http.begin(c.forwardUrl);
@@ -300,7 +298,6 @@ void SMSManager::forwardEvent(const String &type, const String &number, const St
   doc["type"] = type;
   doc["number"] = number;
   doc["body"] = body;
-  if (c.useApiSecret) doc["secret"] = c.apiSecret;
 
   String b;
   serializeJson(doc, b);

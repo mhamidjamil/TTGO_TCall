@@ -21,6 +21,7 @@ public:
 
 private:
   ConfigManager &cfgMgr;
+  unsigned long lastPingTime;
   void handleIncomingSms(const String &from, const String &body);
   void forwardEvent(const String &type, const String &number, const String &body);
   // Read SMS from modem storage by index and forward; delete on success

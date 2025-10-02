@@ -269,7 +269,6 @@ def dashboard_logout():
 
 
 @app.route('/messages/list', methods=['GET'])
-@dashboard_auth_required
 def messages_list():
     # Proxy to device to get messages
     # choose device host: prefer stored mapping (by X-Api-Secret or X-Device-Id), else config
@@ -297,7 +296,6 @@ def messages_list():
 
 
 @app.route('/messages/delete', methods=['POST'])
-@dashboard_auth_required
 def messages_delete():
     device_key = None
     xsecret = request.headers.get('X-Api-Secret')
@@ -331,7 +329,6 @@ def messages_delete():
     ],
     'responses': {200: {'description': 'sent'}}
 })
-@dashboard_auth_required
 def send():
     j = request.get_json(force=True)
     to = j.get('to')
@@ -370,14 +367,12 @@ def send():
 
 
 @app.route('/download_log', methods=['GET'])
-@dashboard_auth_required
 def download_log():
     ensure_csv(cfg.LOG_FILE)
     return send_file(cfg.LOG_FILE, as_attachment=True)
 
 
 @app.route('/device_ips', methods=['GET'])
-@dashboard_auth_required
 def list_device_ips():
     # Return the in-memory device IP mapping (persisted to device_ips.json)
     return jsonify(device_ips)

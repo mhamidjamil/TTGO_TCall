@@ -172,6 +172,12 @@ void WebDashboard::begin() {
 void WebDashboard::handleClient() { server.handleClient(); }
 
 bool WebDashboard::checkAuth() {
+  // Temporarily bypass authentication for /api/config
+  if (server.uri() == "/api/config") {
+    Serial.println("[WebDashboard] checkAuth: Bypassing auth for /api/config");
+    return true;
+  }
+
   // basic auth: check header 'X-Dashboard-Auth' or query param 'pw'
   if (server.hasHeader("X-Dashboard-Auth")) {
     String v = server.header("X-Dashboard-Auth");

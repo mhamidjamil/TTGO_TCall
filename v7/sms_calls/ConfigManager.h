@@ -25,10 +25,13 @@ public:
   bool save(const Config &cfg);
   // If configured, fetch remote settings and apply them. Returns true if new settings applied.
   bool checkAndApplyRemoteSettings();
+  void loadFromNVS();
+  void saveToNVS();
 
 private:
   const char *path = "/config.json";
   Config cfg;
+  String setting1; // Added to store setting1
   void loadFromFS();
 };
 
