@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TTGO Bridge Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>TTGO Bridge</h1>
+      <p class="muted">Manage device connectivity, SMS and logs</p>
+    </header>
+
+    <section id="login" class="card">
+      <h2>Operator Login</h2>
+      <input id="pw" type="password" placeholder="Dashboard Password">
+      <button id="loginBtn">Login</button>
+      <div id="loginMsg" class="muted"></div>
+    </section>
+
+    <section id="main" class="hidden">
+      <div class="grid">
+        <div class="card">
+          <h3>Server / Device</h3>
+          <div id="status"></div>
+          <label>API Key (optional): <input id="apiKey" type="password" placeholder="X-Api-Secret"></label>
+          <button id="refreshStatus">Refresh</button>
+        </div>
+
+        <div class="card">
+          <h3>Send SMS</h3>
+          <input id="to" placeholder="+9233...">
+          <textarea id="message" rows="4">Hello from TTGO Bridge</textarea>
+          <button id="sendBtn">Send</button>
+          <pre id="sendResp"></pre>
+        </div>
+
+        <div class="card">
+          <h3>Device Messages</h3>
+          <button id="fetchMsgs">Fetch</button>
+          <button id="deleteMsgs">Delete All</button>
+          <pre id="msgsOut"></pre>
+        </div>
+
+        <div class="card">
+          <h3>Logs</h3>
+          <a id="downloadLog" href="/download_log">Download CSV</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>API Docs</h3>
+        <a href="/apidocs" target="_blank">Open Swagger UI</a>
+      </div>
+    </section>
+
+    <footer>
+      <p class="muted">TTGO Bridge • {year}</p>
+    </footer>
+  </div>
+
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

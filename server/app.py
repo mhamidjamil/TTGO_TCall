@@ -1,16 +1,45 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, session, send_from_directory
 from flasgger import Swagger, swag_from
 from flask_httpauth import HTTPTokenAuth
 import requests
+import json
 import os
 from utils import append_message, ensure_csv
 from config import Config
+
+# file to persist device IP mappings provided via ping.set_ip
+DEVICE_IPS_FILE = os.path.join(os.path.dirname(__file__), 'device_ips.json')
+
+# in-memory mapping: device_key -> { ip, remote_addr, updated }
+device_ips = {}
+
+
+def load_device_ips():
+    global device_ips
+    try:
+        if os.path.exists(DEVICE_IPS_FILE):
+            with open(DEVICE_IPS_FILE, 'r') as f:
+                device_ips = json.load(f)
+        else:
+            device_ips = {}
+    except Exception as e:
+        print(f"[BRIDGE] Failed loading device ips: {e}")
+        device_ips = {}
+
+
+def save_device_ips():
+    try:
+        with open(DEVICE_IPS_FILE, 'w') as f:
+            json.dump(device_ips, f)
+    except Exception as e:
+        print(f"[BRIDGE] Failed saving device ips: {e}")
 
 app = Flask(__name__)
 app.config['SWAGGER'] = {
     'title': 'ESP32 SMS Bridge',
     'uiversion': 3
 }
+app.secret_key = os.getenv('FLASK_SECRET', 'replace-this-with-a-secret')
 swagger = Swagger(app)
 auth = HTTPTokenAuth(scheme='ApiKey')
 
@@ -21,6 +50,24 @@ cfg = Config()
 def verify_token(token):
     # Simple token check using dashboard password
     return token == cfg.DASHBOARD_PASSWORD
+
+
+def dashboard_auth_required(f):
+    from functools import wraps
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        # Accept either ApiKey Authorization or session login
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('ApiKey '):
+            token = auth_header.split(' ', 1)[1]
+            if token == cfg.DASHBOARD_PASSWORD:
+                return f(*args, **kwargs)
+        if session.get('dashboard_auth'):
+            return f(*args, **kwargs)
+        return jsonify({'error': 'unauthorized'}), 401
+
+    return wrapper
 
 
 @app.route('/events', methods=['POST'])
@@ -80,11 +127,67 @@ def forward_alias():
     return events()
 
 
-@app.route('/ping', methods=['GET'])
+@app.route('/ping', methods=['GET', 'POST'])
 def ping():
-    # Simple health check - returns OK and server time
+    # Health check + device ping. Accept POST to record device-provided 'set_ip'.
     from datetime import datetime
     print(f"[BRIDGE] Ping received from {request.remote_addr} headers={dict(request.headers)}")
+
+    if request.method == 'POST':
+        j = None
+        try:
+            j = request.get_json(force=True)
+        except Exception:
+            j = None
+
+        # If device provides a 'set_ip', store it keyed by device identity.
+        set_ip = None
+        if isinstance(j, dict) and 'set_ip' in j:
+            set_ip = j.get('set_ip')
+
+        # If client asked for 'auto' or provided empty/true, try to extract public IP from headers
+        if set_ip is not None:
+            # normalize booleans
+            if isinstance(set_ip, bool) and set_ip:
+                set_ip = 'auto'
+            if isinstance(set_ip, str) and set_ip.strip() == '':
+                set_ip = 'auto'
+            if isinstance(set_ip, (int, float)):
+                set_ip = str(set_ip)
+
+            if isinstance(set_ip, str) and set_ip.lower() == 'auto':
+                xff = request.headers.get('X-Forwarded-For') or request.headers.get('X-Forwarded-For'.lower())
+                if xff:
+                    # X-Forwarded-For may contain a comma-separated list; take the first one
+                    set_ip = xff.split(',')[0].strip()
+                else:
+                    set_ip = request.remote_addr
+
+        # Determine device key: prefer X-Api-Secret (if used), else use client remote addr
+        device_key = None
+        xsecret = request.headers.get('X-Api-Secret')
+        if xsecret:
+            device_key = f"secret:{xsecret}"
+        else:
+            # try X-Device-Id header or fallback to remote_addr
+            device_hdr = request.headers.get('X-Device-Id')
+            if device_hdr:
+                device_key = f"id:{device_hdr}"
+            else:
+                device_key = f"addr:{request.remote_addr}"
+
+        if set_ip:
+            # store mapping
+            device_ips[device_key] = {
+                'ip': set_ip,
+                'remote_addr': request.remote_addr,
+                'updated': datetime.utcnow().isoformat() + 'Z'
+            }
+            save_device_ips()
+            print(f"[BRIDGE] Stored set_ip for {device_key} => {set_ip}")
+            return jsonify({'ok': True, 'stored_ip': set_ip, 'device_key': device_key, 'server_time': datetime.utcnow().isoformat() + 'Z'})
+
+    # default GET or POST without set_ip: return basic ok + server_time
     return jsonify({'ok': True, 'server_time': datetime.utcnow().isoformat() + 'Z'})
 
 
@@ -108,7 +211,7 @@ def settings():
 
 
 @app.route('/messages', methods=['GET'])
-@auth.login_required
+@dashboard_auth_required
 def messages_ui():
     # Simple page which allows an operator to request device messages or delete them
     page = """
@@ -123,11 +226,69 @@ def messages_ui():
     return page
 
 
+@app.route('/dashboard', methods=['GET'])
+def dashboard_ui():
+    # Serve frontend index from the frontend directory
+    frontend_dir = os.path.join(os.path.dirname(__file__), 'frontend')
+    return send_from_directory(frontend_dir, 'index.html')
+
+
+@app.route('/dashboard/<path:filename>')
+def dashboard_static(filename):
+    frontend_dir = os.path.join(os.path.dirname(__file__), 'frontend')
+    return send_from_directory(frontend_dir, filename)
+
+
+@app.route('/dashboard/status', methods=['GET'])
+@dashboard_auth_required
+def dashboard_status():
+    # Return server + device status for the frontend
+    return jsonify({
+        'device_host': cfg.DEVICE_HOST,
+        'device_port': cfg.DEVICE_PORT,
+        'device_ips': device_ips,
+        'log_file': cfg.LOG_FILE,
+        'use_api_secret': cfg.USE_API_SECRET
+    })
+
+
+@app.route('/dashboard/login', methods=['POST'])
+def dashboard_login():
+    j = request.get_json(force=True)
+    pw = j.get('password') if isinstance(j, dict) else None
+    if pw and pw == cfg.DASHBOARD_PASSWORD:
+        session['dashboard_auth'] = True
+        return jsonify({'ok': True})
+    return jsonify({'error': 'unauthorized'}), 401
+
+
+@app.route('/dashboard/logout', methods=['POST'])
+def dashboard_logout():
+    session.pop('dashboard_auth', None)
+    return jsonify({'ok': True})
+
+
 @app.route('/messages/list', methods=['GET'])
-@auth.login_required
+@dashboard_auth_required
 def messages_list():
     # Proxy to device to get messages
-    device_url = f"http://{cfg.DEVICE_HOST}:{cfg.DEVICE_PORT}/api/messages"
+    # choose device host: prefer stored mapping (by X-Api-Secret or X-Device-Id), else config
+    device_key = None
+    xsecret = request.headers.get('X-Api-Secret')
+    if xsecret:
+        device_key = f"secret:{xsecret}"
+    else:
+        device_hdr = request.headers.get('X-Device-Id')
+        if device_hdr:
+            device_key = f"id:{device_hdr}"
+        else:
+            device_key = f"addr:{request.remote_addr}"
+
+    host_to_use = cfg.DEVICE_HOST
+    if device_key in device_ips and 'ip' in device_ips[device_key] and device_ips[device_key]['ip']:
+        host_to_use = device_ips[device_key]['ip']
+
+    device_url = f"http://{host_to_use}:{cfg.DEVICE_PORT}/api/messages"
     headers = {}
     if cfg.USE_API_SECRET and cfg.API_SECRET:
         headers['X-Api-Secret'] = cfg.API_SECRET
@@ -136,9 +297,24 @@ def messages_list():
 
 
 @app.route('/messages/delete', methods=['POST'])
-@auth.login_required
+@dashboard_auth_required
 def messages_delete():
-    device_url = f"http://{cfg.DEVICE_HOST}:{cfg.DEVICE_PORT}/api/messages/delete_all"
+    device_key = None
+    xsecret = request.headers.get('X-Api-Secret')
+    if xsecret:
+        device_key = f"secret:{xsecret}"
+    else:
+        device_hdr = request.headers.get('X-Device-Id')
+        if device_hdr:
+            device_key = f"id:{device_hdr}"
+        else:
+            device_key = f"addr:{request.remote_addr}"
+
+    host_to_use = cfg.DEVICE_HOST
+    if device_key in device_ips and 'ip' in device_ips[device_key] and device_ips[device_key]['ip']:
+        host_to_use = device_ips[device_key]['ip']
+
+    device_url = f"http://{host_to_use}:{cfg.DEVICE_PORT}/api/messages/delete_all"
     headers = {}
     if cfg.USE_API_SECRET and cfg.API_SECRET:
         headers['X-Api-Secret'] = cfg.API_SECRET
@@ -155,7 +331,7 @@ def messages_delete():
     ],
     'responses': {200: {'description': 'sent'}}
 })
-@auth.login_required
+@dashboard_auth_required
 def send():
     j = request.get_json(force=True)
     to = j.get('to')
@@ -164,7 +340,22 @@ def send():
         return jsonify({'error': 'missing fields'}), 400
 
     # proxy to ESP32 device
-    device_url = f"http://{cfg.DEVICE_HOST}:{cfg.DEVICE_PORT}/api/send_sms"
+    device_key = None
+    xsecret = request.headers.get('X-Api-Secret')
+    if xsecret:
+        device_key = f"secret:{xsecret}"
+    else:
+        device_hdr = request.headers.get('X-Device-Id')
+        if device_hdr:
+            device_key = f"id:{device_hdr}"
+        else:
+            device_key = f"addr:{request.remote_addr}"
+
+    host_to_use = cfg.DEVICE_HOST
+    if device_key in device_ips and 'ip' in device_ips[device_key] and device_ips[device_key]['ip']:
+        host_to_use = device_ips[device_key]['ip']
+
+    device_url = f"http://{host_to_use}:{cfg.DEVICE_PORT}/api/send_sms"
     headers = {'Content-Type': 'application/json'}
     if cfg.USE_API_SECRET and cfg.API_SECRET:
         headers['X-Api-Secret'] = cfg.API_SECRET
@@ -179,12 +370,20 @@ def send():
 
 
 @app.route('/download_log', methods=['GET'])
-@auth.login_required
+@dashboard_auth_required
 def download_log():
     ensure_csv(cfg.LOG_FILE)
     return send_file(cfg.LOG_FILE, as_attachment=True)
 
 
+@app.route('/device_ips', methods=['GET'])
+@dashboard_auth_required
+def list_device_ips():
+    # Return the in-memory device IP mapping (persisted to device_ips.json)
+    return jsonify(device_ips)
+
+
 if __name__ == '__main__':
     ensure_csv(cfg.LOG_FILE)
+    load_device_ips()
     app.run(host='0.0.0.0', port=cfg.SERVER_PORT)
