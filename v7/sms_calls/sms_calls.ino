@@ -10,12 +10,14 @@
 #include "WebDashboard.h"
 #include "SMSManager.h"
 #include "CallManager.h"
+#include "DisplayManager.h"
 // SPIFFSUtils removed from v7 runtime
 
 ConfigManager configManager;
 SMSManager smsManager(configManager);
 CallManager callManager(configManager);
 WebDashboard dashboard(configManager, &smsManager, &callManager);
+DisplayManager displayManager;
 
 void setup() {
   Serial.begin(115200);
@@ -94,6 +96,12 @@ void setup() {
   // Initialize modem-related managers (they'll use Serial1 by default)
   smsManager.begin();
   callManager.begin();
+
+  // Initialize the display
+  displayManager.initialize();
+
+  // Example: Update the display with dummy data
+  displayManager.update(25.5, 60.0, 10, 5, 3, 2, true, true);
 }
 
 void loop() {
