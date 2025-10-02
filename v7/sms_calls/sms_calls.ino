@@ -26,13 +26,10 @@ void setup() {
   Serial.println("SPIFFS disabled in this build; using embedded dashboard and secrets.h for defaults");
 
   configManager.begin();
-
-  // After loading defaults from secrets.h and persisted settings, check remote settings once
-  if (configManager.checkAndApplyRemoteSettings()) {
-    Serial.println("Applied remote settings on startup");
-  } else {
-    Serial.println("No remote settings applied on startup");
-  }
+  // After loading defaults from secrets.h and persisted settings.
+  // NOTE: remote settings may perform HTTP requests — defer that until
+  // after we have a WiFi connection (see below) to avoid running network
+  // code while network stack isn't ready.
 
   // --- Modem / power initialization (copied from v6 ModemManager)
   // pin definitions (adjust if your board wiring differs)
@@ -81,6 +78,12 @@ void setup() {
 
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("WiFi connected: " + WiFi.localIP().toString());
+    // Now that WiFi is connected, it's safe to check remote settings
+    if (configManager.checkAndApplyRemoteSettings()) {
+      Serial.println("Applied remote settings on startup");
+    } else {
+      Serial.println("No remote settings applied on startup");
+    }
   } else {
     Serial.println("WiFi not connected");
   }
