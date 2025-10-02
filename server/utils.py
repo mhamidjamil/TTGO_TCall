@@ -1,22 +1,18 @@
 import os
-from openpyxl import Workbook, load_workbook
+import csv
 from datetime import datetime
 
 
-def ensure_workbook(path):
+def ensure_csv(path):
     if not os.path.exists(path):
-        wb = Workbook()
-        ws = wb.active
-        ws.title = 'messages'
-        ws.append(['timestamp', 'type', 'number', 'body'])
-        wb.save(path)
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['timestamp', 'type', 'number', 'body'])
 
 
 def append_message(path, mtype, number, body):
-    # ensure workbook exists
-    ensure_workbook(path)
-    wb = load_workbook(path)
-    ws = wb.active
+    ensure_csv(path)
     ts = datetime.utcnow().isoformat() + 'Z'
-    ws.append([ts, mtype, number, body])
-    wb.save(path)
+    with open(path, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow([ts, mtype, number, body])

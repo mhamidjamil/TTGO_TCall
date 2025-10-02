@@ -3,7 +3,7 @@ from flasgger import Swagger, swag_from
 from flask_httpauth import HTTPTokenAuth
 import requests
 import os
-from utils import append_message, ensure_workbook
+from utils import append_message, ensure_csv
 from config import Config
 
 app = Flask(__name__)
@@ -66,12 +66,18 @@ def events():
     t = j.get('type')
     number = j.get('number')
     body = j.get('body')
-    # Log to console for debugging
-    print(f"[BRIDGE] Received event type={t} number={number} body={body}")
-    # Append to excel log
-    ensure_workbook(cfg.LOG_FILE)
+    # Log to console for debugging with request meta
+    print(f"[BRIDGE] Received event from {request.remote_addr} headers={dict(request.headers)} payload={{'type':{t},'number':{number}}} body={body}")
+    # Append to csv log
+    ensure_csv(cfg.LOG_FILE)
     append_message(cfg.LOG_FILE, t, number, body)
     return jsonify({'ok': True})
+
+
+@app.route('/forward', methods=['POST'])
+def forward_alias():
+    # alias to /events for compatibility
+    return events()
 
 
 @app.route('/send', methods=['POST'])
@@ -97,11 +103,11 @@ def send():
     if cfg.USE_API_SECRET and cfg.API_SECRET:
         headers['X-Api-Secret'] = cfg.API_SECRET
 
+    print(f"[BRIDGE] Proxying send to device {device_url} headers={headers} payload={{'to':{to},'message':{msg}}}")
     resp = requests.post(device_url, json={'to': to, 'message': msg}, headers=headers, timeout=10)
-    print(f"[BRIDGE] Proxying send to device {device_url} headers={headers} payload={{'to':{to}}}")
     out = {'status_code': resp.status_code, 'text': resp.text}
     # log outgoing message
-    ensure_workbook(cfg.LOG_FILE)
+    ensure_csv(cfg.LOG_FILE)
     append_message(cfg.LOG_FILE, 'outgoing', to, msg)
     return jsonify(out), resp.status_code
 
@@ -109,10 +115,10 @@ def send():
 @app.route('/download_log', methods=['GET'])
 @auth.login_required
 def download_log():
-    ensure_workbook(cfg.LOG_FILE)
+    ensure_csv(cfg.LOG_FILE)
     return send_file(cfg.LOG_FILE, as_attachment=True)
 
 
 if __name__ == '__main__':
-    ensure_workbook(cfg.LOG_FILE)
+    ensure_csv(cfg.LOG_FILE)
     app.run(host='0.0.0.0', port=cfg.SERVER_PORT)

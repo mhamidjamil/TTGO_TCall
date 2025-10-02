@@ -98,26 +98,26 @@ bool SMSManager::forwardEventWithResult(const String &type, const String &number
   if (c.useApiSecret && c.apiSecret.length() == 0) return false;
 
   HTTPClient http;
+  Serial.println("[SMSManager] Forwarding to: " + c.forwardUrl);
   http.begin(c.forwardUrl);
   http.addHeader("Content-Type", "application/json");
   if (c.forwardApiKey.length()) http.addHeader("X-Api-Key", c.forwardApiKey);
-
   StaticJsonDocument<256> doc;
   doc["type"] = type;
   doc["number"] = number;
   doc["body"] = body;
   if (c.useApiSecret) doc["secret"] = c.apiSecret;
-
-  String b;
-  serializeJson(doc, b);
+  String b; serializeJson(doc, b);
+  Serial.println("[SMSManager] Payload: " + b);
   int code = http.POST(b);
   String resp = code>0?http.getString():String();
+  Serial.println("[SMSManager] Forward response code=" + String(code) + " body=" + resp);
   http.end();
   if (code == 200) {
     Serial.println("[SMSManager] Forwarded event OK");
     return true;
   }
-  Serial.println("[SMSManager] Forward failed, code=" + String(code) + " resp=" + resp);
+  Serial.println("[SMSManager] Forward failed");
   return false;
 }
 

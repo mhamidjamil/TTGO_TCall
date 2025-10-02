@@ -6,7 +6,7 @@ load_dotenv()
 class Config:
     # ESP32 device host/port
     DEVICE_HOST = os.getenv('DEVICE_HOST', '192.168.100.90')
-    DEVICE_PORT = int(os.getenv('DEVICE_PORT', '80'))
+    DEVICE_PORT = int(os.getenv('DEVICE_PORT', '420'))
 
     # Dashboard password used by ESP32 and the Flask docs protection
     DASHBOARD_PASSWORD = os.getenv('DASHBOARD_PASSWORD', 'admin123')
@@ -19,4 +19,4 @@ class Config:
     SERVER_PORT = int(os.getenv('SERVER_PORT', '5000'))
 
     # Log file
-    LOG_FILE = os.getenv('LOG_FILE', 'messages.xlsx')
+    LOG_FILE = os.getenv('LOG_FILE', 'messages.csv')
