@@ -15,6 +15,13 @@ class Config:
     USE_API_SECRET = os.getenv('USE_API_SECRET', '0') == '1'
     API_SECRET = os.getenv('API_SECRET', '')
 
+    # Forwarding defaults that can be passed to device via /settings
+    FORWARD_URL = os.getenv('FORWARD_URL', os.getenv('FORWARD_URL_DEFAULT', ''))
+    FORWARD_API_KEY = os.getenv('FORWARD_API_KEY', '')
+    ALLOW_SMS = os.getenv('ALLOW_SMS', '1') == '1'
+    ALLOW_CALL = os.getenv('ALLOW_CALL', '1') == '1'
+    SETTINGS_VERSION = os.getenv('SETTINGS_VERSION', os.getenv('SETTINGS_VERSION_DEFAULT', '1'))
+
     # Local flask server port
     SERVER_PORT = int(os.getenv('SERVER_PORT', '5000'))
 

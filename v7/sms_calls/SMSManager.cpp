@@ -130,12 +130,20 @@ void SMSManager::pingBridge() {
     Serial.println("[SMSManager] No forwardUrl configured, skipping ping");
     return;
   }
-  // Normalize URL to /ping
-  if (url.endsWith("/")) url = url.substring(0, url.length()-1);
-  String pingUrl = url + "/ping";
+  // Build origin (scheme + host[:port]) then use /ping so we hit the bridge health endpoint
+  int schemePos = url.indexOf("//");
+  int start = (schemePos >= 0) ? schemePos + 2 : 0;
+  int slashPos = url.indexOf('/', start);
+  String origin = (slashPos > 0) ? url.substring(0, slashPos) : url;
+  if (origin.endsWith("/")) origin = origin.substring(0, origin.length()-1);
+  String pingUrl = origin + "/ping";
   Serial.println("[SMSManager] Pinging bridge at " + pingUrl);
   HTTPClient http;
   http.begin(pingUrl);
+  // include api secret so server can authenticate this device if enabled
+  if (c.useApiSecret && c.apiSecret.length()) {
+    http.addHeader("X-Api-Secret", c.apiSecret);
+  }
   int code = http.GET();
   String resp = code>0?http.getString():String();
   Serial.println("[SMSManager] Ping response code=" + String(code) + " body=" + resp);
@@ -194,6 +202,83 @@ bool SMSManager::sendSms(const String &to, const String &message, String &err) {
   }
   err = resp;
   return false;
+}
+
+String SMSManager::listAllMessages() {
+  // Ensure text mode
+  Serial1.println("AT+CMGF=1");
+  delay(200);
+  // List all messages
+  Serial1.println("AT+CMGL=\"ALL\"\r
+");
+  String resp = readResponseFromSerial1(3000);
+  // Parse responses with lines starting +CMGL: index,"<stat>","<number>",... then body on next line
+  DynamicJsonDocument out(2048);
+  JsonArray arr = out.to<JsonArray>();
+  int pos = 0;
+  while (true) {
+    int hdr = resp.indexOf("+CMGL:", pos);
+    if (hdr < 0) break;
+    int nl = resp.indexOf('\n', hdr);
+    String hdrLine = (nl>hdr)?resp.substring(hdr, nl):resp.substring(hdr);
+    // extract index
+    int comma = hdrLine.indexOf(',');
+    int idx = -1;
+    if (comma > 0) {
+      String sidx = hdrLine.substring(6, comma);
+      sidx.trim(); idx = sidx.toInt();
+    }
+    // extract number within quotes
+    int q1 = hdrLine.indexOf('"');
+    int q2 = hdrLine.indexOf('"', q1+1);
+    int q3 = hdrLine.indexOf('"', q2+1);
+    int q4 = hdrLine.indexOf('"', q3+1);
+    String num = "";
+    if (q3>=0 && q4>q3) num = hdrLine.substring(q3+1, q4);
+    // body is next line after hdr
+    int bodyStart = nl+1;
+    int nextHdr = resp.indexOf("+CMGL:", bodyStart);
+    int bodyEnd = nextHdr>0?nextHdr:resp.length();
+    String body = resp.substring(bodyStart, bodyEnd);
+    // trim trailing OK/ERROR
+    int okp = body.indexOf("OK"); if (okp>=0) body = body.substring(0, okp);
+    body.trim();
+    DynamicJsonDocument obj(512);
+    obj["index"] = idx;
+    obj["number"] = num;
+    obj["body"] = body;
+    arr.add(obj);
+    pos = bodyEnd;
+  }
+  String outS; serializeJson(out, outS);
+  return outS;
+}
+
+bool SMSManager::deleteAllMessages() {
+  // List indices and delete each
+  Serial1.println("AT+CMGF=1");
+  delay(200);
+  Serial1.println("AT+CMGL=\"ALL\"\r
+");
+  String resp = readResponseFromSerial1(3000);
+  int pos = 0;
+  bool any = false;
+  while (true) {
+    int hdr = resp.indexOf("+CMGL:", pos);
+    if (hdr < 0) break;
+    int comma = resp.indexOf(',', hdr);
+    if (comma < 0) break;
+    String sidx = resp.substring(hdr+6, comma);
+    sidx.trim();
+    int idx = sidx.toInt();
+    if (idx > 0) {
+      Serial1.printf("AT+CMGD=%d\r\n", idx);
+      delay(200);
+      any = true;
+    }
+    pos = comma;
+  }
+  return any;
 }
 
 void SMSManager::handleIncomingSms(const String &from, const String &body) {

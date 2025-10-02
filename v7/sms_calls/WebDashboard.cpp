@@ -64,6 +64,30 @@ void WebDashboard::begin() {
     else server.send(200, "application/json", "{\"ok\":true,\"applied\":false}");
   });
 
+  // Expose message listing and delete endpoints for remote management
+  server.on("/api/messages", [this]() {
+    Serial.println("[WebDashboard] /api/messages");
+    if (cfgMgr.get().useApiSecret) {
+      String h = server.header("X-Api-Secret");
+      if (h != cfgMgr.get().apiSecret) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+    }
+    if (!smsManager) { server.send(500, "application/json", "{\"error\":\"no sms manager\"}"); return; }
+    // call SMSManager to list messages
+    String out = smsManager->listAllMessages();
+    server.send(200, "application/json", out);
+  });
+
+  server.on("/api/messages/delete_all", [this]() {
+    Serial.println("[WebDashboard] /api/messages/delete_all");
+    if (cfgMgr.get().useApiSecret) {
+      String h = server.header("X-Api-Secret");
+      if (h != cfgMgr.get().apiSecret) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+    }
+    if (!smsManager) { server.send(500, "application/json", "{\"error\":\"no sms manager\"}"); return; }
+    bool ok = smsManager->deleteAllMessages();
+    server.send(ok?200:500, "application/json", ok?"{\"ok\":true}":"{\"ok\":false}");
+  });
+
   // Serve device API docs (simple HTML) protected by dashboard auth
   server.on("/docs", [this]() {
     // If this is a POST login attempt, treat pw param as login

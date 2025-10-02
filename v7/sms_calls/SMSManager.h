@@ -12,6 +12,11 @@ public:
   // send SMS through modem - simple interface
   bool sendSms(const String &to, const String &message, String &err);
 
+  // list all SMS messages stored on the modem as a JSON array string
+  String listAllMessages();
+  // delete all SMS messages from modem storage
+  bool deleteAllMessages();
+
 // (SMSManager uses Serial1 to communicate with the modem)
 
 private:

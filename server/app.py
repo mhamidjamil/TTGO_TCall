@@ -88,6 +88,64 @@ def ping():
     return jsonify({'ok': True, 'server_time': datetime.utcnow().isoformat() + 'Z'})
 
 
+@app.route('/settings', methods=['GET'])
+def settings():
+    # Device requests settings; require API secret in header or JSON
+    xsecret = request.headers.get('X-Api-Secret')
+    if not xsecret or xsecret != cfg.API_SECRET:
+        return jsonify({'error':'unauthorized'}), 401
+    # Return server-side settings for the device
+    out = {
+        'useApiSecret': cfg.USE_API_SECRET,
+        'apiSecret': cfg.API_SECRET,
+        'forwardUrl': os.getenv('FORWARD_URL', ''),
+        'forwardApiKey': os.getenv('FORWARD_API_KEY', ''),
+        'allowSms': os.getenv('ALLOW_SMS', '1') == '1',
+        'allowCall': os.getenv('ALLOW_CALL', '1') == '1',
+        'settingsVersion': os.getenv('SETTINGS_VERSION', '1')
+    }
+    return jsonify(out)
+
+
+@app.route('/messages', methods=['GET'])
+@auth.login_required
+def messages_ui():
+    # Simple page which allows an operator to request device messages or delete them
+    page = """
+<html><body>
+<h3>Device Messages</h3>
+<p>Use the buttons below to fetch messages from device or to delete all messages.</p>
+<button onclick="fetch('/messages/list').then(r=>r.json()).then(j=>document.getElementById('out').textContent=JSON.stringify(j))">Fetch messages</button>
+<button onclick="fetch('/messages/delete',{method:'POST'}).then(r=>r.text()).then(t=>document.getElementById('out').textContent=t)">Delete all messages</button>
+<pre id='out'></pre>
+</body></html>
+"""
+    return page
+
+
+@app.route('/messages/list', methods=['GET'])
+@auth.login_required
+def messages_list():
+    # Proxy to device to get messages
+    device_url = f"http://{cfg.DEVICE_HOST}:{cfg.DEVICE_PORT}/api/messages"
+    headers = {}
+    if cfg.USE_API_SECRET and cfg.API_SECRET:
+        headers['X-Api-Secret'] = cfg.API_SECRET
+    resp = requests.get(device_url, headers=headers, timeout=10)
+    return (resp.text, resp.status_code, resp.headers.items())
+
+
+@app.route('/messages/delete', methods=['POST'])
+@auth.login_required
+def messages_delete():
+    device_url = f"http://{cfg.DEVICE_HOST}:{cfg.DEVICE_PORT}/api/messages/delete_all"
+    headers = {}
+    if cfg.USE_API_SECRET and cfg.API_SECRET:
+        headers['X-Api-Secret'] = cfg.API_SECRET
+    resp = requests.post(device_url, headers=headers, timeout=10)
+    return (resp.text, resp.status_code, resp.headers.items())
+
+
 @app.route('/send', methods=['POST'])
 @swag_from({
     'tags': ['send'],
