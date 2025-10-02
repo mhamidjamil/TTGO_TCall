@@ -66,6 +66,8 @@ def events():
     t = j.get('type')
     number = j.get('number')
     body = j.get('body')
+    # Log to console for debugging
+    print(f"[BRIDGE] Received event type={t} number={number} body={body}")
     # Append to excel log
     ensure_workbook(cfg.LOG_FILE)
     append_message(cfg.LOG_FILE, t, number, body)
@@ -96,6 +98,7 @@ def send():
         headers['X-Api-Secret'] = cfg.API_SECRET
 
     resp = requests.post(device_url, json={'to': to, 'message': msg}, headers=headers, timeout=10)
+    print(f"[BRIDGE] Proxying send to device {device_url} headers={headers} payload={{'to':{to}}}")
     out = {'status_code': resp.status_code, 'text': resp.text}
     # log outgoing message
     ensure_workbook(cfg.LOG_FILE)

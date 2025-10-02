@@ -22,6 +22,8 @@ private:
   void readAndForwardSms(int index);
   // Forward event and return true if server returned HTTP 200
   bool forwardEventWithResult(const String &type, const String &number, const String &body);
+  // Read response from Serial1 with timeout
+  String readResponseFromSerial1(unsigned long timeoutMs);
 };
 
 #endif

@@ -10,27 +10,18 @@ void SMSManager::begin() {
 }
 
 void SMSManager::loop() {
-  // Poll Serial1 for modem unsolicited notifications like +CMTI
-  String line;
-  while (Serial1.available()) {
-    char ch = (char)Serial1.read();
-    line += ch;
-    if (ch == '\n') {
-      line.trim();
-      if (line.startsWith("+CMTI:")) {
-        // +CMTI: "SM",3  -> extract index
-        int comma = line.lastIndexOf(',');
-        if (comma > 0) {
-          String idx = line.substring(comma + 1);
-          idx.trim();
-          int index = idx.toInt();
-          if (index > 0) {
-            // read SMS at index
-            readAndForwardSms(index);
-          }
-        }
+  // Poll Serial1 for modem unsolicited notifications like +CMTI using robust read
+  String response = readResponseFromSerial1(200);
+  if (response.length()) {
+    if (response.indexOf("+CMTI:") != -1) {
+      // Extract index from +CMTI: "SM",3
+      int comma = response.lastIndexOf(',');
+      if (comma > 0) {
+        String idx = response.substring(comma + 1);
+        idx.trim();
+        int index = idx.toInt();
+        if (index > 0) readAndForwardSms(index);
       }
-      line = "";
     }
   }
 }
@@ -43,20 +34,19 @@ void SMSManager::readAndForwardSms(int index) {
   delay(200);
   // Read message
   Serial1.printf("AT+CMGR=%d\r\n", index);
-  unsigned long start = millis();
-  String resp;
-  while (millis() - start < 5000) {
-    while (Serial1.available()) resp += (char)Serial1.read();
-    if (resp.indexOf("OK") >= 0 || resp.indexOf("ERROR") >= 0) break;
-    delay(50);
-  }
+  String resp = readResponseFromSerial1(3000);
 
   // Parse +CMGR response: first line contains header like +CMGR: "REC UNREAD","+9233...",,"20/.."
   int hdrPos = resp.indexOf("+CMGR:");
-  if (hdrPos < 0) { Serial.println("[SMSManager] No CMGR header found"); return; }
+  if (hdrPos < 0) {
+    // Try alternative: some modems return header with CRLF before OK; attempt to find first line
+    int firstNl = resp.indexOf('\n');
+    if (firstNl > 0) hdrPos = 0; // we'll treat from start
+  }
+  if (hdrPos < 0) { Serial.println("[SMSManager] No CMGR header found; full response:\n" + resp); return; }
   int nl = resp.indexOf('\n', hdrPos);
   if (nl < 0) nl = resp.indexOf('\r', hdrPos);
-  String hdr = resp.substring(hdrPos, nl >= 0 ? nl : hdrPos + 80);
+  String hdr = resp.substring(hdrPos, nl >= 0 ? nl : resp.length());
   // Extract number between quotes
   int firstQuote = hdr.indexOf('"');
   int secondQuote = hdr.indexOf('"', firstQuote + 1);
@@ -73,11 +63,13 @@ void SMSManager::readAndForwardSms(int index) {
   String body = "";
   int bodyStart = nl + 1;
   if (bodyStart > 0 && bodyStart < resp.length()) {
-    int bodyEnd = resp.indexOf('\r', bodyStart);
-    if (bodyEnd < 0) bodyEnd = resp.indexOf('\n', bodyStart);
-    if (bodyEnd < 0) bodyEnd = resp.length();
-    body = resp.substring(bodyStart, bodyEnd);
+    body = resp.substring(bodyStart);
+    // remove trailing OK or ERROR
+    int okPos = body.indexOf("OK");
+    if (okPos >= 0) body = body.substring(0, okPos);
     body.trim();
+    // remove any leading CR/LF
+    while (body.length() && (body.charAt(0) == '\r' || body.charAt(0) == '\n')) body.remove(0,1);
   }
 
   Serial.printf("[SMSManager] Incoming SMS from %s: %s\n", from.c_str(), body.c_str());
@@ -127,6 +119,23 @@ bool SMSManager::forwardEventWithResult(const String &type, const String &number
   }
   Serial.println("[SMSManager] Forward failed, code=" + String(code) + " resp=" + resp);
   return false;
+}
+
+String SMSManager::readResponseFromSerial1(unsigned long timeoutMs) {
+  unsigned long start = millis();
+  String response = "";
+  // small initial delay to allow modem to respond
+  delay(20);
+  while (millis() - start < timeoutMs) {
+    while (Serial1.available()) {
+      response += Serial1.readString();
+      // brief pause to accumulate
+      delay(5);
+    }
+    if (response.length()) break;
+    delay(10);
+  }
+  return response;
 }
 
 bool SMSManager::sendSms(const String &to, const String &message, String &err) {
