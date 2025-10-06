@@ -43,6 +43,8 @@ public:
 private:
   bool ensureAuthenticated();
   bool authenticate();
+  bool bootstrapPaths();
+  String rootPathFromConfig() const;
   String buildPathUrl(const String &path) const;
   bool httpGetJson(const String &url, String &responseBody, int &statusCode);
   bool httpPatchJson(const String &url, const String &payload, String &responseBody, int &statusCode);

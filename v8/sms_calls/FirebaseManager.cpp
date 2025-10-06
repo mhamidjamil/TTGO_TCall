@@ -27,6 +27,10 @@ FirebaseAuth auth;
 FirebaseConfig fbconfig;
 Firebase_ESP_Client firebase;
 #endif
+
+void setHttpStatusError(String &error, const char *op, int statusCode, const String &body) {
+  error = String(op) + String(" failed code=") + statusCode + String(" body=") + body;
+}
 }
 
 bool FirebaseManager::begin(const V8Config &incomingConfig) {
@@ -59,6 +63,10 @@ bool FirebaseManager::begin(const V8Config &incomingConfig) {
   // We still support Firebase through HTTPS REST in this build.
   ready = authenticate();
 #endif
+
+  if (ready && !bootstrapPaths()) {
+    ready = false;
+  }
 
   return ready;
 }
@@ -148,7 +156,9 @@ bool FirebaseManager::updateCommandStatus(const FirebaseCommand &command, const 
   String commandResp;
   int commandCode = 0;
   if (!httpPatchJson(commandUrl, commandPayload, commandResp, commandCode) || commandCode < 200 || commandCode >= 300) {
-    error = "status update failed";
+    if (commandCode < 200 || commandCode >= 300) {
+      setHttpStatusError(error, "status update", commandCode, commandResp);
+    }
     return false;
   }
 
@@ -171,7 +181,12 @@ bool FirebaseManager::updateCommandStatus(const FirebaseCommand &command, const 
     return false;
   }
 
-  return historyCode >= 200 && historyCode < 300;
+  if (historyCode < 200 || historyCode >= 300) {
+    setHttpStatusError(error, "history update", historyCode, historyResp);
+    return false;
+  }
+
+  return true;
 }
 
 bool FirebaseManager::updateCounterSnapshot(int dailyCount, int weeklyCount, int monthlyCount) {
@@ -194,7 +209,12 @@ bool FirebaseManager::updateCounterSnapshot(int dailyCount, int weeklyCount, int
     return false;
   }
 
-  return statusCode >= 200 && statusCode < 300;
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "counter update", statusCode, response);
+    return false;
+  }
+
+  return true;
 }
 
 bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, int &monthlyCount) {
@@ -208,8 +228,20 @@ bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, in
     return false;
   }
 
-  if (statusCode < 200 || statusCode >= 300 || response == "null") {
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "counter fetch", statusCode, response);
     return false;
+  }
+
+  if (response == "null") {
+    dailyCount = 0;
+    weeklyCount = 0;
+    monthlyCount = 0;
+    if (!updateCounterSnapshot(0, 0, 0)) {
+      return false;
+    }
+    error = String();
+    return true;
   }
 
   DynamicJsonDocument doc(512);
@@ -340,7 +372,12 @@ bool FirebaseManager::pushTelemetry(float temperature, float humidity, int sentT
     return false;
   }
 
-  return statusCode >= 200 && statusCode < 300;
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "telemetry push", statusCode, response);
+    return false;
+  }
+
+  return true;
 }
 
 bool FirebaseManager::pushStartupStatus(const String &bootTime, const String &wifiMode, const String &ipAddress, bool firebaseReady) {
@@ -364,7 +401,12 @@ bool FirebaseManager::pushStartupStatus(const String &bootTime, const String &wi
     return false;
   }
 
-  return statusCode >= 200 && statusCode < 300;
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "startup status push", statusCode, response);
+    return false;
+  }
+
+  return true;
 }
 
 bool FirebaseManager::pushLandingSnapshot(float temperature,
@@ -407,11 +449,67 @@ bool FirebaseManager::pushLandingSnapshot(float temperature,
 
   String response;
   int statusCode = 0;
-  if (!httpPatchJson(buildPathUrl(String("/") + String("ttgo_tcall")), payload, response, statusCode)) {
+  if (!httpPatchJson(buildPathUrl(rootPathFromConfig()), payload, response, statusCode)) {
     return false;
   }
 
-  return statusCode >= 200 && statusCode < 300;
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "landing snapshot push", statusCode, response);
+    return false;
+  }
+
+  return true;
+}
+
+bool FirebaseManager::bootstrapPaths() {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(1024);
+  doc["commands"]["pending"] = JsonObject();
+  doc["commands"]["history"] = JsonObject();
+  doc["counters"]["daily"] = 0;
+  doc["counters"]["weekly"] = 0;
+  doc["counters"]["monthly"] = 0;
+  doc["counters"]["updatedAtMs"] = 0;
+  doc["status"]["firebaseReady"] = true;
+  doc["status"]["updatedAtMs"] = 0;
+  doc["telemetry"]["temperature"] = 0.0f;
+  doc["telemetry"]["humidity"] = 0.0f;
+  doc["telemetry"]["timestamp"] = 0;
+  doc["telemetry"]["updatedAtMs"] = 0;
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  if (!httpPatchJson(buildPathUrl(rootPathFromConfig()), payload, response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "bootstrap", statusCode, response);
+    return false;
+  }
+
+  error = String();
+  return true;
+}
+
+String FirebaseManager::rootPathFromConfig() const {
+  String commandPath = String(config.firebaseCommandPath);
+  if (!commandPath.startsWith("/")) {
+    commandPath = String("/") + commandPath;
+  }
+
+  int firstSlashAfterRoot = commandPath.indexOf('/', 1);
+  if (firstSlashAfterRoot <= 0) {
+    return String("/ttgo_tcall");
+  }
+
+  return commandPath.substring(0, firstSlashAfterRoot);
 }
 
 String FirebaseManager::buildPathUrl(const String &path) const {
