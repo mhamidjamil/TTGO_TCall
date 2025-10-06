@@ -13,6 +13,13 @@ struct FirebaseCommand {
   String errorReason;
 };
 
+struct FirebaseRuntimeSettings {
+  uint32_t intervalOfDhtSeconds = 15;
+  bool showFirebasePushLogs = true;
+  bool createdIntervalOfDht = false;
+  bool createdShowFirebasePushLogs = false;
+};
+
 class FirebaseManager {
 public:
   bool begin(const V8Config &config);
@@ -38,6 +45,9 @@ public:
                            bool telemetryPushOk,
                            const String &telemetryMessage,
                            unsigned long epochSeconds);
+  bool fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
+                            uint32_t defaultIntervalOfDhtSeconds,
+                            bool defaultShowFirebasePushLogs);
   String lastError() const;
 
 private:

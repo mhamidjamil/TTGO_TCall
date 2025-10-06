@@ -32,12 +32,16 @@ static WebDashboard webDashboard;
 static unsigned long lastUiRefresh = 0;
 static unsigned long lastCloudPoll = 0;
 static unsigned long lastTelemetryPush = 0;
+static unsigned long lastRuntimeSettingsSync = 0;
 static unsigned long pendingPollStartMs = 0;
 static V8Config runtimeConfig;
 static String startupBootTime;
 static String startupIp;
 static bool lastTelemetryPushOk = false;
 static String lastTelemetryPushMessage = "not_attempted";
+static unsigned long telemetryIntervalMs = 15000UL;
+static const unsigned long runtimeSettingsSyncIntervalMs = 10UL * 60UL * 1000UL;
+static bool showFirebasePushLogs = true;
 
 static void initializeModemHardware() {
   Wire.begin(I2C_SDA_PIN_DEFAULT, I2C_SCL_PIN_DEFAULT);
@@ -152,6 +156,73 @@ static void printDhtStatus(const char *source) {
   }
 }
 
+static void printCommandHelp() {
+  Serial.println("[CMD] available commands:");
+  Serial.println(" - dht    : print temperature and humidity");
+  Serial.println(" - status : print wifi/ip/firebase status");
+  Serial.println(" - sync   : sync runtime settings from Firebase now");
+  Serial.println(" - help   : show this command list");
+}
+
+static void printRuntimeSettingChange(const char *name, const String &oldValue, const String &newValue) {
+  Serial.println();
+  Serial.println("============================");
+  Serial.print("old value of variable (");
+  Serial.print(name);
+  Serial.print("): ");
+  Serial.print(oldValue);
+  Serial.print("    |   new value is: ");
+  Serial.println(newValue);
+  Serial.println("============================");
+  Serial.println();
+}
+
+static bool syncRuntimeSettingsFromCloud(const char *source) {
+  if (!firebaseManager.isReady()) {
+    Logger::warn("FIREBASE", "Runtime settings sync skipped: firebase not ready");
+    return false;
+  }
+
+  const uint32_t defaultIntervalOfDhtSeconds = 15;
+  const bool defaultShowFirebasePushLogs = true;
+
+  FirebaseRuntimeSettings settings;
+  if (!firebaseManager.fetchRuntimeSettings(settings, defaultIntervalOfDhtSeconds, defaultShowFirebasePushLogs)) {
+    Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
+    return false;
+  }
+
+  unsigned long oldIntervalSeconds = telemetryIntervalMs / 1000UL;
+  bool oldShowFirebasePushLogs = showFirebasePushLogs;
+
+  telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
+  showFirebasePushLogs = settings.showFirebasePushLogs;
+
+  if (settings.createdIntervalOfDht) {
+    Serial.println("[SYNC] created or healed Firebase variable: intervalOfDhtSeconds");
+  }
+  if (settings.createdShowFirebasePushLogs) {
+    Serial.println("[SYNC] created or healed Firebase variable: showFirebasePushLogs");
+  }
+
+  if (oldIntervalSeconds != settings.intervalOfDhtSeconds) {
+    printRuntimeSettingChange("intervalOfDhtSeconds", String(oldIntervalSeconds), String(settings.intervalOfDhtSeconds));
+  }
+  if (oldShowFirebasePushLogs != showFirebasePushLogs) {
+    printRuntimeSettingChange("showFirebasePushLogs", oldShowFirebasePushLogs ? "true" : "false", showFirebasePushLogs ? "true" : "false");
+  }
+
+  Serial.print("[SYNC] source=");
+  Serial.print(source);
+  Serial.print(" intervalOfDhtSeconds=");
+  Serial.print(settings.intervalOfDhtSeconds);
+  Serial.print(" showFirebasePushLogs=");
+  Serial.println(showFirebasePushLogs ? "true" : "false");
+
+  lastRuntimeSettingsSync = millis();
+  return true;
+}
+
 static void handleSerialCommand(String command) {
   command.trim();
   command.toLowerCase();
@@ -168,7 +239,19 @@ static void handleSerialCommand(String command) {
     Serial.println(firebaseManager.isReady() ? "ready" : "not_ready");
     return;
   }
-  Serial.println("[CMD] use: dht | status");
+  if (command == "help" || command == "?") {
+    printCommandHelp();
+    return;
+  }
+  if (command == "sync") {
+    if (syncRuntimeSettingsFromCloud("manual")) {
+      Serial.println("[SYNC] manual sync complete");
+    } else {
+      Serial.println("[SYNC] manual sync failed");
+    }
+    return;
+  }
+  printCommandHelp();
 }
 
 void setup() {
@@ -194,6 +277,7 @@ void setup() {
   if (firebaseManager.isReady()) {
     Logger::info("FIREBASE", "Firebase manager ready");
     syncCountersFromCloud();
+    syncRuntimeSettingsFromCloud("startup");
   } else {
     Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
   }
@@ -224,6 +308,11 @@ void setup() {
 
 void loop() {
   firebaseManager.pollCommands();
+
+  if (firebaseManager.isReady() && millis() - lastRuntimeSettingsSync >= runtimeSettingsSyncIntervalMs) {
+    syncRuntimeSettingsFromCloud("periodic");
+  }
+
   if (firebaseManager.isReady() && millis() >= pendingPollStartMs &&
       millis() - lastCloudPoll >= (unsigned long)runtimeConfig.pollingIntervalSeconds * 1000UL) {
     lastCloudPoll = millis();
@@ -253,7 +342,7 @@ void loop() {
         rateLimitManager.weeklyCount(),
         rateLimitManager.monthlyCount());
 
-    if (firebaseManager.isReady() && millis() - lastTelemetryPush > 15000) {
+    if (firebaseManager.isReady() && millis() - lastTelemetryPush > telemetryIntervalMs) {
       lastTelemetryPush = millis();
       time_t now = time(nullptr);
       unsigned long epochSeconds = (now > 1000) ? (unsigned long)now : (millis() / 1000UL);
@@ -266,7 +355,9 @@ void loop() {
           epochSeconds);
       lastTelemetryPushMessage = lastTelemetryPushOk ? "Telemetry pushed" : firebaseManager.lastError();
       if (lastTelemetryPushOk) {
-        Logger::info("FIREBASE", lastTelemetryPushMessage.c_str());
+        if (showFirebasePushLogs) {
+          Logger::info("FIREBASE", lastTelemetryPushMessage.c_str());
+        }
       } else {
         Logger::warn("FIREBASE", lastTelemetryPushMessage.c_str());
       }
@@ -287,7 +378,9 @@ void loop() {
           lastTelemetryPushMessage,
           epochSeconds);
       if (landingOk) {
-        Logger::info("FIREBASE", "Landing snapshot pushed");
+        if (showFirebasePushLogs) {
+          Logger::info("FIREBASE", "Landing snapshot pushed");
+        }
       } else {
         Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
       }

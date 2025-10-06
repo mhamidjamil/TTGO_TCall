@@ -14,6 +14,9 @@
 | Number normalization | Planned | Preserve v5-compatible behavior. |
 | Rate limiting | Planned | Daily/weekly/monthly enforcement. |
 | Structured logging | Planned | Clean, concise, professional logs. |
+| Runtime settings from Firebase | Planned | Read `intervalOfDhtSeconds` and `showFirebasePushLogs` from RTDB, with defaults if missing. |
+| Manual runtime sync command | Planned | `sync` command forces immediate cloud settings refresh. |
+| Serial help command | Planned | `help` command lists all supported serial commands and usage. |
 | MQTT | Removed | Not part of v8. |
 
 ## Notes

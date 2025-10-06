@@ -31,6 +31,48 @@ Firebase_ESP_Client firebase;
 void setHttpStatusError(String &error, const char *op, int statusCode, const String &body) {
   error = String(op) + String(" failed code=") + statusCode + String(" body=") + body;
 }
+
+bool parseBoolVariant(const JsonVariantConst &variant, bool &outValue) {
+  if (variant.is<bool>()) {
+    outValue = variant.as<bool>();
+    return true;
+  }
+  if (variant.is<int>()) {
+    outValue = variant.as<int>() != 0;
+    return true;
+  }
+  if (variant.is<const char *>()) {
+    String text = variant.as<const char *>();
+    text.toLowerCase();
+    if (text == "true" || text == "1" || text == "yes" || text == "on") {
+      outValue = true;
+      return true;
+    }
+    if (text == "false" || text == "0" || text == "no" || text == "off") {
+      outValue = false;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool parseIntervalVariant(const JsonVariantConst &variant, uint32_t &outValue) {
+  long parsed = -1;
+  if (variant.is<int>()) {
+    parsed = variant.as<int>();
+  } else if (variant.is<const char *>()) {
+    parsed = String(variant.as<const char *>()).toInt();
+  } else {
+    return false;
+  }
+
+  if (parsed < 3 || parsed > 3600) {
+    return false;
+  }
+
+  outValue = (uint32_t)parsed;
+  return true;
+}
 }
 
 bool FirebaseManager::begin(const V8Config &incomingConfig) {
@@ -461,6 +503,84 @@ bool FirebaseManager::pushLandingSnapshot(float temperature,
   return true;
 }
 
+bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
+                                           uint32_t defaultIntervalOfDhtSeconds,
+                                           bool defaultShowFirebasePushLogs) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  outSettings = FirebaseRuntimeSettings();
+  outSettings.intervalOfDhtSeconds = defaultIntervalOfDhtSeconds;
+  outSettings.showFirebasePushLogs = defaultShowFirebasePushLogs;
+
+  String runtimePath = rootPathFromConfig() + String("/settings/runtime");
+  String response;
+  int statusCode = 0;
+  if (!httpGetJson(buildPathUrl(runtimePath), response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "runtime settings fetch", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument writeDoc(384);
+  bool shouldWriteBack = false;
+
+  if (response == "null") {
+    outSettings.createdIntervalOfDht = true;
+    outSettings.createdShowFirebasePushLogs = true;
+    shouldWriteBack = true;
+  } else {
+    DynamicJsonDocument readDoc(768);
+    if (deserializeJson(readDoc, response)) {
+      error = String("runtime settings parse failed body=") + response;
+      return false;
+    }
+
+    JsonObject root = readDoc.as<JsonObject>();
+    uint32_t intervalParsed = 0;
+    if (parseIntervalVariant(root["intervalOfDhtSeconds"], intervalParsed)) {
+      outSettings.intervalOfDhtSeconds = intervalParsed;
+    } else {
+      outSettings.createdIntervalOfDht = true;
+      shouldWriteBack = true;
+    }
+
+    bool logsValue = defaultShowFirebasePushLogs;
+    if (parseBoolVariant(root["showFirebasePushLogs"], logsValue)) {
+      outSettings.showFirebasePushLogs = logsValue;
+    } else {
+      outSettings.createdShowFirebasePushLogs = true;
+      shouldWriteBack = true;
+    }
+  }
+
+  if (shouldWriteBack) {
+    writeDoc["intervalOfDhtSeconds"] = outSettings.intervalOfDhtSeconds;
+    writeDoc["showFirebasePushLogs"] = outSettings.showFirebasePushLogs;
+    writeDoc["updatedAtMs"] = millis();
+
+    String payload;
+    serializeJson(writeDoc, payload);
+
+    String writeResp;
+    int writeCode = 0;
+    if (!httpPatchJson(buildPathUrl(runtimePath), payload, writeResp, writeCode)) {
+      return false;
+    }
+    if (writeCode < 200 || writeCode >= 300) {
+      setHttpStatusError(error, "runtime settings write", writeCode, writeResp);
+      return false;
+    }
+  }
+
+  error = String();
+  return true;
+}
+
 bool FirebaseManager::bootstrapPaths() {
   if (!ensureAuthenticated()) {
     return false;
@@ -479,6 +599,9 @@ bool FirebaseManager::bootstrapPaths() {
   doc["telemetry"]["humidity"] = 0.0f;
   doc["telemetry"]["timestamp"] = 0;
   doc["telemetry"]["updatedAtMs"] = 0;
+  doc["settings"]["runtime"]["intervalOfDhtSeconds"] = 15;
+  doc["settings"]["runtime"]["showFirebasePushLogs"] = true;
+  doc["settings"]["runtime"]["updatedAtMs"] = 0;
 
   String payload;
   serializeJson(doc, payload);

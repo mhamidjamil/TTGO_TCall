@@ -27,7 +27,8 @@ Firebase Realtime Database is the cloud direction for v8.
 - Command history: `/ttgo_tcall/commands/history`
 - Counters: `/ttgo_tcall/counters`
 - Device status: `/ttgo_tcall/status`
- - Telemetry: `/ttgo_tcall/telemetry`
+- Telemetry: `/ttgo_tcall/telemetry`
+- Runtime settings: `/ttgo_tcall/settings/runtime`
 
 ## Data Model
 
@@ -75,6 +76,18 @@ Telemetry should contain sensor values and a timestamp:
 	"updatedAtMs": 1712345678000
 }
 ```
+
+### Runtime Settings
+Runtime settings should contain telemetry interval and log verbosity controls:
+```json
+{
+	"intervalOfDhtSeconds": 15,
+	"showFirebasePushLogs": true,
+	"updatedAtMs": 1712345678000
+}
+```
+
+If runtime keys are missing or invalid, device firmware should create/heal them with safe defaults and print an operator-facing serial log.
 
 ## Device Auth Direction
 - Realtime Database access should use Firebase Authentication from the device.
@@ -136,3 +149,4 @@ If Firestore is chosen later, the data model and code paths must be rewritten.
 - Duplicate-send prevention is documented.
 - Paths are deterministic and ready for implementation.
 - Setup, rules, and debug steps are complete enough to onboard a new device from scratch.
+- Runtime settings path and healing behavior are documented.

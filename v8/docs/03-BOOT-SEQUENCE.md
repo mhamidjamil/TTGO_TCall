@@ -8,9 +8,11 @@
 6. If STA fails, start AP fallback.
 7. Start web dashboard and API.
 8. Initialize DHT and display managers.
-9. Print startup summary logs including docs URL.
+9. Sync runtime settings from Firebase (`intervalOfDhtSeconds`, `showFirebasePushLogs`).
+10. Print startup summary logs including docs URL.
 
 ## Acceptance Criteria
 - Boot order is deterministic.
 - AP fallback is automatic.
 - Startup logs are concise and professional.
+- Runtime settings are fetched on startup with safe defaults when missing.

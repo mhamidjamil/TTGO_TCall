@@ -11,12 +11,14 @@
 - [x] Create number rules doc.
 - [x] Create API endpoints doc.
 - [x] Create logging standard doc.
+- [x] Create runtime settings sync doc.
 - [x] Create copilot instructions file at repo root.
 
 ### Acceptance
 - All docs exist and agree on scope.
 - All docs reflect the Firebase-first direction.
 - All docs explicitly exclude MQTT.
+- Runtime settings sync and auto-create rules are documented.
 
 ## Phase 2: Scaffold
 - [x] Create v8 runtime folder structure.
