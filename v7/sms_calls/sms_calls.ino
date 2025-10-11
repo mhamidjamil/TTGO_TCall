@@ -38,6 +38,13 @@ DHTManager dht(DHT_PIN, DHT_TYPE);
 // Serial command buffer
 String serialCmd = "";
 
+// extern getters from SMSManager.cpp
+int get_sms_sent_count();
+int get_sms_received_count();
+
+// helper to get call counters
+// CallManager has methods getCallsMade()/getCallsReceived()
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -130,6 +137,21 @@ void loop() {
   dashboard.handleClient();
   smsManager.loop();
   callManager.loop();
+
+  // Refresh display every 3 seconds with real readings and counters
+  static unsigned long lastDisplay = 0;
+  if (millis() - lastDisplay > 3000) {
+    lastDisplay = millis();
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    int sent = get_sms_sent_count();
+    int recvd = get_sms_received_count();
+    int callsMade = callManager.getCallsMade();
+    int callsRecv = callManager.getCallsReceived();
+    bool wifiOk = (WiFi.status() == WL_CONNECTED);
+    bool mqttOk = mqttClient.connected();
+    displayManager.update(t, h, sent, recvd, callsMade, callsRecv, wifiOk, mqttOk);
+  }
 
   // Ensure MQTT loop runs. If disconnected, attempt reconnect every 3s without blocking main loop.
   static unsigned long lastMqttTry = 0;

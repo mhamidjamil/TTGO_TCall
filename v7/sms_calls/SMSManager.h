@@ -17,6 +17,15 @@ public:
   // delete all SMS messages from modem storage
   bool deleteAllMessages();
 
+  // Counters for display / telemetry
+  int getMessagesSent();
+  int getMessagesReceived();
+
+private:
+  // provide accessors to the static counters in implementation
+  friend int get_sms_sent_count();
+  friend int get_sms_received_count();
+
 // (SMSManager uses Serial1 to communicate with the modem)
 
 private:

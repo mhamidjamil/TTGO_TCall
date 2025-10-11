@@ -6,6 +6,13 @@ CallManager::CallManager(ConfigManager &cfgMgr) : cfgMgr(cfgMgr) {}
 
 void CallManager::begin() { Serial.println("CallManager initialized"); }
 
+// counters
+static int _callsMade = 0;
+static int _callsReceived = 0;
+
+int CallManager::getCallsMade() { return _callsMade; }
+int CallManager::getCallsReceived() { return _callsReceived; }
+
 void CallManager::loop() {
   // Placeholder: monitor modem serial for RING and caller ID, call handleIncomingCall
 }
@@ -13,11 +20,13 @@ void CallManager::loop() {
 void CallManager::hangup() {
   // Send AT command to hang up the call - placeholder
   Serial.println("Hangup (placeholder)");
+  _callsMade++;
 }
 
 void CallManager::handleIncomingCall(const String &from) {
   Serial.println("Incoming call from " + from);
   hangup();
+  _callsReceived++;
   forwardEvent("incoming_call", from);
 }
 

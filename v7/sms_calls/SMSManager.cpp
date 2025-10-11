@@ -10,6 +10,13 @@ extern PubSubClient mqttClient;
 
 SMSManager::SMSManager(ConfigManager &cfgMgr) : cfgMgr(cfgMgr), lastPingTime(0) {}
 
+// counters for display
+static int _messagesSent = 0;
+static int _messagesReceived = 0;
+
+int get_sms_sent_count() { return _messagesSent; }
+int get_sms_received_count() { return _messagesReceived; }
+
 void SMSManager::begin() {
   // Serial1 should already be configured in main sketch with modem TX/RX pins and baud
   Serial.println("SMSManager initialized");
@@ -103,6 +110,7 @@ void SMSManager::readAndForwardSms(int index) {
       delay(50);
     }
     Serial.println("[SMSManager] Deleted SMS index " + String(index));
+    _messagesReceived++;
   }
 }
 
@@ -205,6 +213,7 @@ bool SMSManager::sendSms(const String &to, const String &message, String &err) {
 
   if (resp.indexOf("OK") >= 0) {
     forwardEvent("sent_sms", to, message);
+    _messagesSent++;
     return true;
   }
   err = resp;

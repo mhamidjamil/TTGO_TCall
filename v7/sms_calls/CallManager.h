@@ -11,6 +11,9 @@ public:
   void loop();
   void hangup();
 
+  int getCallsMade();
+  int getCallsReceived();
+
 private:
   ConfigManager &cfgMgr;
   void handleIncomingCall(const String &from);
