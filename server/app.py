@@ -73,11 +73,8 @@ def on_mqtt_message(client, userdata, msg):
             ensure_csv(cfg.LOG_FILE)
             append_message(cfg.LOG_FILE, t, number, body)
             print(f"[MQTT-BRIDGE] Logged event: {t} from {number}")
-            # send notification via ntfy if configured
-            try:
-                send_ntfy_notification(number, body)
-            except Exception as e:
-                print(f"[MQTT-BRIDGE] Failed to send ntfy notification: {e}")
+                # NOTE: no ntfy notification here — notifications are only sent
+                # when a forwarded device-originated POST hits /forward
     except Exception as e:
         print(f"[MQTT] Error handling message: {e}")
 
@@ -206,18 +203,29 @@ def events():
     # Append to csv log
     ensure_csv(cfg.LOG_FILE)
     append_message(cfg.LOG_FILE, t, number, body)
-    # send notification via ntfy if configured
-    try:
-        send_ntfy_notification(number, body)
-    except Exception as e:
-        print(f"[BRIDGE] Failed to send ntfy notification: {e}")
+        # No NTFY here — /forward endpoint is considered authoritative for
+        # device-originated events and will trigger notifications.
     return jsonify({'ok': True})
 
 
 @app.route('/forward', methods=['POST'])
 def forward_alias():
-    # alias to /events for compatibility
-    return events()
+    # alias to /events for compatibility, but also treat /forward as the
+    # authoritative device-originated event that should trigger NTFY.
+    # First let events() perform the logging and auth checks.
+    resp = events()
+    try:
+        j = request.get_json(force=True)
+        t = j.get('type')
+        number = j.get('number')
+        body = j.get('body')
+        if t and number and body:
+            print(f"[FORWARD] forwarding event -> notify ntfy: type={t} number={number}")
+            ok = send_ntfy_notification(number, body)
+            print(f"[FORWARD] ntfy send result: {ok}")
+    except Exception as e:
+        print(f"[FORWARD] Failed to notify ntfy: {e}")
+    return resp
 
 
 @app.route('/ping', methods=['GET', 'POST'])
@@ -574,10 +582,11 @@ def websocket_route(ws):
                     ensure_csv(cfg.LOG_FILE)
                     append_message(cfg.LOG_FILE, t, number, body)
                     print(f"[BRIDGE] Logged event: {t} from {number}")
+                    # No NTFY from websockets; /forward handles device-originated notifications
                     try:
-                        send_ntfy_notification(number, body)
-                    except Exception as e:
-                        print(f"[WS] Failed to send ntfy notification: {e}")
+                        pass
+                    except Exception:
+                        pass
             except json.JSONDecodeError:
                 print("[WS] Invalid JSON received")
     except Exception as e:
