@@ -30,6 +30,54 @@ Firebase Realtime Database is the cloud direction for v8.
 - Telemetry: `/ttgo_tcall/telemetry`
 - Runtime settings: `/ttgo_tcall/settings/runtime`
 
+## Folder-Only Shape
+The root `ttgo_tcall` node is now treated as a container for folders only. Leaf variables should live under their parent folders.
+
+### Counters
+```json
+{
+	"sentToday": 12,
+	"sentWeek": 48,
+	"sentMonth": 101,
+	"updatedAtMs": 1712345678000
+}
+```
+
+### Status
+```json
+{
+	"bootTime": "12345ms",
+	"wifiMode": "STA",
+	"ipAddress": "192.168.0.106",
+	"firebaseReady": true,
+	"telemetryPushOk": true,
+	"telemetryMessage": "Telemetry pushed",
+	"updatedAtMs": 1712345678000
+}
+```
+
+### Telemetry
+```json
+{
+	"temperature": 29.4,
+	"humidity": 61.2,
+	"timestamp": 1712345678,
+	"updatedAtMs": 1712345678000
+}
+```
+
+### Runtime Settings
+```json
+{
+	"intervalOfDhtSeconds": 15,
+	"showFirebasePushLogs": true,
+	"dailySmsLimit": 200,
+	"weeklySmsLimit": 950,
+	"monthlySmsLimit": 4900,
+	"updatedAtMs": 1712345678000
+}
+```
+
 ## Data Model
 
 ### Pending Commands
@@ -56,36 +104,18 @@ Each pending command should look like this:
 Store counters as a single snapshot object:
 ```json
 {
-	"daily": 12,
-	"weekly": 48,
-	"monthly": 101,
+	"sentToday": 12,
+	"sentWeek": 48,
+	"sentMonth": 101,
 	"updatedAtMs": 1712345678000
 }
 ```
 
 ### Telemetry
-Telemetry should contain sensor values and a timestamp:
-```json
-{
-	"temperature": 29.4,
-	"humidity": 61.2,
-	"sentToday": 12,
-	"sentWeek": 48,
-	"sentMonth": 101,
-	"timestamp": 1712345678,
-	"updatedAtMs": 1712345678000
-}
-```
+Telemetry should contain sensor values and a timestamp.
 
 ### Runtime Settings
-Runtime settings should contain telemetry interval and log verbosity controls:
-```json
-{
-	"intervalOfDhtSeconds": 15,
-	"showFirebasePushLogs": true,
-	"updatedAtMs": 1712345678000
-}
-```
+Runtime settings should contain telemetry interval, log verbosity, and SMS limit controls.
 
 If runtime keys are missing or invalid, device firmware should create/heal them with safe defaults and print an operator-facing serial log.
 
