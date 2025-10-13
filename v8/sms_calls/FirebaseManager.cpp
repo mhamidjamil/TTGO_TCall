@@ -73,6 +73,24 @@ bool parseIntervalVariant(const JsonVariantConst &variant, uint32_t &outValue) {
   outValue = (uint32_t)parsed;
   return true;
 }
+
+bool parseLimitVariant(const JsonVariantConst &variant, int &outValue) {
+  long parsed = -1;
+  if (variant.is<int>()) {
+    parsed = variant.as<int>();
+  } else if (variant.is<const char *>()) {
+    parsed = String(variant.as<const char *>()).toInt();
+  } else {
+    return false;
+  }
+
+  if (parsed < 0 || parsed > 100000) {
+    return false;
+  }
+
+  outValue = (int)parsed;
+  return true;
+}
 }
 
 bool FirebaseManager::begin(const V8Config &incomingConfig) {
@@ -237,9 +255,9 @@ bool FirebaseManager::updateCounterSnapshot(int dailyCount, int weeklyCount, int
   }
 
   DynamicJsonDocument doc(256);
-  doc["daily"] = dailyCount;
-  doc["weekly"] = weeklyCount;
-  doc["monthly"] = monthlyCount;
+  doc["sentToday"] = dailyCount;
+  doc["sentWeek"] = weeklyCount;
+  doc["sentMonth"] = monthlyCount;
   doc["updatedAtMs"] = millis();
 
   String payload;
@@ -292,9 +310,9 @@ bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, in
     return false;
   }
 
-  dailyCount = doc["daily"] | 0;
-  weeklyCount = doc["weekly"] | 0;
-  monthlyCount = doc["monthly"] | 0;
+  dailyCount = doc["sentToday"] | 0;
+  weeklyCount = doc["sentWeek"] | 0;
+  monthlyCount = doc["sentMonth"] | 0;
   return true;
 }
 
@@ -391,7 +409,7 @@ bool FirebaseManager::authenticate() {
   return true;
 }
 
-bool FirebaseManager::pushTelemetry(float temperature, float humidity, int sentToday, int sentWeek, int sentMonth, unsigned long epochSeconds) {
+bool FirebaseManager::pushTelemetry(float temperature, float humidity, unsigned long epochSeconds) {
   if (!ensureAuthenticated()) {
     return false;
   }
@@ -399,9 +417,6 @@ bool FirebaseManager::pushTelemetry(float temperature, float humidity, int sentT
   DynamicJsonDocument doc(512);
   doc["temperature"] = temperature;
   doc["humidity"] = humidity;
-  doc["sentToday"] = sentToday;
-  doc["sentWeek"] = sentWeek;
-  doc["sentMonth"] = sentMonth;
   doc["timestamp"] = epochSeconds;
   doc["updatedAtMs"] = millis();
 
@@ -456,9 +471,6 @@ bool FirebaseManager::pushLandingSnapshot(float temperature,
                                          int sentToday,
                                          int sentWeek,
                                          int sentMonth,
-                                         int dailyLimit,
-                                         int weeklyLimit,
-                                         int monthlyLimit,
                                          const String &wifiMode,
                                          const String &ipAddress,
                                          bool firebaseReady,
@@ -470,21 +482,20 @@ bool FirebaseManager::pushLandingSnapshot(float temperature,
   }
 
   DynamicJsonDocument doc(1024);
-  doc["temperature"] = temperature;
-  doc["humidity"] = humidity;
-  doc["sentToday"] = sentToday;
-  doc["sentWeek"] = sentWeek;
-  doc["sentMonth"] = sentMonth;
-  doc["dailyLimit"] = dailyLimit;
-  doc["weeklyLimit"] = weeklyLimit;
-  doc["monthlyLimit"] = monthlyLimit;
-  doc["wifiMode"] = wifiMode;
-  doc["ipAddress"] = ipAddress;
-  doc["firebaseReady"] = firebaseReady;
-  doc["telemetryPushOk"] = telemetryPushOk;
-  doc["telemetryMessage"] = telemetryMessage;
-  doc["timestamp"] = epochSeconds;
-  doc["updatedAtMs"] = millis();
+  doc["counters"]["sentToday"] = sentToday;
+  doc["counters"]["sentWeek"] = sentWeek;
+  doc["counters"]["sentMonth"] = sentMonth;
+  doc["counters"]["updatedAtMs"] = millis();
+  doc["telemetry"]["temperature"] = temperature;
+  doc["telemetry"]["humidity"] = humidity;
+  doc["telemetry"]["timestamp"] = epochSeconds;
+  doc["telemetry"]["updatedAtMs"] = millis();
+  doc["status"]["wifiMode"] = wifiMode;
+  doc["status"]["ipAddress"] = ipAddress;
+  doc["status"]["firebaseReady"] = firebaseReady;
+  doc["status"]["telemetryPushOk"] = telemetryPushOk;
+  doc["status"]["telemetryMessage"] = telemetryMessage;
+  doc["status"]["updatedAtMs"] = millis();
 
   String payload;
   serializeJson(doc, payload);
@@ -513,6 +524,9 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
   outSettings = FirebaseRuntimeSettings();
   outSettings.intervalOfDhtSeconds = defaultIntervalOfDhtSeconds;
   outSettings.showFirebasePushLogs = defaultShowFirebasePushLogs;
+  outSettings.dailySmsLimit = config.dailySmsLimit;
+  outSettings.weeklySmsLimit = config.weeklySmsLimit;
+  outSettings.monthlySmsLimit = config.monthlySmsLimit;
 
   String runtimePath = rootPathFromConfig() + String("/settings/runtime");
   String response;
@@ -556,11 +570,38 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       outSettings.createdShowFirebasePushLogs = true;
       shouldWriteBack = true;
     }
+
+    int dailyLimitParsed = 0;
+    if (parseLimitVariant(root["dailySmsLimit"], dailyLimitParsed)) {
+      outSettings.dailySmsLimit = dailyLimitParsed;
+    } else {
+      outSettings.createdDailySmsLimit = true;
+      shouldWriteBack = true;
+    }
+
+    int weeklyLimitParsed = 0;
+    if (parseLimitVariant(root["weeklySmsLimit"], weeklyLimitParsed)) {
+      outSettings.weeklySmsLimit = weeklyLimitParsed;
+    } else {
+      outSettings.createdWeeklySmsLimit = true;
+      shouldWriteBack = true;
+    }
+
+    int monthlyLimitParsed = 0;
+    if (parseLimitVariant(root["monthlySmsLimit"], monthlyLimitParsed)) {
+      outSettings.monthlySmsLimit = monthlyLimitParsed;
+    } else {
+      outSettings.createdMonthlySmsLimit = true;
+      shouldWriteBack = true;
+    }
   }
 
   if (shouldWriteBack) {
     writeDoc["intervalOfDhtSeconds"] = outSettings.intervalOfDhtSeconds;
     writeDoc["showFirebasePushLogs"] = outSettings.showFirebasePushLogs;
+    writeDoc["dailySmsLimit"] = outSettings.dailySmsLimit;
+    writeDoc["weeklySmsLimit"] = outSettings.weeklySmsLimit;
+    writeDoc["monthlySmsLimit"] = outSettings.monthlySmsLimit;
     writeDoc["updatedAtMs"] = millis();
 
     String payload;
@@ -589,9 +630,9 @@ bool FirebaseManager::bootstrapPaths() {
   DynamicJsonDocument doc(1024);
   doc["commands"]["pending"] = JsonObject();
   doc["commands"]["history"] = JsonObject();
-  doc["counters"]["daily"] = 0;
-  doc["counters"]["weekly"] = 0;
-  doc["counters"]["monthly"] = 0;
+  doc["counters"]["sentToday"] = 0;
+  doc["counters"]["sentWeek"] = 0;
+  doc["counters"]["sentMonth"] = 0;
   doc["counters"]["updatedAtMs"] = 0;
   doc["status"]["firebaseReady"] = true;
   doc["status"]["updatedAtMs"] = 0;
@@ -601,6 +642,9 @@ bool FirebaseManager::bootstrapPaths() {
   doc["telemetry"]["updatedAtMs"] = 0;
   doc["settings"]["runtime"]["intervalOfDhtSeconds"] = 15;
   doc["settings"]["runtime"]["showFirebasePushLogs"] = true;
+  doc["settings"]["runtime"]["dailySmsLimit"] = 200;
+  doc["settings"]["runtime"]["weeklySmsLimit"] = 950;
+  doc["settings"]["runtime"]["monthlySmsLimit"] = 4900;
   doc["settings"]["runtime"]["updatedAtMs"] = 0;
 
   String payload;
