@@ -1,103 +1,161 @@
-# TTgo T-Call ESP32 Module Project
+# TTGO T-Call ESP32 Module Project
 
-![TTgo T-Call](https://www.cnx-software.com/wp-content/uploads/2019/07/TTGO-T-call-Pinout-Diagram-Large.jpg)
+This repository tracks the evolution of the TTGO T-Call ESP32 firmware across multiple versions. The current work is centered on v8, which uses Firebase Realtime Database as the cloud control plane and keeps the device behavior modular, observable, and safe to operate.
 
-This project utilizes the TTgo T-Call ESP32 module to perform various tasks such as making calls, sending and receiving SMS messages, checking battery status, and more. The project is implemented using Arduino and the TinyGSM library, allowing communication with the SIM800 modem on the TTgo T-Call module.
+## What This Repository Contains
 
-## Table of Contents
+- v5: legacy SMS and number-handling behavior reference.
+- v6: intermediate modular managers.
+- v7: modular reference implementation.
+- v8: current Firebase-first runtime with folder-based Realtime Database structure.
 
-- [Introduction](#introduction)
-- [Hardware Requirements](#hardware-requirements)
-- [Library Dependencies](#library-dependencies)
-- [Getting Started](#getting-started)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [AT Commands](#at-commands)
+## Why v5 Still Matters
 
-## Introduction
+v5 is the legacy behavior reference for SMS handling, number normalization, and the older device flow. When changing how SMS destinations, allowlists, or message processing work, v5 remains the compatibility baseline.
 
-The TTgo T-Call ESP32 module is a powerful IoT development board that integrates the ESP32 microcontroller and the SIM800 modem, allowing cellular communication. This project provides a basic implementation of interacting with the SIM800 modem using AT commands and performing essential functionalities like making calls, sending SMS, checking battery status, and managing received messages.
+The community should read v5 as the preserved behavior source, not as the newest architecture.
 
-## Hardware Requirements
+## What v8 Changes
 
-To run this project, you will need the following hardware components:
+v8 is the current direction for the project. It keeps the same TTGO T-Call hardware but modernizes the runtime:
 
-- TTgo T-Call ESP32 module
-- SIM card with an active mobile number (ensure it is not PIN-locked)
-- USB-C cable for power and debugging
-- A computer with the Arduino IDE and necessary drivers installed
+- Firebase Realtime Database is the primary cloud path.
+- Commands are polled from Firebase.
+- Device telemetry is pushed to Firebase.
+- Runtime settings can be read from Firebase and healed automatically if missing.
+- SPIFFS remains the local fallback for configuration.
+- AP fallback remains intentional and documented.
+- MQTT is not part of v8.
 
-## Library Dependencies
+## Current Firebase Flow
 
-The project relies on the following libraries, which need to be installed in your Arduino IDE:
+The RTDB tree is now organized so the root node is only a container. Leaf values live under their parent folders.
 
-- [TinyGSM](https://github.com/vshymanskyy/TinyGSM): This library provides support for communicating with GSM modules using AT commands.
-- [Wire](https://www.arduino.cc/en/reference/wire): The Wire library enables I2C communication with the TTgo T-Call's power management IC (IP5306).
+### Main Tree
 
-## Getting Started
+- `/ttgo_tcall/commands/pending`
+- `/ttgo_tcall/commands/history`
+- `/ttgo_tcall/counters`
+- `/ttgo_tcall/status`
+- `/ttgo_tcall/telemetry`
+- `/ttgo_tcall/settings/runtime`
 
-To get started with the project, follow these steps:
+### Counters Folder
 
-1. Install the Arduino IDE and ensure that you have the ESP32 board package installed.
-2. Install the necessary libraries: TinyGSM and Wire (if not already installed).
-3. Connect your TTgo T-Call ESP32 module to your computer using the USB-C cable.
-4. Open the `TTgo_T-Call_ESP32_Module_Project.ino` file in the Arduino IDE.
-5. Modify the `MOBILE_No` constant to your desired mobile number.
-6. Upload the sketch to your TTgo T-Call module.
-7. Open the Serial Monitor in the Arduino IDE to view the output and interact with the module.
+This folder stores SMS usage counters.
 
-## Configuration
+- `sentToday`
+- `sentWeek`
+- `sentMonth`
+- `updatedAtMs`
 
-Before uploading the sketch to your TTgo T-Call module, you may need to modify certain configurations:
+### Status Folder
 
-- **SIM card PIN**: If your SIM card has a PIN, update the `simPIN` constant with your SIM card's PIN code. If there is no PIN, leave it as an empty string.
+This folder stores device and last-sync status.
 
-## Usage
+- `bootTime`
+- `wifiMode`
+- `ipAddress`
+- `firebaseReady`
+- `telemetryPushOk`
+- `telemetryMessage`
+- `updatedAtMs`
 
-Once the sketch is uploaded to your TTgo T-Call module, you can use the Serial Monitor to interact with the module. The following commands are available:
+### Telemetry Folder
 
-- `call`: Initiate a call to the mobile number specified in the `MOBILE_No` constant.
-- `sms: <message>`: Send an SMS with the specified `<message>` to the mobile number in the `MOBILE_No` constant.
-- `module`: Check for unread messages and display the last received message and its index.
-- `battery`: Check the battery voltage of the TTgo T-Call module.
+This folder stores sensor telemetry.
 
-## AT Commands
+- `temperature`
+- `humidity`
+- `timestamp`
+- `updatedAtMs`
 
-The project uses AT commands to communicate with the SIM800 modem. Here are some useful AT commands that you can use:
+### Runtime Settings Folder
 
-```cpp
-// List all SMS messages
-AT+CMGL="ALL"
+This folder stores values that can be controlled from Firebase without reflashing the device.
 
-// Read SMS message at index 1
-AT+CMGR=1
+- `intervalOfDhtSeconds`
+- `showFirebasePushLogs`
+- `dailySmsLimit`
+- `weeklySmsLimit`
+- `monthlySmsLimit`
+- `updatedAtMs`
 
-// Delete SMS message at index 1
-AT+CMGD=1
+If a runtime key is missing, invalid, or unreadable, the firmware creates or heals it with a safe default and prints a serial message so the operator knows what happened.
 
-// Enable missed call notification
-AT+CLIP=1
+## Runtime Behavior
 
-// Make a call to +923354888420
-ATD+923354888420;
+At startup the device will:
 
-// Hang up the current call
-AT+CHUP
+1. Initialize hardware and modem components.
+2. Connect to WiFi or fall back to AP mode if needed.
+3. Authenticate to Firebase.
+4. Bootstrap missing RTDB folders and safe defaults.
+5. Read runtime settings from `/ttgo_tcall/settings/runtime`.
+6. Apply the current telemetry interval and SMS limits.
+7. Print startup summary logs.
 
-// Check if registered to the network
-AT+CREG?
+Runtime settings are then refreshed:
 
-// Check signal quality
-AT+CSQ
+- on startup
+- every 10 minutes
+- immediately when the user types `sync` in the serial terminal
 
-// Check battery voltage
-AT+CBC
+If `showFirebasePushLogs` is set to `false`, the device keeps sending telemetry but stops printing the repeated success lines for Firebase pushes.
 
-// Enable verbose error messages
-AT+CMEE=2
+## Serial Commands
 
-// Disable verbose error messages
-AT+CMEE=0
+The serial terminal currently supports these commands:
 
-// Check if verbose error messages are enabled
-AT+CMEE?
+- `dht`: print the current temperature and humidity.
+- `status`: print WiFi mode, IP address, and Firebase readiness.
+- `sync`: force an immediate refresh of runtime settings from Firebase.
+- `help`: list all available serial commands.
+
+The rule for this project is simple: every new serial command must also be added to the `help` output in the same change.
+
+## Firebase Console Notes
+
+For v8, Realtime Database should be enabled and the device should have a valid Firebase Authentication path.
+
+Recommended development rules:
+
+```json
+{
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null"
+  }
+}
+```
+
+The device uses its configured RTDB URL directly. If Firebase returns a region-corrected URL, the firmware can now detect that and self-correct.
+
+## Project Rules Worth Remembering
+
+- v5 is the legacy behavior reference.
+- v7 is the modular reference.
+- v8 must not include MQTT.
+- AP fallback must be intentional.
+- SPIFFS must remain the local persistence fallback.
+- Firebase device access is Realtime Database first for v8.
+- Missing Firebase runtime keys are auto-created or healed.
+- New serial commands must be documented in `help`.
+
+## Documentation Index
+
+The versioned implementation docs live under `v8/docs/` and cover the implementation checklist, feature inventory, pin map, boot sequence, config precedence, Firebase design, rate limiting, number rules, API endpoints, logging standards, server SMS flow, and runtime settings sync.
+
+If you are working on the code, start with the v8 docs first and keep them aligned with the firmware behavior.
+
+## Hardware Summary
+
+The project targets the TTGO T-Call ESP32 module with SIM800 modem support, DHT sensor telemetry, display output, and local web dashboard access.
+
+## Library Notes
+
+The firmware uses Arduino-compatible libraries, WiFi, HTTP client support, Firebase authentication, and SPIFFS-backed local persistence.
+
+## Final Note
+
+This repository is no longer just a demo sketch. It now contains a layered firmware history and a structured v8 runtime that can be expanded safely without turning the Firebase tree into a flat, hard-to-maintain key dump.
