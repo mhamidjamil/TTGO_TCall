@@ -14,6 +14,15 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 - `showFirebasePushLogs` (boolean)
   - Meaning: controls periodic serial info logs for telemetry and landing snapshot push success.
   - Default: `true`
+- `dailySmsLimit` (number)
+  - Meaning: daily SMS cap used by the rate limiter.
+  - Default: `200`
+- `weeklySmsLimit` (number)
+  - Meaning: weekly SMS cap used by the rate limiter.
+  - Default: `950`
+- `monthlySmsLimit` (number)
+  - Meaning: monthly SMS cap used by the rate limiter.
+  - Default: `4900`
 
 ## Sync Strategy
 1. Startup: device fetches runtime settings.
@@ -24,6 +33,7 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 ## Operator Visibility
 - If a runtime variable is created or healed, print a clear serial message.
 - If a runtime variable changes, print old value and new value in a readable block.
+- The Firebase root should stay folder-only; runtime settings belong under `/ttgo_tcall/settings/runtime`.
 
 ## Acceptance Criteria
 - Missing runtime variables are auto-created.
