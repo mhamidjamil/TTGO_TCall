@@ -16,8 +16,14 @@ struct FirebaseCommand {
 struct FirebaseRuntimeSettings {
   uint32_t intervalOfDhtSeconds = 15;
   bool showFirebasePushLogs = true;
+  int dailySmsLimit = 200;
+  int weeklySmsLimit = 950;
+  int monthlySmsLimit = 4900;
   bool createdIntervalOfDht = false;
   bool createdShowFirebasePushLogs = false;
+  bool createdDailySmsLimit = false;
+  bool createdWeeklySmsLimit = false;
+  bool createdMonthlySmsLimit = false;
 };
 
 class FirebaseManager {
@@ -29,16 +35,13 @@ public:
   bool updateCommandStatus(const FirebaseCommand &command, const String &status, const String &errorReason = String());
   bool updateCounterSnapshot(int dailyCount, int weeklyCount, int monthlyCount);
   bool fetchCounterSnapshot(int &dailyCount, int &weeklyCount, int &monthlyCount);
-  bool pushTelemetry(float temperature, float humidity, int sentToday, int sentWeek, int sentMonth, unsigned long epochSeconds);
+  bool pushTelemetry(float temperature, float humidity, unsigned long epochSeconds);
   bool pushStartupStatus(const String &bootTime, const String &wifiMode, const String &ipAddress, bool firebaseReady);
   bool pushLandingSnapshot(float temperature,
                            float humidity,
                            int sentToday,
                            int sentWeek,
                            int sentMonth,
-                           int dailyLimit,
-                           int weeklyLimit,
-                           int monthlyLimit,
                            const String &wifiMode,
                            const String &ipAddress,
                            bool firebaseReady,
