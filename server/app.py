@@ -557,6 +557,132 @@ def download_log():
     return send_file(cfg.LOG_FILE, as_attachment=True)
 
 
+def _parse_date_param(s: str):
+    """Parse a YYYY-MM-DD date string to a date object. Return None if s is falsy."""
+    if not s:
+        return None
+    try:
+        from datetime import datetime
+        return datetime.strptime(s, '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _filter_log_rows(start_date, end_date):
+    """Yield rows from the log file whose timestamp date is between start_date and end_date inclusive.
+
+    start_date/end_date are datetime.date objects. If either is None it's unbounded on that side.
+    """
+    import csv
+    from datetime import datetime
+    ensure_csv(cfg.LOG_FILE)
+    with open(cfg.LOG_FILE, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ts = row.get('timestamp')
+            if not ts:
+                continue
+            # handle ISO format with optional Z
+            try:
+                if ts.endswith('Z'):
+                    ts = ts[:-1]
+                dt = datetime.fromisoformat(ts)
+            except Exception:
+                # fallback: try parse as date
+                try:
+                    dt = datetime.strptime(ts, '%Y-%m-%d')
+                except Exception:
+                    continue
+            d = dt.date()
+            if start_date and d < start_date:
+                continue
+            if end_date and d > end_date:
+                continue
+            yield row
+
+
+@app.route('/logs', methods=['GET'])
+def logs_view():
+    """Return JSON list of log rows filtered by date range.
+
+    Query parameters:
+      - start=YYYY-MM-DD
+      - end=YYYY-MM-DD
+      - days=N   (if provided and start omitted, start = today - (N-1) days)
+
+    If no params are provided, defaults to last 7 days.
+    """
+    from datetime import date, timedelta
+
+    start_q = request.args.get('start')
+    end_q = request.args.get('end')
+    days_q = request.args.get('days')
+
+    end_date = _parse_date_param(end_q)
+    start_date = _parse_date_param(start_q)
+
+    if not start_date and days_q:
+        try:
+            n = int(days_q)
+            end_date = end_date or date.today()
+            start_date = end_date - timedelta(days=max(n-1, 0))
+        except Exception:
+            return jsonify({'error': 'invalid days parameter'}), 400
+
+    # default last 7 days
+    if not start_date and not end_date:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=6)
+
+    # if only start provided, set end to start
+    if start_date and not end_date:
+        end_date = start_date
+
+    rows = list(_filter_log_rows(start_date, end_date))
+    return jsonify({'start': start_date.isoformat(), 'end': end_date.isoformat(), 'count': len(rows), 'rows': rows})
+
+
+@app.route('/logs/download', methods=['GET'])
+def logs_download():
+    """Download filtered CSV of logs using same query parameters as /logs."""
+    from datetime import date, timedelta
+
+    start_q = request.args.get('start')
+    end_q = request.args.get('end')
+    days_q = request.args.get('days')
+
+    end_date = _parse_date_param(end_q)
+    start_date = _parse_date_param(start_q)
+    if not start_date and days_q:
+        try:
+            n = int(days_q)
+            end_date = end_date or date.today()
+            start_date = end_date - timedelta(days=max(n-1, 0))
+        except Exception:
+            return jsonify({'error': 'invalid days parameter'}), 400
+    if not start_date and not end_date:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=6)
+    if start_date and not end_date:
+        end_date = start_date
+
+    # create a temporary CSV in-memory
+    import io, csv
+    output = io.StringIO()
+    writer = None
+    count = 0
+    for row in _filter_log_rows(start_date, end_date):
+        if writer is None:
+            fieldnames = list(row.keys())
+            writer = csv.DictWriter(output, fieldnames=fieldnames)
+            writer.writeheader()
+        writer.writerow(row)
+        count += 1
+    output.seek(0)
+    # return as attachment
+    return send_file(io.BytesIO(output.getvalue().encode('utf-8')), mimetype='text/csv', as_attachment=True, download_name=f'filtered_logs_{start_date.isoformat()}_{end_date.isoformat()}.csv')
+
+
 @app.route('/device_ips', methods=['GET'])
 def list_device_ips():
     # Return the in-memory device IP mapping (persisted to device_ips.json)

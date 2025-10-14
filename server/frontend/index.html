@@ -46,7 +46,31 @@
 
         <div class="card">
           <h3>Logs</h3>
-          <a id="downloadLog" href="/download_log">Download CSV</a>
+          <div>
+            <button id="seeLogsBtn">See Logs</button>
+            <a id="downloadLog" href="/download_log">Download CSV (all)</a>
+          </div>
+
+          <!-- Logs modal / panel -->
+          <div id="logsModal" class="hidden modal">
+            <div class="modal-content card">
+              <h4>View Logs</h4>
+              <div class="form-row">
+                <label>Start (YYYY-MM-DD): <input id="logStart" type="date"></label>
+                <label>End (YYYY-MM-DD): <input id="logEnd" type="date"></label>
+                <label>Days (optional): <input id="logDays" type="number" min="1" placeholder="e.g. 7"></label>
+              </div>
+              <div class="form-row">
+                <button id="showLogsBtn">Show</button>
+                <a id="downloadFiltered" class="button" href="#">Download CSV (filtered)</a>
+                <button id="closeLogsBtn">Close</button>
+              </div>
+              <div id="logsResult">
+                <p id="logsMeta" class="muted"></p>
+                <div id="logsOut" style="max-height:300px;overflow:auto"></div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 

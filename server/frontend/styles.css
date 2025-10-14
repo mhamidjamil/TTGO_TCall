@@ -11,3 +11,12 @@ button:disabled{opacity:.6}
 .hidden{display:none}
 pre{background:#f3f4f6;padding:8px;border-radius:6px;overflow:auto}
 footer{margin-top:20px;color:#999}
+
+/* modal */
+.modal{position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:1000}
+.modal .modal-content{width:90%;max-width:800px}
+.modal.hidden{display:none}
+.form-row{display:flex;gap:12px;align-items:center;margin:8px 0}
+.logs-table{width:100%;border-collapse:collapse}
+.logs-table th,.logs-table td{border:1px solid #eee;padding:6px;text-align:left;font-size:13px}
+.logs-table thead{background:#fafafa}

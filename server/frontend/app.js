@@ -42,10 +42,69 @@
     const text = await res.text(); $('msgsOut').textContent = text;
   }
 
+  /* Logs UI handlers */
+  function openLogsModal(){
+    $('logsModal').classList.remove('hidden');
+  }
+  function closeLogsModal(){
+    $('logsModal').classList.add('hidden');
+  }
+
+  function buildQueryParams(params){
+    const esc = encodeURIComponent;
+    return Object.keys(params).filter(k=>params[k]!=null && params[k] !== '').map(k=>`${esc(k)}=${esc(params[k])}`).join('&');
+  }
+
+  async function showLogs(){
+    const start = $('logStart').value;
+    const end = $('logEnd').value;
+    const days = $('logDays').value;
+    const qp = buildQueryParams({start:start, end:end, days: days});
+    const url = '/logs' + (qp ? ('?' + qp) : '');
+    const res = await fetch(url, {headers: getHeaders()});
+    if (!res.ok){
+      $('logsOut').textContent = 'Failed to fetch logs: ' + res.status;
+      return;
+    }
+    const j = await res.json();
+    $('logsMeta').textContent = `Showing ${j.count} rows from ${j.start} to ${j.end}`;
+    // render table
+    const rows = j.rows || [];
+    if (rows.length === 0){
+      $('logsOut').textContent = 'No rows';
+      $('downloadFiltered').href = '#';
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'logs-table';
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    const cols = ['timestamp','type','number','body'];
+    cols.forEach(k=>{ const th = document.createElement('th'); th.textContent = k; headerRow.appendChild(th); });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    rows.forEach(r=>{
+      const tr = document.createElement('tr');
+      cols.forEach(c=>{ const td = document.createElement('td'); td.textContent = r[c] || ''; tr.appendChild(td); });
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    const out = $('logsOut'); out.innerHTML = ''; out.appendChild(table);
+
+    // update download link
+    const dl = '/logs/download' + (qp ? ('?' + qp) : '');
+    $('downloadFiltered').href = dl;
+  }
+
   $('loginBtn').addEventListener('click', login);
   $('refreshStatus').addEventListener('click', loadStatus);
   $('sendBtn').addEventListener('click', sendSms);
   $('fetchMsgs').addEventListener('click', fetchMsgs);
   $('deleteMsgs').addEventListener('click', deleteMsgs);
+  // logs
+  const seeLogsBtn = $('seeLogsBtn'); if (seeLogsBtn) seeLogsBtn.addEventListener('click', openLogsModal);
+  const closeLogsBtn = $('closeLogsBtn'); if (closeLogsBtn) closeLogsBtn.addEventListener('click', ()=>{ closeLogsModal(); $('logsOut').innerHTML=''; $('logsMeta').textContent=''; $('logStart').value=''; $('logEnd').value=''; $('logDays').value=''; });
+  const showLogsBtn = $('showLogsBtn'); if (showLogsBtn) showLogsBtn.addEventListener('click', showLogs);
 
 })();
