@@ -1,6 +1,12 @@
+#include <Arduino.h>
 #include "SMSManager.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <WiFiClient.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+extern PubSubClient mqttClient;
 
 SMSManager::SMSManager(ConfigManager &cfgMgr) : cfgMgr(cfgMgr), lastPingTime(0) {}
 
@@ -286,26 +292,21 @@ void SMSManager::handleIncomingSms(const String &from, const String &body) {
 }
 
 void SMSManager::forwardEvent(const String &type, const String &number, const String &body) {
-  Config c = cfgMgr.get();
-  if (c.forwardUrl.length() == 0) return;
-
-  HTTPClient http;
-  http.begin(c.forwardUrl);
-  http.addHeader("Content-Type", "application/json");
-  if (c.forwardApiKey.length()) http.addHeader("X-Api-Key", c.forwardApiKey);
-
+  // Send via WebSocket
   StaticJsonDocument<256> doc;
   doc["type"] = type;
   doc["number"] = number;
   doc["body"] = body;
 
-  String b;
-  serializeJson(doc, b);
-  int code = http.POST(b);
-  if (code > 0) {
-    Serial.println("Forwarded event, response: " + http.getString());
+  String jsonStr;
+  serializeJson(doc, jsonStr);
+  // Publish to MQTT topic for this device on the broker
+  String clientId = WiFi.macAddress();
+  String topic = String("ttgo/") + clientId + "/events";
+  if (mqttClient.connected()) {
+    mqttClient.publish(topic.c_str(), jsonStr.c_str());
+    Serial.println("Forwarded event via MQTT: " + jsonStr + " to " + topic);
   } else {
-    Serial.println("Failed to forward event: " + String(code));
+    Serial.println("MQTT not connected - cannot forward event: " + jsonStr);
   }
-  http.end();
 }

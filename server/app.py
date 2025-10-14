@@ -1,17 +1,25 @@
 from flask import Flask, request, jsonify, send_file, session, send_from_directory
 from flasgger import Swagger, swag_from
 from flask_httpauth import HTTPTokenAuth
+from flask_sock import Sock
 import requests
 import json
 import os
 from utils import append_message, ensure_csv
 from config import Config
+import threading
+import time
+import paho.mqtt.client as mqtt
+import os
 
 # file to persist device IP mappings provided via ping.set_ip
 DEVICE_IPS_FILE = os.path.join(os.path.dirname(__file__), 'device_ips.json')
 
 # in-memory mapping: device_key -> { ip, remote_addr, updated }
 device_ips = {}
+connected_clients = 0
+known_devices = set()
+mqtt_client = None
 
 
 def load_device_ips():
@@ -27,12 +35,88 @@ def load_device_ips():
         device_ips = {}
 
 
+
 def save_device_ips():
     try:
         with open(DEVICE_IPS_FILE, 'w') as f:
             json.dump(device_ips, f)
     except Exception as e:
         print(f"[BRIDGE] Failed saving device ips: {e}")
+
+
+def on_mqtt_connect(client, userdata, flags, rc):
+    print(f"[MQTT] Connected with result code {rc}")
+    # subscribe to events/status/auth topics for all devices so we learn connected devices
+    client.subscribe("ttgo/+/events")
+    client.subscribe("ttgo/+/status")
+    client.subscribe("ttgo/+/auth")
+
+
+def on_mqtt_message(client, userdata, msg):
+    try:
+        payload = msg.payload.decode('utf-8')
+        print(f"[MQTT] Message on {msg.topic}: {payload}")
+        # topic: ttgo/<clientId>/events
+        parts = msg.topic.split('/')
+        if len(parts) >= 3:
+            clientId = parts[1]
+            topic_tail = parts[2]
+            # treat status/auth/events as device presence indicators
+            if topic_tail in ('events', 'status', 'auth'):
+                known_devices.add(clientId)
+        # try parse JSON and log
+        j = json.loads(payload)
+        t = j.get('type')
+        number = j.get('number')
+        body = j.get('body')
+        if t and number and body:
+            ensure_csv(cfg.LOG_FILE)
+            append_message(cfg.LOG_FILE, t, number, body)
+            print(f"[MQTT-BRIDGE] Logged event: {t} from {number}")
+            # send notification via ntfy if configured
+            try:
+                send_ntfy_notification(number, body)
+            except Exception as e:
+                print(f"[MQTT-BRIDGE] Failed to send ntfy notification: {e}")
+    except Exception as e:
+        print(f"[MQTT] Error handling message: {e}")
+
+
+def start_mqtt():
+    global mqtt_client
+    broker = os.getenv('MQTT_BROKER', 'test.mosquitto.org')
+    port = int(os.getenv('MQTT_PORT', '1883'))
+    mqtt_client = mqtt.Client()
+    mqtt_client.on_connect = on_mqtt_connect
+    mqtt_client.on_message = on_mqtt_message
+    try:
+        mqtt_client.connect(broker, port, 60)
+    except Exception as e:
+        print(f"[MQTT] Failed to connect to {broker}:{port} - {e}")
+        return
+    thread = threading.Thread(target=mqtt_client.loop_forever, daemon=True)
+    thread.start()
+
+
+def send_ntfy_notification(number, body):
+    """Send an ntfy notification for incoming SMS if NTFY_SERVER_URL and SMS_NTFY_TOPIC are set in env."""
+    ntfy_url = os.getenv('NTFY_SERVER_URL')
+    topic = os.getenv('SMS_NTFY_TOPIC')
+    if not ntfy_url or not topic:
+        return False
+    try:
+        # Compose a simple text notification
+        text = f"SMS from {number}: {body}"
+        url = ntfy_url.rstrip('/') + '/' + topic
+        headers = {'Content-Type': 'text/plain'}
+        # Optionally include title header for ntfy
+        headers['X-Title'] = 'Incoming SMS'
+        resp = requests.post(url, data=text.encode('utf-8'), headers=headers, timeout=5)
+        print(f"[NTFY] POST {url} -> {resp.status_code}")
+        return resp.ok
+    except Exception as e:
+        print(f"[NTFY] Error sending notification: {e}")
+        return False
 
 app = Flask(__name__)
 app.config['SWAGGER'] = {
@@ -42,9 +126,13 @@ app.config['SWAGGER'] = {
 app.secret_key = os.getenv('FLASK_SECRET', 'replace-this-with-a-secret')
 swagger = Swagger(app)
 auth = HTTPTokenAuth(scheme='ApiKey')
+sock = Sock(app)
 
 # load config from env or file
 cfg = Config()
+
+# List of connected WebSocket clients
+connected_ws = []
 
 @auth.verify_token
 def verify_token(token):
@@ -118,6 +206,11 @@ def events():
     # Append to csv log
     ensure_csv(cfg.LOG_FILE)
     append_message(cfg.LOG_FILE, t, number, body)
+    # send notification via ntfy if configured
+    try:
+        send_ntfy_notification(number, body)
+    except Exception as e:
+        print(f"[BRIDGE] Failed to send ntfy notification: {e}")
     return jsonify({'ok': True})
 
 
@@ -270,7 +363,8 @@ def dashboard_status():
         'device_port': cfg.DEVICE_PORT,
         'device_ips': device_ips,
         'log_file': cfg.LOG_FILE,
-        'use_api_secret': cfg.USE_API_SECRET
+        'use_api_secret': cfg.USE_API_SECRET,
+        'websocket_connected': len(connected_ws) > 0
     })
 
 
@@ -358,34 +452,95 @@ def send():
     if not to or not msg:
         return jsonify({'error': 'missing fields'}), 400
 
-    # proxy to ESP32 device
-    device_key = None
-    xsecret = request.headers.get('X-Api-Secret')
-    if xsecret:
-        device_key = f"secret:{xsecret}"
-    else:
+    # Send via MQTT to device(s) if available
+    message = json.dumps({'command': 'send_sms', 'to': to, 'message': msg})
+    published = False
+    if mqtt_client:
+        # If request provided a specific X-Device-Id header, target that device
         device_hdr = request.headers.get('X-Device-Id')
         if device_hdr:
-            device_key = f"id:{device_hdr}"
-        else:
-            device_key = f"addr:{request.remote_addr}"
+            topic = f"ttgo/{device_hdr}/cmd"
+            try:
+                mqtt_client.publish(topic, message)
+                print(f"[BRIDGE] Published SMS to {topic}")
+                published = True
+            except Exception as e:
+                print(f"[BRIDGE] Failed to publish to {topic}: {e}")
 
-    host_to_use = cfg.DEVICE_HOST
-    if device_key in device_ips and 'ip' in device_ips[device_key] and device_ips[device_key]['ip']:
-        host_to_use = device_ips[device_key]['ip']
+        # If we haven't published yet, publish to known devices
+        if not published and known_devices:
+            for clientId in list(known_devices):
+                topic = f"ttgo/{clientId}/cmd"
+                try:
+                    mqtt_client.publish(topic, message)
+                    print(f"[BRIDGE] Published SMS to {topic}")
+                    published = True
+                except Exception as e:
+                    print(f"[BRIDGE] Failed to publish to {topic}: {e}")
 
-    device_url = f"http://{host_to_use}:{cfg.DEVICE_PORT}/api/send_sms"
-    headers = {'Content-Type': 'application/json'}
-    if cfg.USE_API_SECRET and cfg.API_SECRET:
-        headers['X-Api-Secret'] = cfg.API_SECRET
+        # If still not published, send to a broadcast topic which devices may subscribe to
+        if not published:
+            try:
+                mqtt_client.publish('ttgo/all/cmd', message)
+                print("[BRIDGE] Published SMS to broadcast ttgo/all/cmd")
+                published = True
+            except Exception as e:
+                print(f"[BRIDGE] Failed to publish broadcast: {e}")
+    # Try HTTP proxy to device only if explicitly enabled via env ENABLE_HTTP_PROXY=1
+    http_sent = False
+    if os.getenv('ENABLE_HTTP_PROXY', '0') == '1':
+        try:
+            print("[BRIDGE] HTTP proxy enabled - attempting HTTP proxy to device")
+            # Determine device key similar to messages_list
+            device_key = None
+            xsecret = request.headers.get('X-Api-Secret')
+            if xsecret:
+                device_key = f"secret:{xsecret}"
+            else:
+                device_hdr = request.headers.get('X-Device-Id')
+                if device_hdr:
+                    device_key = f"id:{device_hdr}"
+                else:
+                    device_key = f"addr:{request.remote_addr}"
 
-    print(f"[BRIDGE] Proxying send to device {device_url} headers={headers} payload={{'to':{to},'message':{msg}}}")
-    resp = requests.post(device_url, json={'to': to, 'message': msg}, headers=headers, timeout=10)
-    out = {'status_code': resp.status_code, 'text': resp.text}
-    # log outgoing message
+            host_to_use = cfg.DEVICE_HOST
+            if device_key in device_ips and 'ip' in device_ips[device_key] and device_ips[device_key]['ip']:
+                host_to_use = device_ips[device_key]['ip']
+
+            if host_to_use:
+                device_url = f"http://{host_to_use}:{cfg.DEVICE_PORT}/api/send_sms"
+                headers = {'Content-Type': 'application/json'}
+                if cfg.USE_API_SECRET and cfg.API_SECRET:
+                    headers['X-Api-Secret'] = cfg.API_SECRET
+                resp = requests.post(device_url, headers=headers, json={'to': to, 'message': msg}, timeout=10)
+                print(f"[BRIDGE] HTTP proxy POST to {device_url} -> {resp.status_code}")
+                if resp.ok:
+                    http_sent = True
+        except Exception as e:
+            print(f"[BRIDGE] HTTP proxy failed: {e}")
+    else:
+        print("[BRIDGE] HTTP proxy disabled by configuration; skipping HTTP attempts")
+
+    # If still not delivered via MQTT or HTTP, fallback to WebSocket clients
+    if not published and not http_sent:
+        print(f"[BRIDGE] Sending SMS via WebSocket to {to}: {msg}")
+        for ws in connected_ws:
+            try:
+                ws.send(message)
+                print(f"[BRIDGE] Sent to WebSocket client")
+            except Exception as e:
+                print(f"[BRIDGE] Failed to send to WebSocket: {e}")
+    
+    # Log outgoing message
     ensure_csv(cfg.LOG_FILE)
     append_message(cfg.LOG_FILE, 'outgoing', to, msg)
-    return jsonify(out), resp.status_code
+    if http_sent:
+        return jsonify({'status_code': 200, 'text': 'Sent via HTTP to device'}), 200
+    if mqtt_client and published:
+        return jsonify({'status_code': 200, 'text': 'Published via MQTT'}), 200
+    if connected_ws:
+        return jsonify({'status_code': 200, 'text': 'Sent via WebSocket'}), 200
+    return jsonify({'status_code': 200, 'text': 'Queued (no active transport)'}), 200
 
 
 @app.route('/download_log', methods=['GET'])
@@ -400,7 +555,42 @@ def list_device_ips():
     return jsonify(device_ips)
 
 
+@sock.route('/ws')
+def websocket_route(ws):
+    connected_ws.append(ws)
+    print(f"[WS] Client connected, total: {len(connected_ws)}")
+
+    try:
+        while True:
+            data = ws.receive()
+            print(f"[WS] Received: {data}")
+            try:
+                event = json.loads(data)
+                # Handle event, e.g., SMS received
+                t = event.get('type')
+                number = event.get('number')
+                body = event.get('body')
+                if t and number and body:
+                    ensure_csv(cfg.LOG_FILE)
+                    append_message(cfg.LOG_FILE, t, number, body)
+                    print(f"[BRIDGE] Logged event: {t} from {number}")
+                    try:
+                        send_ntfy_notification(number, body)
+                    except Exception as e:
+                        print(f"[WS] Failed to send ntfy notification: {e}")
+            except json.JSONDecodeError:
+                print("[WS] Invalid JSON received")
+    except Exception as e:
+        print(f"[WS] Client disconnected: {e}")
+    finally:
+        connected_ws.remove(ws)
+        print(f"[WS] Client disconnected, total: {len(connected_ws)}")
+
+
+
 if __name__ == '__main__':
     ensure_csv(cfg.LOG_FILE)
     load_device_ips()
+    # Start MQTT client in background so /send can publish to devices over MQTT
+    start_mqtt()
     app.run(host='0.0.0.0', port=cfg.SERVER_PORT)
