@@ -42,7 +42,7 @@ void MyWebServer::handlePostRequest() {
 void MyWebServer::sendDataToPythonServer(const String &data) {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
-    http.begin("http://192.168.1.238:6678/esp32"); // Server URL
+    http.begin("http://192.168.1.123:6678/esp32"); // Server URL
     http.addHeader("Content-Type",
                    "application/json"); // Specify the content type
 
