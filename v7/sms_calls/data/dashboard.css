@@ -1,0 +1,7 @@
+body{font-family:Arial,sans-serif;padding:12px;background:#f7f7f7}
+main{max-width:900px;margin:18px auto;background:#fff;padding:18px;border-radius:6px}
+label{display:block;margin:8px 0}
+input[type=text]{width:100%;padding:8px;border:1px solid #ccc;border-radius:4px}
+button{padding:8px 12px;border:0;background:#007bff;color:#fff;border-radius:4px;margin-top:8px}
+pre{background:#eee;padding:8px;border-radius:4px;white-space:pre-wrap}
+#tests{margin-top:18px}

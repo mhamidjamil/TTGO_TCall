@@ -3,3 +3,9 @@ uploaded_code
 *uploaded_code.ino
 .vscode/c_cpp_properties.json
 *secrets.h
+Modules_test/api_work/arduino_secrets.h
+server/messages.xlsx
+server/.env
+*pycache*
+server/messages.csv
+server/ip-config.txt

@@ -1,0 +1,7 @@
+Flask>=2.0
+requests>=2.25
+flasgger>=0.9.5
+flask-httpauth>=4.5.0
+openpyxl>=3.0
+python-dotenv>=1.0
+paho-mqtt>=1.6
