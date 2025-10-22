@@ -7,6 +7,7 @@
 class RateLimitManager {
 public:
   void begin(const V8Config &config);
+  void setLimits(int dailySmsLimit, int weeklySmsLimit, int monthlySmsLimit);
   bool canSend(String &reason) const;
   void recordSend();
   void sync();
