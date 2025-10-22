@@ -194,9 +194,16 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
 
   unsigned long oldIntervalSeconds = telemetryIntervalMs / 1000UL;
   bool oldShowFirebasePushLogs = showFirebasePushLogs;
+  int oldDailyLimit = runtimeConfig.dailySmsLimit;
+  int oldWeeklyLimit = runtimeConfig.weeklySmsLimit;
+  int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
 
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
   showFirebasePushLogs = settings.showFirebasePushLogs;
+  runtimeConfig.dailySmsLimit = settings.dailySmsLimit;
+  runtimeConfig.weeklySmsLimit = settings.weeklySmsLimit;
+  runtimeConfig.monthlySmsLimit = settings.monthlySmsLimit;
+  rateLimitManager.setLimits(runtimeConfig.dailySmsLimit, runtimeConfig.weeklySmsLimit, runtimeConfig.monthlySmsLimit);
 
   if (settings.createdIntervalOfDht) {
     Serial.println("[SYNC] created or healed Firebase variable: intervalOfDhtSeconds");
@@ -204,12 +211,30 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (settings.createdShowFirebasePushLogs) {
     Serial.println("[SYNC] created or healed Firebase variable: showFirebasePushLogs");
   }
+  if (settings.createdDailySmsLimit) {
+    Serial.println("[SYNC] created or healed Firebase variable: dailySmsLimit");
+  }
+  if (settings.createdWeeklySmsLimit) {
+    Serial.println("[SYNC] created or healed Firebase variable: weeklySmsLimit");
+  }
+  if (settings.createdMonthlySmsLimit) {
+    Serial.println("[SYNC] created or healed Firebase variable: monthlySmsLimit");
+  }
 
   if (oldIntervalSeconds != settings.intervalOfDhtSeconds) {
     printRuntimeSettingChange("intervalOfDhtSeconds", String(oldIntervalSeconds), String(settings.intervalOfDhtSeconds));
   }
   if (oldShowFirebasePushLogs != showFirebasePushLogs) {
     printRuntimeSettingChange("showFirebasePushLogs", oldShowFirebasePushLogs ? "true" : "false", showFirebasePushLogs ? "true" : "false");
+  }
+  if (oldDailyLimit != runtimeConfig.dailySmsLimit) {
+    printRuntimeSettingChange("dailySmsLimit", String(oldDailyLimit), String(runtimeConfig.dailySmsLimit));
+  }
+  if (oldWeeklyLimit != runtimeConfig.weeklySmsLimit) {
+    printRuntimeSettingChange("weeklySmsLimit", String(oldWeeklyLimit), String(runtimeConfig.weeklySmsLimit));
+  }
+  if (oldMonthlyLimit != runtimeConfig.monthlySmsLimit) {
+    printRuntimeSettingChange("monthlySmsLimit", String(oldMonthlyLimit), String(runtimeConfig.monthlySmsLimit));
   }
 
   Serial.print("[SYNC] source=");
@@ -273,6 +298,8 @@ void setup() {
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   }
 
+  rateLimitManager.begin(runtimeConfig);
+
   firebaseManager.begin(runtimeConfig);
   if (firebaseManager.isReady()) {
     Logger::info("FIREBASE", "Firebase manager ready");
@@ -281,8 +308,6 @@ void setup() {
   } else {
     Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
   }
-
-  rateLimitManager.begin(runtimeConfig);
 
   if (!smsManager.begin()) {
     Logger::warn("SMS", "SMS manager init failed");
@@ -349,9 +374,6 @@ void loop() {
       lastTelemetryPushOk = firebaseManager.pushTelemetry(
           temperature,
           humidity,
-          rateLimitManager.dailyCount(),
-          rateLimitManager.weeklyCount(),
-          rateLimitManager.monthlyCount(),
           epochSeconds);
       lastTelemetryPushMessage = lastTelemetryPushOk ? "Telemetry pushed" : firebaseManager.lastError();
       if (lastTelemetryPushOk) {
@@ -368,9 +390,6 @@ void loop() {
           rateLimitManager.dailyCount(),
           rateLimitManager.weeklyCount(),
           rateLimitManager.monthlyCount(),
-          runtimeConfig.dailySmsLimit,
-          runtimeConfig.weeklySmsLimit,
-          runtimeConfig.monthlySmsLimit,
           wifiManager.modeName(),
           startupIp,
           firebaseManager.isReady(),
