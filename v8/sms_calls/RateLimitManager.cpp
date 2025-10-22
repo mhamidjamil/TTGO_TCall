@@ -18,6 +18,12 @@ void RateLimitManager::begin(const V8Config &config) {
   monthWindowStartMs = millis();
 }
 
+void RateLimitManager::setLimits(int dailySmsLimit, int weeklySmsLimit, int monthlySmsLimit) {
+  dailyLimit = dailySmsLimit;
+  weeklyLimit = weeklySmsLimit;
+  monthlyLimit = monthlySmsLimit;
+}
+
 bool RateLimitManager::canSend(String &reason) const {
   if (dailyLimit > 0 && daily >= dailyLimit) {
     reason = "daily_limit_reached";
