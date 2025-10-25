@@ -79,6 +79,8 @@ void ConfigManager::loadDefaults() {
   copyText(config.firebaseCounterPath, sizeof(config.firebaseCounterPath), FIREBASE_COUNTER_PATH_DEFAULT);
   copyText(config.firebaseStatusPath, sizeof(config.firebaseStatusPath), FIREBASE_STATUS_PATH_DEFAULT);
   copyText(config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath), FIREBASE_TELEMETRY_PATH_DEFAULT);
+  config.thingSpeakChannelId = THINGSPEAK_CHANNEL_ID_DEFAULT;
+  copyText(config.thingSpeakWriteApiKey, sizeof(config.thingSpeakWriteApiKey), THINGSPEAK_WRITE_API_KEY_DEFAULT);
 }
 
 bool ConfigManager::loadFromSPIFFS() {
@@ -152,6 +154,8 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   strlcpy(config.firebaseCounterPath, doc["firebaseCounterPath"] | config.firebaseCounterPath, sizeof(config.firebaseCounterPath));
   strlcpy(config.firebaseStatusPath, doc["firebaseStatusPath"] | config.firebaseStatusPath, sizeof(config.firebaseStatusPath));
   strlcpy(config.firebaseTelemetryPath, doc["firebaseTelemetryPath"] | config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath));
+  config.thingSpeakChannelId = doc["thingSpeakChannelId"] | config.thingSpeakChannelId;
+  strlcpy(config.thingSpeakWriteApiKey, doc["thingSpeakWriteApiKey"] | config.thingSpeakWriteApiKey, sizeof(config.thingSpeakWriteApiKey));
 }
 
 String ConfigManager::writeJsonConfig() const {
@@ -189,6 +193,8 @@ String ConfigManager::writeJsonConfig() const {
   doc["firebaseCounterPath"] = config.firebaseCounterPath;
   doc["firebaseStatusPath"] = config.firebaseStatusPath;
   doc["firebaseTelemetryPath"] = config.firebaseTelemetryPath;
+  doc["thingSpeakChannelId"] = config.thingSpeakChannelId;
+  doc["thingSpeakWriteApiKey"] = config.thingSpeakWriteApiKey;
 
   String jsonText;
   serializeJsonPretty(doc, jsonText);
