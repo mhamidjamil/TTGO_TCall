@@ -10,6 +10,7 @@
 - SMS
 - CALL
 - API
+- THINGSPEAK
 
 ## Rules
 - One meaningful line per event.
@@ -17,6 +18,7 @@
 - Errors must explain what failed and what happens next.
 - `showFirebasePushLogs` controls recurring success logs for telemetry and landing snapshot.
 - Runtime setting create/heal events must always be visible on serial.
+- ThingSpeak upload errors and success events should use the `THINGSPEAK` tag.
 
 ## Acceptance Criteria
 - Logs are readable at a glance.

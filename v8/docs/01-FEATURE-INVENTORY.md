@@ -17,6 +17,7 @@
 | Runtime settings from Firebase | Planned | Read `intervalOfDhtSeconds` and `showFirebasePushLogs` from RTDB, with defaults if missing. |
 | Manual runtime sync command | Planned | `sync` command forces immediate cloud settings refresh. |
 | Serial help command | Planned | `help` command lists all supported serial commands and usage. |
+| ThingSpeak upload | Planned | Post temperature and humidity to ThingSpeak field 1 and field 2. |
 | MQTT | Removed | Not part of v8. |
 
 ## Notes

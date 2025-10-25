@@ -22,6 +22,7 @@ v8 is the current direction for the project. It keeps the same TTGO T-Call hardw
 - Firebase Realtime Database is the primary cloud path.
 - Commands are polled from Firebase.
 - Device telemetry is pushed to Firebase.
+- Temperature and humidity are also uploaded to ThingSpeak.
 - Runtime settings can be read from Firebase and healed automatically if missing.
 - SPIFFS remains the local fallback for configuration.
 - AP fallback remains intentional and documented.
@@ -81,6 +82,15 @@ This folder stores values that can be controlled from Firebase without reflashin
 - `monthlySmsLimit`
 - `updatedAtMs`
 
+## ThingSpeak Upload Flow
+
+The firmware also publishes temperature and humidity to ThingSpeak so the sensor data can be graphed separately from Firebase.
+
+- `field1`: temperature
+- `field2`: humidity
+
+This upload uses the configured ThingSpeak write key and runs alongside the normal telemetry cycle when WiFi is connected.
+
 If a runtime key is missing, invalid, or unreadable, the firmware creates or heals it with a safe default and prints a serial message so the operator knows what happened.
 
 ## Runtime Behavior
@@ -111,6 +121,8 @@ The serial terminal currently supports these commands:
 - `status`: print WiFi mode, IP address, and Firebase readiness.
 - `sync`: force an immediate refresh of runtime settings from Firebase.
 - `help`: list all available serial commands.
+
+Firebase remains the control plane, while ThingSpeak acts as an additional sensor-data sink.
 
 The rule for this project is simple: every new serial command must also be added to the `help` output in the same change.
 

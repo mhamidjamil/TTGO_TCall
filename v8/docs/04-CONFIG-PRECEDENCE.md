@@ -7,6 +7,11 @@
 4. Runtime changes from dashboard or cloud sync.
 5. Persist the last known good configuration.
 
+## ThingSpeak Credentials
+- ThingSpeak upload credentials are treated as device configuration, not runtime cloud state.
+- The channel ID and write API key should be supplied from local secrets or persisted config.
+- Missing ThingSpeak credentials disable the upload path and should be reported clearly at startup.
+
 ## Runtime Cloud Settings (v8.1)
 - `intervalOfDhtSeconds` controls telemetry push interval.
 - `showFirebasePushLogs` controls periodic success-log visibility.
