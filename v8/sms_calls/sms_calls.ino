@@ -16,6 +16,7 @@
 #include "CallManager.h"
 #include "DisplayManager.h"
 #include "DHTManager.h"
+#include "ThingSpeakManager.h"
 #include "WebDashboard.h"
 #include "Logger.h"
 
@@ -27,11 +28,13 @@ static SMSManager smsManager;
 static CallManager callManager;
 static DisplayManager displayManager;
 static DHTManager dhtManager;
+static ThingSpeakManager thingSpeakManager;
 static WebDashboard webDashboard;
 
 static unsigned long lastUiRefresh = 0;
 static unsigned long lastCloudPoll = 0;
 static unsigned long lastTelemetryPush = 0;
+static unsigned long lastThingSpeakPush = 0;
 static unsigned long lastRuntimeSettingsSync = 0;
 static unsigned long pendingPollStartMs = 0;
 static V8Config runtimeConfig;
@@ -40,6 +43,7 @@ static String startupIp;
 static bool lastTelemetryPushOk = false;
 static String lastTelemetryPushMessage = "not_attempted";
 static unsigned long telemetryIntervalMs = 15000UL;
+static unsigned long thingSpeakIntervalMs = 15000UL;
 static const unsigned long runtimeSettingsSyncIntervalMs = 10UL * 60UL * 1000UL;
 static bool showFirebasePushLogs = true;
 
@@ -199,6 +203,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
 
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
+  thingSpeakIntervalMs = telemetryIntervalMs < 15000UL ? 15000UL : telemetryIntervalMs;
   showFirebasePushLogs = settings.showFirebasePushLogs;
   runtimeConfig.dailySmsLimit = settings.dailySmsLimit;
   runtimeConfig.weeklySmsLimit = settings.weeklySmsLimit;
@@ -299,6 +304,11 @@ void setup() {
   }
 
   rateLimitManager.begin(runtimeConfig);
+  if (thingSpeakManager.begin(runtimeConfig)) {
+    Logger::info("THINGSPEAK", "ThingSpeak manager ready");
+  } else {
+    Logger::warn("THINGSPEAK", thingSpeakManager.lastError().c_str());
+  }
 
   firebaseManager.begin(runtimeConfig);
   if (firebaseManager.isReady()) {
@@ -382,6 +392,16 @@ void loop() {
         }
       } else {
         Logger::warn("FIREBASE", lastTelemetryPushMessage.c_str());
+      }
+
+      if (thingSpeakManager.isReady() && millis() - lastThingSpeakPush > thingSpeakIntervalMs) {
+        lastThingSpeakPush = millis();
+        bool thingSpeakOk = thingSpeakManager.update(temperature, humidity);
+        if (thingSpeakOk) {
+          Logger::info("THINGSPEAK", "Temperature and humidity pushed");
+        } else {
+          Logger::warn("THINGSPEAK", thingSpeakManager.lastError().c_str());
+        }
       }
 
       bool landingOk = firebaseManager.pushLandingSnapshot(
