@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SMS & Calls Dashboard</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+<main>
+  <h2>SMS & Calls Dashboard</h2>
+  <section id="authMessage" style="display:none;">
+    <p>Please sign in to manage settings.</p>
+  </section>
+  <section id="config">
+    <h3>Settings</h3>
+    <label><input id="useApiSecret" type="checkbox"> Use API Secret</label>
+    <label>API Secret: <input id="apiSecret" type="text"></label>
+    <label>Forward URL: <input id="forwardUrl" type="text"></label>
+    <label>Forward API Key: <input id="forwardApiKey" type="text"></label>
+    <label><input id="allowSms" type="checkbox"> Allow SMS</label>
+    <label><input id="allowCall" type="checkbox"> Allow Calls</label>
+    <div><button id="save">Save</button></div>
+    <pre id="saveResult"></pre>
+  </section>
+  <section id="tests">
+    <h3>Tests</h3>
+    <div>
+      <button id="testForward">Test Forward (simulate incoming SMS)</button>
+      <pre id="testForwardOut"></pre>
+    </div>
+    <div>
+      <h4>Send SMS</h4>
+      <label>To: <input id="smsTo" type="text"></label>
+      <label>Message: <input id="smsMsg" type="text"></label>
+      <button id="sendSms">Send SMS</button>
+      <pre id="sendSmsOut"></pre>
+    </div>
+    <div>
+      <h4>Simulate Incoming Call</h4>
+      <label>Number: <input id="callNum" type="text" value="+1000000000"></label>
+      <button id="testCall">Simulate Call</button>
+      <pre id="testCallOut"></pre>
+    </div>
+  </section>
+</main>
+<script src="/dashboard.js"></script>
+</body>
+</html>

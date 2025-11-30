@@ -21,6 +21,7 @@ private:
   int serverPort = 0;
   SMSManager *smsManager = nullptr;
   CallManager *callManager = nullptr;
+  void handleConfigPage();
   void handleDashboard();
   void handleApiConfig();
   void handleApiStatus();

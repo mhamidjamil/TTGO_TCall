@@ -15,6 +15,11 @@ void WebDashboard::begin() {
     Serial.println("[WebDashboard] GET /");
     server.send(200, "text/plain", "SMS & Calls module running");
   });
+  // Config page - professional configuration interface
+  server.on("/config", [this]() {
+    Serial.println("[WebDashboard] GET /config");
+    this->handleConfigPage();
+  });
   // Route /dashboard is protected and handled by handleDashboard
   server.on("/dashboard", [this]() {
     Serial.printf("[WebDashboard] Request /dashboard from %s\n", server.client().remoteIP().toString().c_str());
@@ -181,6 +186,321 @@ void WebDashboard::begin() {
 }
 
 void WebDashboard::handleClient() { server.handleClient(); }
+
+void WebDashboard::handleConfigPage() {
+  // Serve professional configuration management page with real-time SPIFFS sync
+  Config c = cfgMgr.get();
+  
+  String html = R"rawliteral(<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TTGO T-Call Configuration</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+    .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
+    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }
+    .header h1 { font-size: 28px; margin-bottom: 10px; }
+    .header p { opacity: 0.9; font-size: 14px; }
+    .tabs { display: flex; background: #f8f9fa; border-bottom: 2px solid #e9ecef; }
+    .tab { flex: 1; padding: 15px; text-align: center; cursor: pointer; border: none; background: transparent; font-size: 14px; font-weight: 600; color: #6c757d; transition: all 0.3s; }
+    .tab:hover { background: #e9ecef; color: #495057; }
+    .tab.active { background: white; color: #667eea; border-bottom: 3px solid #667eea; }
+    .content { padding: 30px; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; animation: fadeIn 0.3s; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .form-group { margin-bottom: 25px; }
+    .form-group label { display: block; margin-bottom: 8px; font-weight: 600; color: #495057; font-size: 14px; }
+    .form-group input[type="text"], .form-group input[type="password"], .form-group input[type="number"], .form-group textarea { width: 100%; padding: 12px; border: 2px solid #e9ecef; border-radius: 8px; font-size: 14px; transition: all 0.3s; }
+    .form-group input:focus, .form-group textarea:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1); }
+    .form-group textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+    .toggle-group { display: flex; align-items: center; justify-content: space-between; padding: 15px; background: #f8f9fa; border-radius: 8px; margin-bottom: 15px; }
+    .toggle-group label { font-weight: 600; color: #495057; margin: 0; }
+    .toggle { position: relative; display: inline-block; width: 60px; height: 30px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: 0.3s; border-radius: 30px; }
+    .slider:before { position: absolute; content: ""; height: 22px; width: 22px; left: 4px; bottom: 4px; background-color: white; transition: 0.3s; border-radius: 50%; }
+    input:checked + .slider { background-color: #667eea; }
+    input:checked + .slider:before { transform: translateX(30px); }
+    .btn { padding: 12px 30px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.3s; margin-right: 10px; }
+    .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3); }
+    .btn-secondary { background: #6c757d; color: white; }
+    .btn-secondary:hover { background: #5a6268; }
+    .btn-danger { background: #dc3545; color: white; }
+    .btn-danger:hover { background: #c82333; }
+    .btn-group { display: flex; gap: 10px; margin-top: 30px; padding-top: 20px; border-top: 2px solid #e9ecef; flex-wrap: wrap; }
+    .status-bar { padding: 15px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 8px; color: #155724; margin-bottom: 20px; display: none; }
+    .status-bar.error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+    .info-box { background: #e7f3ff; padding: 15px; border-radius: 8px; border-left: 4px solid #667eea; margin-bottom: 20px; }
+    .info-box p { color: #495057; font-size: 14px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>⚙️ TTGO T-Call Configuration</h1>
+      <p>Professional Configuration Management with Real-Time SPIFFS Sync</p>
+    </div>
+    
+    <div class="tabs">
+      <button class="tab active" onclick="showTab('device')">Device Info</button>
+      <button class="tab" onclick="showTab('api')">API & Security</button>
+      <button class="tab" onclick="showTab('notifications')">Notifications</button>
+      <button class="tab" onclick="showTab('advanced')">Advanced</button>
+    </div>
+    
+    <div class="content">
+      <div id="statusBar" class="status-bar"></div>
+      
+      <!-- Device Info Tab -->
+      <div id="device" class="tab-content active">
+        <div class="info-box">
+          <p><strong>ℹ️ Device Information:</strong> Configure your device identity and owner details. These settings help identify your device and set primary contact information.</p>
+        </div>
+        
+        <div class="form-group">
+          <label for="deviceName">Device Name</label>
+          <input type="text" id="deviceName" value=")rawliteral" + c.deviceName + R"rawliteral(" placeholder="My TTGO Device">
+        </div>
+        
+        <div class="form-group">
+          <label for="ownerName">Owner Name</label>
+          <input type="text" id="ownerName" value=")rawliteral" + c.ownerName + R"rawliteral(" placeholder="Device Owner">
+        </div>
+        
+        <div class="form-group">
+          <label for="myNumber">Device Phone Number</label>
+          <input type="text" id="myNumber" value=")rawliteral" + c.myNumber + R"rawliteral(" placeholder="+1234567890">
+        </div>
+        
+        <div class="form-group">
+          <label for="adminNumbers">Admin Numbers (comma-separated)</label>
+          <input type="text" id="adminNumbers" value=")rawliteral" + c.adminNumbers + R"rawliteral(" placeholder="1234567890,0987654321">
+        </div>
+        
+        <div class="form-group">
+          <label for="autoReplyMessage">Auto-Reply Message</label>
+          <textarea id="autoReplyMessage" placeholder="Automated response message for unknown callers">)rawliteral" + c.autoReplyMessage + R"rawliteral(</textarea>
+        </div>
+      </div>
+      
+      <!-- API & Security Tab -->
+      <div id="api" class="tab-content">
+        <div class="info-box">
+          <p><strong>🔒 Security Settings:</strong> Configure API authentication and forwarding URLs. Enable API secret for secure remote access.</p>
+        </div>
+        
+        <div class="toggle-group">
+          <label>Use API Secret</label>
+          <label class="toggle">
+            <input type="checkbox" id="useApiSecret" )rawliteral" + String(c.useApiSecret ? "checked" : "") + R"rawliteral(>
+            <span class="slider"></span>
+          </label>
+        </div>
+        
+        <div class="form-group">
+          <label for="apiSecret">API Secret Token</label>
+          <input type="password" id="apiSecret" value=")rawliteral" + c.apiSecret + R"rawliteral(" placeholder="Your secure API token">
+        </div>
+        
+        <div class="form-group">
+          <label for="forwardUrl">Forward URL</label>
+          <input type="text" id="forwardUrl" value=")rawliteral" + c.forwardUrl + R"rawliteral(" placeholder="https://your-server.com/forward">
+        </div>
+        
+        <div class="form-group">
+          <label for="forwardApiKey">Forward API Key (Optional)</label>
+          <input type="password" id="forwardApiKey" value=")rawliteral" + c.forwardApiKey + R"rawliteral(" placeholder="Optional API key for forwarding">
+        </div>
+        
+        <div class="toggle-group">
+          <label>Allow SMS</label>
+          <label class="toggle">
+            <input type="checkbox" id="allowSms" )rawliteral" + String(c.allowSms ? "checked" : "") + R"rawliteral(>
+            <span class="slider"></span>
+          </label>
+        </div>
+        
+        <div class="toggle-group">
+          <label>Allow Calls</label>
+          <label class="toggle">
+            <input type="checkbox" id="allowCall" )rawliteral" + String(c.allowCall ? "checked" : "") + R"rawliteral(>
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+      
+      <!-- Notifications Tab -->
+      <div id="notifications" class="tab-content">
+        <div class="info-box">
+          <p><strong>🔔 Notification Settings:</strong> Configure NTFY notifications and Gate ESP integration for real-time alerts.</p>
+        </div>
+        
+        <div class="toggle-group">
+          <label>Enable NTFY Notifications</label>
+          <label class="toggle">
+            <input type="checkbox" id="ntfyEnabled" )rawliteral" + String(c.ntfyEnabled ? "checked" : "") + R"rawliteral(>
+            <span class="slider"></span>
+          </label>
+        </div>
+        
+        <div class="form-group">
+          <label for="ntfyServerUrl">NTFY Server URL</label>
+          <input type="text" id="ntfyServerUrl" value=")rawliteral" + c.ntfyServerUrl + R"rawliteral(" placeholder="https://ntfy.sh">
+        </div>
+        
+        <div class="form-group">
+          <label for="ntfyTopic">NTFY Topic</label>
+          <input type="text" id="ntfyTopic" value=")rawliteral" + c.ntfyTopic + R"rawliteral(" placeholder="my_notifications">
+        </div>
+        
+        <div class="toggle-group">
+          <label>Enable Gate ESP</label>
+          <label class="toggle">
+            <input type="checkbox" id="gateEspEnabled" )rawliteral" + String(c.gateEspEnabled ? "checked" : "") + R"rawliteral(>
+            <span class="slider"></span>
+          </label>
+        </div>
+        
+        <div class="form-group">
+          <label for="gateEspUrl">Gate ESP URL</label>
+          <input type="text" id="gateEspUrl" value=")rawliteral" + c.gateEspUrl + R"rawliteral(" placeholder="192.168.1.100">
+        </div>
+      </div>
+      
+      <!-- Advanced Tab -->
+      <div id="advanced" class="tab-content">
+        <div class="info-box">
+          <p><strong>⚡ Advanced Settings:</strong> Configure remote settings synchronization and message management options.</p>
+        </div>
+        
+        <div class="form-group">
+          <label for="settingsUrl">Remote Settings URL</label>
+          <input type="text" id="settingsUrl" value=")rawliteral" + c.settingsUrl + R"rawliteral(" placeholder="https://your-server.com/settings">
+        </div>
+        
+        <div class="form-group">
+          <label for="settingsVersion">Settings Version</label>
+          <input type="text" id="settingsVersion" value=")rawliteral" + c.settingsVersion + R"rawliteral(" placeholder="1.0">
+        </div>
+        
+        <div class="toggle-group">
+          <label>Log Messages</label>
+          <label class="toggle">
+            <input type="checkbox" id="logMessages" )rawliteral" + String(c.logMessages ? "checked" : "") + R"rawliteral(>
+            <span class="slider"></span>
+          </label>
+        </div>
+        
+        <div class="toggle-group">
+          <label>Delete After Forward</label>
+          <label class="toggle">
+            <input type="checkbox" id="deleteAfterForward" )rawliteral" + String(c.deleteAfterForward ? "checked" : "") + R"rawliteral(>
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+      
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="saveConfig()">💾 Save Configuration</button>
+        <button class="btn btn-secondary" onclick="reloadConfig()">🔄 Reload</button>
+        <button class="btn btn-danger" onclick="resetConfig()">⚠️ Reset to Defaults</button>
+        <button class="btn btn-secondary" onclick="location.href='/dashboard'">📊 Dashboard</button>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    function showTab(tabName) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById(tabName).classList.add('active');
+    }
+    
+    function showStatus(message, isError = false) {
+      const statusBar = document.getElementById('statusBar');
+      statusBar.textContent = message;
+      statusBar.className = 'status-bar' + (isError ? ' error' : '');
+      statusBar.style.display = 'block';
+      setTimeout(() => { statusBar.style.display = 'none'; }, 5000);
+    }
+    
+    function saveConfig() {
+      const config = {
+        deviceName: document.getElementById('deviceName').value,
+        ownerName: document.getElementById('ownerName').value,
+        myNumber: document.getElementById('myNumber').value,
+        adminNumbers: document.getElementById('adminNumbers').value,
+        autoReplyMessage: document.getElementById('autoReplyMessage').value,
+        useApiSecret: document.getElementById('useApiSecret').checked,
+        apiSecret: document.getElementById('apiSecret').value,
+        forwardUrl: document.getElementById('forwardUrl').value,
+        forwardApiKey: document.getElementById('forwardApiKey').value,
+        allowSms: document.getElementById('allowSms').checked,
+        allowCall: document.getElementById('allowCall').checked,
+        ntfyEnabled: document.getElementById('ntfyEnabled').checked,
+        ntfyServerUrl: document.getElementById('ntfyServerUrl').value,
+        ntfyTopic: document.getElementById('ntfyTopic').value,
+        gateEspEnabled: document.getElementById('gateEspEnabled').checked,
+        gateEspUrl: document.getElementById('gateEspUrl').value,
+        settingsUrl: document.getElementById('settingsUrl').value,
+        settingsVersion: document.getElementById('settingsVersion').value,
+        logMessages: document.getElementById('logMessages').checked,
+        deleteAfterForward: document.getElementById('deleteAfterForward').checked
+      };
+      
+      fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.ok) {
+          showStatus('✅ Configuration saved successfully to SPIFFS!');
+        } else {
+          showStatus('❌ Error saving configuration: ' + (data.error || 'Unknown error'), true);
+        }
+      })
+      .catch(error => {
+        showStatus('❌ Network error: ' + error.message, true);
+      });
+    }
+    
+    function reloadConfig() {
+      location.reload();
+    }
+    
+    function resetConfig() {
+      if (confirm('Are you sure you want to reset all settings to defaults? This action cannot be undone.')) {
+        fetch('/api/config/reset', {
+          method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.ok) {
+            showStatus('✅ Configuration reset to defaults!');
+            setTimeout(() => location.reload(), 2000);
+          } else {
+            showStatus('❌ Error resetting configuration', true);
+          }
+        })
+        .catch(error => {
+          showStatus('❌ Network error: ' + error.message, true);
+        });
+      }
+    }
+  </script>
+</body>
+</html>)rawliteral";
+  
+  server.send(200, "text/html", html);
+}
 
 bool WebDashboard::checkAuth() {
   // Temporarily bypass authentication for /api/config
@@ -384,39 +704,49 @@ void WebDashboard::handleApiConfig() {
   Config c = cfgMgr.get();
   
   // Update all configuration parameters from JSON
+  // Device Info fields
+  if (doc.containsKey("deviceName")) { const char* v = doc["deviceName"]; if(v) c.deviceName = v; }
   if (doc.containsKey("deviceId")) { const char* v = doc["deviceId"]; if(v) c.deviceName = v; }
   if (doc.containsKey("ownerName")) { const char* v = doc["ownerName"]; if(v) c.ownerName = v; }
+  if (doc.containsKey("myNumber")) { const char* v = doc["myNumber"]; if(v) c.myNumber = v; }
   if (doc.containsKey("ownerPhone")) { const char* v = doc["ownerPhone"]; if(v) c.myNumber = v; }
-  if (doc.containsKey("logMessages")) c.logMessages = doc["logMessages"];
-  
-  if (doc.containsKey("serverUrl")) { const char* v = doc["serverUrl"]; if(v) c.forwardUrl = v; }
-  if (doc.containsKey("apiKey")) { const char* v = doc["apiKey"]; if(v) c.apiSecret = v; }
-  if (doc.containsKey("gateEspUrl")) { const char* v = doc["gateEspUrl"]; if(v) c.gateEspUrl = v; }
-  if (doc.containsKey("forwardSmsUrl")) { const char* v = doc["forwardSmsUrl"]; if(v) c.forwardUrl = v; }
-  
-  if (doc.containsKey("ntfyEnabled")) c.ntfyEnabled = doc["ntfyEnabled"];
-  if (doc.containsKey("ntfyUrl")) { const char* v = doc["ntfyUrl"]; if(v) c.ntfyServerUrl = v; }
-  if (doc.containsKey("ntfyTopic")) { const char* v = doc["ntfyTopic"]; if(v) c.ntfyTopic = v; }
-  if (doc.containsKey("autoReplyMessage")) { const char* v = doc["autoReplyMessage"]; if(v) c.autoReplyMessage = v; }
-  
-  if (doc.containsKey("smsAllowed")) c.allowSms = doc["smsAllowed"];
-  if (doc.containsKey("callsAllowed")) c.allowCall = doc["callsAllowed"];
   if (doc.containsKey("adminNumbers")) { const char* v = doc["adminNumbers"]; if(v) c.adminNumbers = v; }
   if (doc.containsKey("allowedNumbers")) { const char* v = doc["allowedNumbers"]; if(v) c.adminNumbers = v; }
+  if (doc.containsKey("autoReplyMessage")) { const char* v = doc["autoReplyMessage"]; if(v) c.autoReplyMessage = v; }
   
-  // Handle legacy field mappings for backward compatibility
+  // API & Security fields
+  if (doc.containsKey("useApiSecret")) c.useApiSecret = doc["useApiSecret"];
   if (doc.containsKey("apiSecret")) { const char* v = doc["apiSecret"]; if(v) c.apiSecret = v; }
+  if (doc.containsKey("apiKey")) { const char* v = doc["apiKey"]; if(v) c.apiSecret = v; }
   if (doc.containsKey("forwardUrl")) { const char* v = doc["forwardUrl"]; if(v) c.forwardUrl = v; }
+  if (doc.containsKey("serverUrl")) { const char* v = doc["serverUrl"]; if(v) c.forwardUrl = v; }
+  if (doc.containsKey("forwardApiKey")) { const char* v = doc["forwardApiKey"]; if(v) c.forwardApiKey = v; }
   if (doc.containsKey("allowSms")) c.allowSms = doc["allowSms"];
   if (doc.containsKey("allowCall")) c.allowCall = doc["allowCall"];
+  if (doc.containsKey("smsAllowed")) c.allowSms = doc["smsAllowed"];
+  if (doc.containsKey("callsAllowed")) c.allowCall = doc["callsAllowed"];
+  
+  // Notification fields
+  if (doc.containsKey("ntfyEnabled")) c.ntfyEnabled = doc["ntfyEnabled"];
+  if (doc.containsKey("ntfyServerUrl")) { const char* v = doc["ntfyServerUrl"]; if(v) c.ntfyServerUrl = v; }
+  if (doc.containsKey("ntfyUrl")) { const char* v = doc["ntfyUrl"]; if(v) c.ntfyServerUrl = v; }
+  if (doc.containsKey("ntfyTopic")) { const char* v = doc["ntfyTopic"]; if(v) c.ntfyTopic = v; }
+  if (doc.containsKey("gateEspEnabled")) c.gateEspEnabled = doc["gateEspEnabled"];
+  if (doc.containsKey("gateEspUrl")) { const char* v = doc["gateEspUrl"]; if(v) c.gateEspUrl = v; }
+  
+  // Advanced fields
+  if (doc.containsKey("settingsUrl")) { const char* v = doc["settingsUrl"]; if(v) c.settingsUrl = v; }
+  if (doc.containsKey("settingsVersion")) { const char* v = doc["settingsVersion"]; if(v) c.settingsVersion = v; }
+  if (doc.containsKey("logMessages")) c.logMessages = doc["logMessages"];
+  if (doc.containsKey("deleteAfterForward")) c.deleteAfterForward = doc["deleteAfterForward"];
   
   // Save configuration and respond
   if (cfgMgr.save(c)) {
     Serial.println("[WebDashboard] Configuration saved successfully");
-    server.send(200, "application/json", "{\"success\":true,\"message\":\"Configuration saved successfully\"}");
+    server.send(200, "application/json", "{\"ok\":true,\"message\":\"Configuration saved successfully\"}");
   } else {
     Serial.println("[WebDashboard] Failed to save configuration");
-    server.send(500, "application/json", "{\"success\":false,\"error\":\"Failed to save configuration\"}");
+    server.send(500, "application/json", "{\"ok\":false,\"error\":\"Failed to save configuration\"}");
   }
 }
 
