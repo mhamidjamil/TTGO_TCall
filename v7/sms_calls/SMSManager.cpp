@@ -1,10 +1,14 @@
 #include <Arduino.h>
 #include "SMSManager.h"
+#include "CallManager.h"
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+
+// reference to global callManager defined in main sketch
+extern CallManager callManager;
 
 extern PubSubClient mqttClient;
 
@@ -43,6 +47,17 @@ void SMSManager::loop() {
         idx.trim();
         int index = idx.toInt();
         if (index > 0) readAndForwardSms(index);
+      }
+      // Check for incoming call CLIP URC and forward to callManager
+      if (response.indexOf("+CLIP:") != -1) {
+        // extract number between quotes
+        int q1 = response.indexOf('"');
+        int q2 = response.indexOf('"', q1 + 1);
+        if (q1 >= 0 && q2 > q1) {
+          String from = response.substring(q1 + 1, q2);
+          Serial.println("[SMSManager] Detected incoming call from " + from);
+          callManager.handleIncomingCall(from);
+        }
       }
     }
   }

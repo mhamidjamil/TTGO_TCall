@@ -3,46 +3,188 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>SMS & Calls Dashboard</title>
+  <title>TTGO T-Call Dashboard</title>
   <link rel="stylesheet" href="/dashboard.css">
 </head>
 <body>
 <main>
-  <h2>SMS & Calls Dashboard</h2>
+  <h1>TTGO T-Call Dashboard</h1>
+  
   <section id="authMessage" style="display:none;">
     <p>Please sign in to manage settings.</p>
   </section>
-  <section id="config">
-    <h3>Settings</h3>
-    <label><input id="useApiSecret" type="checkbox"> Use API Secret</label>
-    <label>API Secret: <input id="apiSecret" type="text"></label>
-    <label>Forward URL: <input id="forwardUrl" type="text"></label>
-    <label>Forward API Key: <input id="forwardApiKey" type="text"></label>
-    <label><input id="allowSms" type="checkbox"> Allow SMS</label>
-    <label><input id="allowCall" type="checkbox"> Allow Calls</label>
-    <div><button id="save">Save</button></div>
-    <pre id="saveResult"></pre>
-  </section>
-  <section id="tests">
-    <h3>Tests</h3>
-    <div>
-      <button id="testForward">Test Forward (simulate incoming SMS)</button>
-      <pre id="testForwardOut"></pre>
+
+  <!-- Tab Navigation -->
+  <nav class="tabs">
+    <button class="tab-btn active" onclick="openTab(event, 'general')">General</button>
+    <button class="tab-btn" onclick="openTab(event, 'api')">API & Forwarding</button>
+    <button class="tab-btn" onclick="openTab(event, 'notifications')">Notifications</button>
+    <button class="tab-btn" onclick="openTab(event, 'security')">Security</button>
+    <button class="tab-btn" onclick="openTab(event, 'device')">Device Info</button>
+    <button class="tab-btn" onclick="openTab(event, 'testing')">Testing</button>
+    <button class="tab-btn" onclick="openTab(event, 'about')">About</button>
+  </nav>
+
+  <!-- General Settings Tab -->
+  <div id="general" class="tab-content active">
+    <h3>General Settings</h3>
+    <div class="form-group">
+      <label><input id="allowSms" type="checkbox"> Enable SMS Functionality</label>
+      <label><input id="allowCall" type="checkbox"> Enable Call Management</label>
+      <label><input id="logMessages" type="checkbox"> Log All Messages</label>
+      <label><input id="deleteAfterForward" type="checkbox"> Delete Messages After Forwarding</label>
     </div>
-    <div>
+    
+    <div class="form-group">
+      <label>Device Name: <input id="deviceName" type="text" placeholder="TTGO T-Call Device"></label>
+      <label>Owner Name: <input id="ownerName" type="text" placeholder="Device Owner"></label>
+      <label>Primary Number: <input id="myNumber" type="text" placeholder="+1234567890"></label>
+    </div>
+    
+    <div class="form-group">
+      <label>Auto-Reply Message: 
+        <textarea id="autoReplyMessage" rows="3" placeholder="Message sent to unknown callers..."></textarea>
+      </label>
+    </div>
+  </div>
+
+  <!-- API & Forwarding Tab -->
+  <div id="api" class="tab-content">
+    <h3>API & Forwarding Configuration</h3>
+    <div class="form-group">
+      <label><input id="useApiSecret" type="checkbox"> Require API Secret</label>
+      <label>API Secret: <input id="apiSecret" type="password" placeholder="Enter API secret"></label>
+    </div>
+    
+    <div class="form-group">
+      <label>Forward URL: <input id="forwardUrl" type="url" placeholder="https://your-server.com/forward"></label>
+      <label>Forward API Key: <input id="forwardApiKey" type="password" placeholder="API key for forwarding"></label>
+    </div>
+    
+    <div class="form-group">
+      <label>Remote Settings URL: <input id="settingsUrl" type="url" placeholder="https://your-server.com/settings"></label>
+      <label>Settings Version: <input id="settingsVersion" type="text" placeholder="1.0"></label>
+    </div>
+  </div>
+
+  <!-- Notifications Tab -->
+  <div id="notifications" class="tab-content">
+    <h3>Notification Settings</h3>
+    <div class="form-group">
+      <label><input id="ntfyEnabled" type="checkbox"> Enable NTFY Notifications</label>
+      <label>NTFY Server URL: <input id="ntfyServerUrl" type="url" placeholder="https://ntfy.sh"></label>
+      <label>NTFY Topic: <input id="ntfyTopic" type="text" placeholder="your_topic_name"></label>
+    </div>
+    
+    <h4>Gate ESP Integration</h4>
+    <div class="form-group">
+      <label><input id="gateEspEnabled" type="checkbox"> Enable Gate ESP Control</label>
+      <label>Gate ESP URL: <input id="gateEspUrl" type="text" placeholder="192.168.1.100"></label>
+    </div>
+  </div>
+
+  <!-- Security Tab -->
+  <div id="security" class="tab-content">
+    <h3>Security Settings</h3>
+    <div class="form-group">
+      <label>Admin Numbers (comma-separated):
+        <textarea id="adminNumbers" rows="3" placeholder="1234567890,0987654321,+1234567890"></textarea>
+      </label>
+      <small>These numbers can control the gate and have special privileges</small>
+    </div>
+  </div>
+
+  <!-- Device Info Tab -->
+  <div id="device" class="tab-content">
+    <h3>Device Information</h3>
+    <div id="deviceInfo">
+      <p>Loading device information...</p>
+    </div>
+    <button id="refreshInfo">Refresh Info</button>
+  </div>
+
+  <!-- Testing Tab -->
+  <div id="testing" class="tab-content">
+    <h3>Testing & Diagnostics</h3>
+    <div class="test-section">
+      <h4>Connection Tests</h4>
+      <button id="testForward">Test Forward Connection</button>
+      <pre id="testForwardOut"></pre>
+      
+      <button id="testNtfy">Test NTFY Notification</button>
+      <pre id="testNtfyOut"></pre>
+      
+      <button id="checkSettings">Check Remote Settings</button>
+      <pre id="checkSettingsOut"></pre>
+    </div>
+    
+    <div class="test-section">
       <h4>Send SMS</h4>
-      <label>To: <input id="smsTo" type="text"></label>
-      <label>Message: <input id="smsMsg" type="text"></label>
+      <label>To: <input id="smsTo" type="text" placeholder="+1234567890"></label>
+      <label>Message: <input id="smsMsg" type="text" placeholder="Test message"></label>
       <button id="sendSms">Send SMS</button>
       <pre id="sendSmsOut"></pre>
     </div>
-    <div>
+    
+    <div class="test-section">
       <h4>Simulate Incoming Call</h4>
       <label>Number: <input id="callNum" type="text" value="+1000000000"></label>
       <button id="testCall">Simulate Call</button>
       <pre id="testCallOut"></pre>
     </div>
-  </section>
+    
+    <div class="test-section">
+      <h4>Message Management</h4>
+      <button id="listMessages">List All Messages</button>
+      <button id="deleteAllMessages">Delete All Messages</button>
+      <pre id="messagesOut"></pre>
+    </div>
+  </div>
+
+  <!-- About Tab -->
+  <div id="about" class="tab-content">
+    <h3>About TTGO T-Call Project</h3>
+    <div class="info-section">
+      <h4>Features</h4>
+      <ul>
+        <li>SMS sending and receiving with auto-forwarding</li>
+        <li>Incoming call management with auto-reply</li>
+        <li>NTFY push notifications for real-time alerts</li>
+        <li>Gate ESP integration for access control</li>
+        <li>Admin number management with special privileges</li>
+        <li>Persistent configuration via SPIFFS</li>
+        <li>Web-based dashboard for easy configuration</li>
+        <li>Remote settings management</li>
+      </ul>
+      
+      <h4>Configuration Persistence</h4>
+      <p>All settings are automatically saved to SPIFFS storage and persist across device reboots. 
+         Changes made through this dashboard take effect immediately and are permanently stored.</p>
+      
+      <h4>API Endpoints</h4>
+      <ul>
+        <li><code>GET /api/config</code> - Get current configuration</li>
+        <li><code>POST /api/config</code> - Update configuration</li>
+        <li><code>POST /api/send_sms</code> - Send SMS</li>
+        <li><code>POST /api/call</code> - Initiate call</li>
+        <li><code>POST /api/hangup</code> - Hang up call</li>
+        <li><code>GET /api/messages</code> - List stored messages</li>
+        <li><code>POST /api/messages/delete_all</code> - Delete all messages</li>
+        <li><code>POST /api/test_forward</code> - Test forwarding connection</li>
+        <li><code>POST /api/check_settings</code> - Check for remote settings updates</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Save/Actions -->
+  <div class="actions">
+    <button id="save" class="primary">Save All Settings</button>
+    <button id="reboot">Reboot Device</button>
+    <button id="resetConfig">Reset to Defaults</button>
+  </div>
+  
+  <div id="saveResult"></div>
+  
 </main>
 <script src="/dashboard.js"></script>
 </body>

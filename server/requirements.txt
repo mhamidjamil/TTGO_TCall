@@ -5,3 +5,6 @@ flask-httpauth>=4.5.0
 openpyxl>=3.0
 python-dotenv>=1.0
 paho-mqtt>=1.6
+
+# WebSocket helper for Flask
+flask-sock>=0.5.0

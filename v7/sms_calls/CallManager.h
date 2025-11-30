@@ -14,9 +14,11 @@ public:
   int getCallsMade();
   int getCallsReceived();
 
+  // Allow external modules (e.g., SMS manager) to notify of an incoming call
+  void handleIncomingCall(const String &from);
+
 private:
   ConfigManager &cfgMgr;
-  void handleIncomingCall(const String &from);
   void forwardEvent(const String &type, const String &number);
 };
 

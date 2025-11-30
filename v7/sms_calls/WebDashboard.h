@@ -21,12 +21,23 @@ private:
   int serverPort = 0;
   SMSManager *smsManager = nullptr;
   CallManager *callManager = nullptr;
+  void handleConfigPage();
   void handleDashboard();
   void handleApiConfig();
+  void handleApiStatus();
+  void handleApiAuth();
   void handleApiEvents();
   void handleSendSms();
   void handleCall();
   void handleHangup();
+  void handleTestSMS();
+  void handleTestCall();
+  void handleTestNTFY();
+  void handleTestGateESP();
+  void handleClearLogs();
+  void handleDownloadLogs();
+  void handleRestart();
+  void handleConfigReset();
   bool checkAuth();
 };
 
