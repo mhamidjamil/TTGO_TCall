@@ -14,12 +14,19 @@ int CallManager::getCallsMade() { return _callsMade; }
 int CallManager::getCallsReceived() { return _callsReceived; }
 
 void CallManager::loop() {
-  // Placeholder: monitor modem serial for RING and caller ID, call handleIncomingCall
+  // Placeholder: Call handling is triggered by SMSManager when +CLIP URC is detected
 }
 
 void CallManager::hangup() {
-  // Send AT command to hang up the call - placeholder
-  Serial.println("Hangup (placeholder)");
+  Serial.println("Hangup: sending AT+CHUP");
+  // ensure we have Serial1 configured by main sketch
+  Serial1.println("AT+CHUP");
+  // small delay to allow the modem to process
+  delay(200);
+  // optionally read response
+  String r=""; unsigned long s=millis();
+  while (millis()-s < 1000) { while (Serial1.available()) r += (char)Serial1.read(); if (r.length()) break; delay(10); }
+  Serial.println("Hangup response: " + r);
   _callsMade++;
 }
 
