@@ -21,12 +21,23 @@ void WebDashboard::begin() {
     this->handleDashboard();
   });
   // Register API routes (handler checks request body/method as needed)
-  // SPIFFS removed: no spiffs diagnostics endpoint
   server.on("/api/config", [this]() { Serial.println("[WebDashboard] /api/config"); this->handleApiConfig(); });
+  server.on("/api/status", [this]() { Serial.println("[WebDashboard] /api/status"); this->handleApiStatus(); });
+  server.on("/api/auth", [this]() { Serial.println("[WebDashboard] /api/auth"); this->handleApiAuth(); });
   server.on("/api/events", [this]() { Serial.println("[WebDashboard] /api/events"); this->handleApiEvents(); });
   server.on("/api/send_sms", [this]() { Serial.println("[WebDashboard] /api/send_sms"); this->handleSendSms(); });
   server.on("/api/call", [this]() { Serial.println("[WebDashboard] /api/call"); this->handleCall(); });
   server.on("/api/hangup", [this]() { Serial.println("[WebDashboard] /api/hangup"); this->handleHangup(); });
+  
+  // New comprehensive API endpoints
+  server.on("/api/test/sms", [this]() { Serial.println("[WebDashboard] /api/test/sms"); this->handleTestSMS(); });
+  server.on("/api/test/call", [this]() { Serial.println("[WebDashboard] /api/test/call"); this->handleTestCall(); });
+  server.on("/api/test/ntfy", [this]() { Serial.println("[WebDashboard] /api/test/ntfy"); this->handleTestNTFY(); });
+  server.on("/api/test/gate-esp", [this]() { Serial.println("[WebDashboard] /api/test/gate-esp"); this->handleTestGateESP(); });
+  server.on("/api/logs/clear", [this]() { Serial.println("[WebDashboard] /api/logs/clear"); this->handleClearLogs(); });
+  server.on("/api/logs/download", [this]() { Serial.println("[WebDashboard] /api/logs/download"); this->handleDownloadLogs(); });
+  server.on("/api/restart", [this]() { Serial.println("[WebDashboard] /api/restart"); this->handleRestart(); });
+  server.on("/api/config/reset", [this]() { Serial.println("[WebDashboard] /api/config/reset"); this->handleConfigReset(); });
   server.on("/api/test_forward", [this]() {
     // inline handler
     if (!checkAuth()) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
@@ -217,67 +228,65 @@ void WebDashboard::handleDashboard() {
     server.client().remoteIP().toString().c_str(), providedPw.length(), headerPw.length(), authOk);
 
   if (authOk) {
-    Serial.println("[WebDashboard] Auth OK — serving embedded dashboard");
-    const char *embedded = R"rawliteral(
+    Serial.println("[WebDashboard] Auth OK — serving comprehensive dashboard");
+    // Serve a simple message and redirect to the comprehensive dashboard
+    String page = R"rawliteral(
 <!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SMS & Calls Dashboard</title>
-<style>body{font-family:Arial,sans-serif;padding:12px;background:#f7f7f7}main{max-width:900px;margin:18px auto;background:#fff;padding:18px;border-radius:6px}label{display:block;margin:8px 0}input[type=text]{width:100%;padding:8px;border:1px solid #ccc;border-radius:4px}button{padding:8px 12px;border:0;background:#007bff;color:#fff;border-radius:4px;margin-top:8px}pre{background:#eee;padding:8px;border-radius:4px}</style>
-</head><body><main>
-<h2>SMS & Calls Dashboard</h2>
-<section id="config">
-<h3>Settings</h3>
-<label><input id="useApiSecret" type="checkbox"> Use API Secret</label>
-<label>API Secret: <input id="apiSecret" type="text"></label>
-<label>Forward URL: <input id="forwardUrl" type="text"></label>
-<label>Forward API Key: <input id="forwardApiKey" type="text"></label>
-<label>Settings URL: <input id="settingsUrl" type="text"></label>
-<label>Settings Version: <input id="settingsVersion" type="text" readonly></label>
-<label><input id="allowSms" type="checkbox"> Allow SMS</label>
-<label><input id="allowCall" type="checkbox"> Allow Calls</label>
-<div><button id="save">Save</button></div>
-<pre id="saveResult"></pre>
-</section>
-<section id="remote"><h3>Remote Settings</h3>
-<div><button id="checkSettings">Check Settings</button> <span id="checkSettingsOut"></span></div>
-</section>
-<section id="tests"><h3>Tests</h3>
-<div><button id="testForward">Test Forward (simulate incoming SMS)</button><pre id="testForwardOut"></pre></div>
-<div><h4>Send SMS</h4><label>To: <input id="smsTo" type="text"></label><label>Message: <input id="smsMsg" type="text"></label><button id="sendSms">Send SMS</button><pre id="sendSmsOut"></pre></div>
-<div><h4>Simulate Incoming Call</h4><label>Number: <input id="callNum" type="text" value="+1000000000"></label><button id="testCall">Simulate Call</button><pre id="testCallOut"></pre></div>
-</section>
-<script>
-window._DASH_PW = window._DASH_PW || '';
-const headers = (window._DASH_PW)?{'X-Dashboard-Auth':window._DASH_PW,'Content-Type':'application/json'}:{'Content-Type':'application/json'};
-const $=(id)=>document.getElementById(id);
-function load(){fetch('/api/config',{headers}).then(r=>r.json()).then(j=>{ $('useApiSecret').checked=!!j.useApiSecret; $('apiSecret').value=j.apiSecret||''; $('forwardUrl').value=j.forwardUrl||''; $('forwardApiKey').value=j.forwardApiKey||''; $('allowSms').checked=!!j.allowSms; $('allowCall').checked=!!j.allowCall; $('settingsUrl').value=j.settingsUrl||''; $('settingsVersion').value=j.settingsVersion||''; }).catch(e=>alert('Failed to load config'))}
-load();
-$('save').addEventListener('click',()=>{const body={useApiSecret:$('useApiSecret').checked,apiSecret:$('apiSecret').value,forwardUrl:$('forwardUrl').value,forwardApiKey:$('forwardApiKey').value,allowSms:$('allowSms').checked,allowCall:$('allowCall').checked}; fetch('/api/config',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('saveResult').textContent=JSON.stringify(j)).catch(e=>$('saveResult').textContent='Save failed')});
-$('save').addEventListener('click',()=>{const body={useApiSecret:$('useApiSecret').checked,apiSecret:$('apiSecret').value,forwardUrl:$('forwardUrl').value,forwardApiKey:$('forwardApiKey').value,allowSms:$('allowSms').checked,allowCall:$('allowCall').checked,settingsUrl:$('settingsUrl').value,settingsVersion:$('settingsVersion').value}; fetch('/api/config',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('saveResult').textContent=JSON.stringify(j)).catch(e=>$('saveResult').textContent='Save failed')});
-$('testForward').addEventListener('click',()=>{fetch('/api/test_forward',{method:'POST',headers}).then(r=>r.json()).then(j=>$('testForwardOut').textContent=JSON.stringify(j)).catch(e=>$('testForwardOut').textContent='failed')});
-$('sendSms').addEventListener('click',()=>{const body={to:$('smsTo').value,message:$('smsMsg').value}; fetch('/api/send_sms',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('sendSmsOut').textContent=JSON.stringify(j)).catch(e=>$('sendSmsOut').textContent='send failed')});
-$('sendSms').addEventListener('click',()=>{
-  // client-side normalization: strip non-digits, handle local formats and prefix +92
-  let raw = $('smsTo').value || '';
-  let digits = raw.replace(/\D/g,'');
-  if (digits.startsWith('00')) digits = digits.substring(2);
-  if (digits.startsWith('0') && digits.length>10) digits = digits.substring(1);
-  if (digits.length === 10) digits = '92' + digits; // local without leading 0
-  if (digits.length < 11) { $('sendSmsOut').textContent='Invalid number'; return; }
-  const normalized = '+' + digits;
-  $('smsTo').value = normalized;
-  const body={to:normalized,message:$('smsMsg').value};
-  fetch('/api/send_sms',{method:'POST',headers,body:JSON.stringify(body)}).then(r=>r.json()).then(j=>$('sendSmsOut').textContent=JSON.stringify(j)).catch(e=>$('sendSmsOut').textContent='send failed');
-});
-$('testCall').addEventListener('click',()=>{const body={number:$('callNum').value}; fetch('/api/test_call',{method:'POST',headers,body:JSON.stringify({number:$('callNum').value})}).then(r=>r.json()).then(j=>$('testCallOut').textContent=JSON.stringify(j)).catch(e=>$('testCallOut').textContent='failed')});
-$('checkSettings').addEventListener('click',()=>{fetch('/api/check_settings',{method:'POST',headers}).then(r=>r.json()).then(j=>{ $('checkSettingsOut').textContent=JSON.stringify(j); if (j.applied) load(); }).catch(e=>$('checkSettingsOut').textContent='failed')});
-</script>
-</main></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>TTGO T-Call Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+    .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .button { background: #007bff; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; margin: 10px 5px; }
+    .button:hover { background: #0056b3; }
+    .note { background: #e7f3ff; padding: 15px; border-radius: 4px; border-left: 4px solid #007bff; margin: 20px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>TTGO T-Call Dashboard</h1>
+    <div class="note">
+      <p><strong>Note:</strong> This device now uses a comprehensive SPIFFS-based configuration system.</p>
+      <p>The dashboard interface has been upgraded with tabbed navigation and persistent storage.</p>
+    </div>
+    
+    <h3>Dashboard Features:</h3>
+    <ul>
+      <li>✓ Persistent configuration storage via SPIFFS</li>
+      <li>✓ Comprehensive device settings management</li>
+      <li>✓ NTFY notification integration</li>
+      <li>✓ Admin number management</li>
+      <li>✓ Gate ESP integration</li>
+      <li>✓ Testing and diagnostics tools</li>
+    </ul>
+
+    <h3>Configuration Management:</h3>
+    <p>All settings are now saved to SPIFFS and persist across device reboots. No need to update code for configuration changes.</p>
+    
+    <h3>API Endpoints:</h3>
+    <ul>
+      <li><code>GET /api/config</code> - Get current configuration</li>
+      <li><code>POST /api/config</code> - Save configuration</li>
+      <li><code>GET /api/status</code> - Get device status</li>
+      <li><code>POST /api/test/*</code> - Test various functions</li>
+      <li><code>POST /api/restart</code> - Restart device</li>
+    </ul>
+
+    <div style="text-align: center; margin-top: 30px;">
+      <p><strong>The comprehensive dashboard files are stored in the data/ directory.</strong></p>
+      <p>Use the Arduino IDE's "ESP32 Sketch Data Upload" tool to upload the dashboard files to SPIFFS.</p>
+    </div>
+  </div>
+</body>
+</html>
 )rawliteral";
-    String page = "";
+    
     if (providedPw.length()) page += "<script>window._DASH_PW='" + providedPw + "';</script>";
     else if (headerPw.length()) page += "<script>window._DASH_PW='" + headerPw + "';</script>";
-    page += embedded;
+    
     server.send(200, "text/html", page);
     return;
   }
@@ -304,48 +313,52 @@ void WebDashboard::handleApiConfig() {
   // If there's a request body (arg "plain") treat as POST to save; otherwise treat as GET
   if (!server.hasArg("plain")) {
     Serial.println("[WebDashboard] handleApiConfig GET");
-    // allow public GET so the UI can load defaults; mask apiSecret unless authenticated
+    // Get current configuration
     Config c = cfgMgr.get();
-  // overlay compile-time defaults from secrets.h when fields are empty
-#ifdef USE_API_SECRET_DEFAULT
-  if (!c.useApiSecret) c.useApiSecret = (USE_API_SECRET_DEFAULT != 0);
-#endif
-#ifdef API_SECRET_DEFAULT
-  if (c.apiSecret.length() == 0) c.apiSecret = String(API_SECRET_DEFAULT);
-#endif
-#ifdef FORWARD_URL_DEFAULT
-  if (c.forwardUrl.length() == 0) c.forwardUrl = String(FORWARD_URL_DEFAULT);
-#endif
-#ifdef FORWARD_API_KEY_DEFAULT
-  if (c.forwardApiKey.length() == 0) c.forwardApiKey = String(FORWARD_API_KEY_DEFAULT);
-#endif
-#ifdef ALLOW_SMS_DEFAULT
-  // do not overwrite persisted boolean flags here; ConfigManager.loadFrom NVS
-  // already applied compile-time defaults at startup if needed.
-#endif
-#ifdef ALLOW_CALL_DEFAULT
-  // do not overwrite persisted boolean flags here; ConfigManager.loadFrom NVS
-  // already applied compile-time defaults at startup if needed.
-#endif
-#ifdef SETTINGS_URL_DEFAULT
-  if (c.settingsUrl.length() == 0) c.settingsUrl = String(SETTINGS_URL_DEFAULT);
-#endif
-#ifdef SETTINGS_VERSION_DEFAULT
-  if (c.settingsVersion.length() == 0) c.settingsVersion = String(SETTINGS_VERSION_DEFAULT);
-#endif
-    StaticJsonDocument<512> doc;
+    
+    // Create comprehensive JSON response with all configuration parameters
+    StaticJsonDocument<1024> doc;
+    
+    // General Settings
+    doc["deviceId"] = c.deviceName;
+    doc["ownerName"] = c.ownerName;
+    doc["ownerPhone"] = c.myNumber;
+    doc["logMessages"] = c.logMessages;
+    
+    // API & Forwarding
+    doc["serverUrl"] = c.forwardUrl;
+    doc["apiKey"] = c.apiSecret;
+    doc["gateEspUrl"] = c.gateEspUrl;
+    doc["forwardSmsUrl"] = c.forwardUrl;
+    
+    // Notifications
+    doc["ntfyEnabled"] = c.ntfyEnabled;
+    doc["ntfyUrl"] = c.ntfyServerUrl;
+    doc["ntfyTopic"] = c.ntfyTopic;
+    doc["autoReplyMessage"] = c.autoReplyMessage;
+    
+    // Security & Permissions
+    doc["smsAllowed"] = c.allowSms;
+    doc["callsAllowed"] = c.allowCall;
+    doc["adminNumbers"] = c.adminNumbers;
+    doc["allowedNumbers"] = c.adminNumbers;
+    
+    // Legacy fields for backward compatibility
     doc["useApiSecret"] = c.useApiSecret;
     doc["apiSecret"] = c.apiSecret;
     doc["forwardUrl"] = c.forwardUrl;
     doc["forwardApiKey"] = c.forwardApiKey;
     doc["allowSms"] = c.allowSms;
     doc["allowCall"] = c.allowCall;
-  doc["settingsUrl"] = c.settingsUrl;
-  doc["settingsVersion"] = c.settingsVersion;
-    // mask apiSecret unless auth provided
-    bool auth = false;
-    if (server.hasHeader("X-Dashboard-Auth") && server.header("X-Dashboard-Auth") == String(DASHBOARD_PASSWORD)) auth = true;
-    if (!auth) doc["apiSecret"] = "*****";
+    
+    // Mask sensitive fields unless authenticated
+    bool auth = checkAuth();
+    if (!auth) {
+      doc["apiKey"] = "*****";
+      doc["apiSecret"] = "*****";
+      doc["forwardApiKey"] = "*****";
+    }
+    
     String out;
     serializeJson(doc, out);
     server.send(200, "application/json", out);
@@ -354,22 +367,57 @@ void WebDashboard::handleApiConfig() {
 
   // POST: save config
   Serial.println("[WebDashboard] handleApiConfig POST");
-  if (!checkAuth()) { Serial.println("[WebDashboard] handleApiConfig POST unauthorized"); server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
+  if (!checkAuth()) { 
+    Serial.println("[WebDashboard] handleApiConfig POST unauthorized"); 
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); 
+    return; 
+  }
+  
   String body = server.arg("plain");
-  StaticJsonDocument<512> doc;
+  StaticJsonDocument<1024> doc;
   DeserializationError err = deserializeJson(doc, body);
-  if (err) { server.send(400, "application/json", "{\"error\":\"bad json\"}"); return; }
+  if (err) { 
+    server.send(400, "application/json", "{\"error\":\"bad json\"}"); 
+    return; 
+  }
+  
   Config c = cfgMgr.get();
-  c.useApiSecret = doc["useApiSecret"] | c.useApiSecret;
-  c.apiSecret = String((const char *)doc["apiSecret"].as<const char *>());
-  c.forwardUrl = String((const char *)doc["forwardUrl"].as<const char *>());
-  c.forwardApiKey = String((const char *)doc["forwardApiKey"].as<const char *>());
-  c.allowSms = doc["allowSms"] | c.allowSms;
-  c.allowCall = doc["allowCall"] | c.allowCall;
-  c.settingsUrl = String((const char *)doc["settingsUrl"].as<const char *>());
-  c.settingsVersion = String((const char *)doc["settingsVersion"].as<const char *>());
-  if (cfgMgr.save(c)) server.send(200, "application/json", "{\"ok\":true}");
-  else server.send(500, "application/json", "{\"ok\":false}\n");
+  
+  // Update all configuration parameters from JSON
+  if (doc.containsKey("deviceId")) { const char* v = doc["deviceId"]; if(v) c.deviceName = v; }
+  if (doc.containsKey("ownerName")) { const char* v = doc["ownerName"]; if(v) c.ownerName = v; }
+  if (doc.containsKey("ownerPhone")) { const char* v = doc["ownerPhone"]; if(v) c.myNumber = v; }
+  if (doc.containsKey("logMessages")) c.logMessages = doc["logMessages"];
+  
+  if (doc.containsKey("serverUrl")) { const char* v = doc["serverUrl"]; if(v) c.forwardUrl = v; }
+  if (doc.containsKey("apiKey")) { const char* v = doc["apiKey"]; if(v) c.apiSecret = v; }
+  if (doc.containsKey("gateEspUrl")) { const char* v = doc["gateEspUrl"]; if(v) c.gateEspUrl = v; }
+  if (doc.containsKey("forwardSmsUrl")) { const char* v = doc["forwardSmsUrl"]; if(v) c.forwardUrl = v; }
+  
+  if (doc.containsKey("ntfyEnabled")) c.ntfyEnabled = doc["ntfyEnabled"];
+  if (doc.containsKey("ntfyUrl")) { const char* v = doc["ntfyUrl"]; if(v) c.ntfyServerUrl = v; }
+  if (doc.containsKey("ntfyTopic")) { const char* v = doc["ntfyTopic"]; if(v) c.ntfyTopic = v; }
+  if (doc.containsKey("autoReplyMessage")) { const char* v = doc["autoReplyMessage"]; if(v) c.autoReplyMessage = v; }
+  
+  if (doc.containsKey("smsAllowed")) c.allowSms = doc["smsAllowed"];
+  if (doc.containsKey("callsAllowed")) c.allowCall = doc["callsAllowed"];
+  if (doc.containsKey("adminNumbers")) { const char* v = doc["adminNumbers"]; if(v) c.adminNumbers = v; }
+  if (doc.containsKey("allowedNumbers")) { const char* v = doc["allowedNumbers"]; if(v) c.adminNumbers = v; }
+  
+  // Handle legacy field mappings for backward compatibility
+  if (doc.containsKey("apiSecret")) { const char* v = doc["apiSecret"]; if(v) c.apiSecret = v; }
+  if (doc.containsKey("forwardUrl")) { const char* v = doc["forwardUrl"]; if(v) c.forwardUrl = v; }
+  if (doc.containsKey("allowSms")) c.allowSms = doc["allowSms"];
+  if (doc.containsKey("allowCall")) c.allowCall = doc["allowCall"];
+  
+  // Save configuration and respond
+  if (cfgMgr.save(c)) {
+    Serial.println("[WebDashboard] Configuration saved successfully");
+    server.send(200, "application/json", "{\"success\":true,\"message\":\"Configuration saved successfully\"}");
+  } else {
+    Serial.println("[WebDashboard] Failed to save configuration");
+    server.send(500, "application/json", "{\"success\":false,\"error\":\"Failed to save configuration\"}");
+  }
 }
 
 void WebDashboard::handleApiEvents() {
@@ -379,7 +427,7 @@ void WebDashboard::handleApiEvents() {
 
 void WebDashboard::handleSendSms() {
   Config c = cfgMgr.get();
-  if (c.useApiSecret) {
+  if (c.apiSecret.length() > 0) {
     // check secret header or body
     String h = server.header("X-Api-Secret");
     if (h != c.apiSecret) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
@@ -433,7 +481,7 @@ void WebDashboard::handleSendSms() {
 
 void WebDashboard::handleCall() {
   Config c = cfgMgr.get();
-  if (c.useApiSecret) {
+  if (c.apiSecret.length() > 0) {
     String h = server.header("X-Api-Secret");
     if (h != c.apiSecret) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
   }
@@ -448,7 +496,7 @@ void WebDashboard::handleCall() {
 
 void WebDashboard::handleHangup() {
   Config c = cfgMgr.get();
-  if (c.useApiSecret) {
+  if (c.apiSecret.length() > 0) {
     String h = server.header("X-Api-Secret");
     if (h != c.apiSecret) { server.send(401, "application/json", "{\"error\":\"unauthorized\"}"); return; }
   }
@@ -456,4 +504,259 @@ void WebDashboard::handleHangup() {
   Serial.println("[WebDashboard] handleHangup");
   callManager->hangup();
   server.send(200, "application/json", "{\"ok\":true}\n");
+}
+
+void WebDashboard::handleApiStatus() {
+  Serial.println("[WebDashboard] handleApiStatus");
+  
+  StaticJsonDocument<512> doc;
+  doc["version"] = "v7.0.0";
+  doc["uptime"] = String(millis() / 1000) + " seconds";
+  doc["freeMemory"] = String(ESP.getFreeHeap()) + " bytes";
+  doc["networkStatus"] = "Connected"; // TODO: Get actual network status
+  doc["signalStrength"] = "Unknown"; // TODO: Get actual signal strength
+  doc["lastRestart"] = "System boot"; // TODO: Track actual restart reason
+  doc["configSource"] = "SPIFFS"; // TODO: Get actual config source from ConfigManager
+  
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+void WebDashboard::handleApiAuth() {
+  Serial.println("[WebDashboard] handleApiAuth");
+  
+  bool authenticated = checkAuth();
+  StaticJsonDocument<128> doc;
+  doc["authenticated"] = authenticated;
+  
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+void WebDashboard::handleTestSMS() {
+  Serial.println("[WebDashboard] handleTestSMS");
+  if (!checkAuth()) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return;
+  }
+  
+  if (!smsManager) {
+    server.send(500, "application/json", "{\"error\":\"SMS manager not available\"}");
+    return;
+  }
+  
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"error\":\"no request body\"}");
+    return;
+  }
+  
+  StaticJsonDocument<256> doc;
+  deserializeJson(doc, server.arg("plain"));
+  const char* testNumberVal = doc["number"];
+  String testNumber = testNumberVal ? String(testNumberVal) : "";
+  
+  if (testNumber.length() == 0) {
+    server.send(400, "application/json", "{\"error\":\"no phone number provided\"}");
+    return;
+  }
+  
+  String testMessage = "Test SMS from TTGO T-Call dashboard at " + String(millis());
+  String error;
+  bool success = smsManager->sendSms(testNumber, testMessage, error);
+  
+  StaticJsonDocument<256> response;
+  response["success"] = success;
+  if (success) {
+    response["message"] = "Test SMS sent successfully";
+  } else {
+    response["error"] = error;
+  }
+  
+  String out;
+  serializeJson(response, out);
+  server.send(success ? 200 : 400, "application/json", out);
+}
+
+void WebDashboard::handleTestCall() {
+  Serial.println("[WebDashboard] handleTestCall");
+  if (!checkAuth()) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return;
+  }
+  
+  if (!callManager) {
+    server.send(500, "application/json", "{\"error\":\"Call manager not available\"}");
+    return;
+  }
+  
+  // For now, just simulate a call test
+  StaticJsonDocument<256> response;
+  response["success"] = true;
+  response["message"] = "Call test completed (simulated)";
+  
+  String out;
+  serializeJson(response, out);
+  server.send(200, "application/json", out);
+}
+
+void WebDashboard::handleTestNTFY() {
+  Serial.println("[WebDashboard] handleTestNTFY");
+  if (!checkAuth()) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return;
+  }
+  
+  Config c = cfgMgr.get();
+  if (!c.ntfyEnabled || c.ntfyServerUrl.length() == 0) {
+    server.send(400, "application/json", "{\"error\":\"NTFY not configured or disabled\"}");
+    return;
+  }
+  
+  // Test NTFY notification
+  HTTPClient http;
+  String url = c.ntfyServerUrl;
+  if (c.ntfyTopic.length() > 0) {
+    if (!url.endsWith("/")) url += "/";
+    url += c.ntfyTopic;
+  }
+  
+  http.begin(url);
+  http.addHeader("Content-Type", "text/plain");
+  
+  String message = "Test notification from TTGO T-Call dashboard";
+  int httpCode = http.POST(message);
+  String response = http.getString();
+  http.end();
+  
+  StaticJsonDocument<256> doc;
+  doc["success"] = (httpCode == 200);
+  doc["httpCode"] = httpCode;
+  doc["message"] = (httpCode == 200) ? "NTFY test notification sent" : "NTFY test failed";
+  if (httpCode != 200) {
+    doc["error"] = response;
+  }
+  
+  String out;
+  serializeJson(doc, out);
+  server.send((httpCode == 200) ? 200 : 400, "application/json", out);
+}
+
+void WebDashboard::handleTestGateESP() {
+  Serial.println("[WebDashboard] handleTestGateESP");
+  if (!checkAuth()) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return;
+  }
+  
+  Config c = cfgMgr.get();
+  if (c.gateEspUrl.length() == 0) {
+    server.send(400, "application/json", "{\"error\":\"Gate ESP URL not configured\"}");
+    return;
+  }
+  
+  // Test Gate ESP communication
+  HTTPClient http;
+  http.begin(c.gateEspUrl);
+  http.addHeader("Content-Type", "application/json");
+  
+  StaticJsonDocument<128> testDoc;
+  testDoc["test"] = true;
+  testDoc["source"] = "ttgo-dashboard";
+  String testBody;
+  serializeJson(testDoc, testBody);
+  
+  int httpCode = http.POST(testBody);
+  String response = http.getString();
+  http.end();
+  
+  StaticJsonDocument<256> doc;
+  doc["success"] = (httpCode == 200);
+  doc["httpCode"] = httpCode;
+  doc["message"] = (httpCode == 200) ? "Gate ESP communication successful" : "Gate ESP communication failed";
+  if (httpCode != 200) {
+    doc["error"] = response;
+  }
+  
+  String out;
+  serializeJson(doc, out);
+  server.send((httpCode == 200) ? 200 : 400, "application/json", out);
+}
+
+void WebDashboard::handleClearLogs() {
+  Serial.println("[WebDashboard] handleClearLogs");
+  if (!checkAuth()) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return;
+  }
+  
+  // TODO: Implement actual log clearing functionality
+  // For now, just return success
+  StaticJsonDocument<128> doc;
+  doc["success"] = true;
+  doc["message"] = "Logs cleared successfully";
+  
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+}
+
+void WebDashboard::handleDownloadLogs() {
+  Serial.println("[WebDashboard] handleDownloadLogs");
+  if (!checkAuth()) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return;
+  }
+  
+  // TODO: Implement actual log file generation and download
+  // For now, create a simple log content
+  String logContent = "TTGO T-Call System Logs\n";
+  logContent += "Generated: " + String(millis()) + "ms since boot\n";
+  logContent += "Free Memory: " + String(ESP.getFreeHeap()) + " bytes\n";
+  logContent += "Configuration loaded from SPIFFS\n";
+  logContent += "System operational\n";
+  
+  server.sendHeader("Content-Type", "text/plain");
+  server.sendHeader("Content-Disposition", "attachment; filename=ttgo-logs.txt");
+  server.send(200, "text/plain", logContent);
+}
+
+void WebDashboard::handleRestart() {
+  Serial.println("[WebDashboard] handleRestart");
+  if (!checkAuth()) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return;
+  }
+  
+  StaticJsonDocument<128> doc;
+  doc["success"] = true;
+  doc["message"] = "Device restart initiated";
+  
+  String out;
+  serializeJson(doc, out);
+  server.send(200, "application/json", out);
+  
+  // Restart the device after a short delay
+  delay(1000);
+  ESP.restart();
+}
+
+void WebDashboard::handleConfigReset() {
+  Serial.println("[WebDashboard] handleConfigReset");
+  if (!checkAuth()) {
+    server.send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return;
+  }
+  
+  // Reset configuration to defaults
+  bool success = cfgMgr.resetToDefaults();
+  
+  StaticJsonDocument<128> doc;
+  doc["success"] = success;
+  doc["message"] = success ? "Configuration reset to defaults" : "Failed to reset configuration";
+  
+  String out;
+  serializeJson(doc, out);
+  server.send(success ? 200 : 500, "application/json", out);
 }

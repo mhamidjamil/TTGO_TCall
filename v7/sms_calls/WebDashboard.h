@@ -23,10 +23,20 @@ private:
   CallManager *callManager = nullptr;
   void handleDashboard();
   void handleApiConfig();
+  void handleApiStatus();
+  void handleApiAuth();
   void handleApiEvents();
   void handleSendSms();
   void handleCall();
   void handleHangup();
+  void handleTestSMS();
+  void handleTestCall();
+  void handleTestNTFY();
+  void handleTestGateESP();
+  void handleClearLogs();
+  void handleDownloadLogs();
+  void handleRestart();
+  void handleConfigReset();
   bool checkAuth();
 };
 
