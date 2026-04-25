@@ -18,12 +18,22 @@ public:
   bool begin(const V8Config &config);
   bool isReady() const;
   bool pollCommands();
-  bool pushStatus(const FirebaseCommand &command, const String &status, const String &errorReason = String());
+  bool fetchNextCommand(FirebaseCommand &outCommand);
+  bool updateCommandStatus(const FirebaseCommand &command, const String &status, const String &errorReason = String());
+  bool updateCounterSnapshot(int dailyCount, int weeklyCount, int monthlyCount);
   String lastError() const;
 
 private:
+  bool ensureAuthenticated();
+  bool authenticate();
+  String buildPathUrl(const String &path) const;
+  bool httpGetJson(const String &url, String &responseBody, int &statusCode);
+  bool httpPatchJson(const String &url, const String &payload, String &responseBody, int &statusCode);
+
   V8Config config{};
   bool ready = false;
+  unsigned long tokenExpiresAtMs = 0;
+  String idToken;
   String error;
 };
 
