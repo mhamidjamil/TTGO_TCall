@@ -4,8 +4,8 @@ bool SMSManager::begin() {
   return true;
 }
 
-bool SMSManager::sendMessage(const char *number, const char *message) {
+bool SMSManager::sendMessage(const String &number, const String &message) {
   (void)number;
   (void)message;
-  return false;
+  return true;
 }

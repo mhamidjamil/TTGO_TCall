@@ -10,20 +10,43 @@
 #define AP_PASS_DEFAULT "YOUR_AP_PASSWORD"
 #define WEB_SERVER_PORT_DEFAULT 420
 
+// Dashboard / operator defaults
+#define DASHBOARD_PASSWORD_DEFAULT "YOUR_DASHBOARD_PASSWORD"
+
 // Device identity defaults
 #define DEVICE_NAME_DEFAULT "TTGO T-Call v8"
 #define OWNER_NAME_DEFAULT "Device Owner"
 #define MY_NUMBER_DEFAULT "+92XXXXXXXXXX"
+#define DEFAULT_COUNTRY_CODE_DEFAULT "92"
+
+// Legacy SMS and call allowlists
+#define ADMIN_NUMBERS_DEFAULT ""
+#define AUTHENTIC_NUMBERS_DEFAULT ""
+#define BYPASS_KEY_DEFAULT "YOUR_BYPASS_KEY"
+
+// Hardware defaults
+#define MODEM_SERIAL_BAUD_DEFAULT 115200
+#define DHT_PIN_DEFAULT 33
+#define DHT_TYPE_DEFAULT 11
 
 // Firebase defaults
 #define FIREBASE_PROJECT_ID_DEFAULT "YOUR_FIREBASE_PROJECT_ID"
-#define FIREBASE_DATABASE_URL_DEFAULT "https://YOUR_PROJECT.firebaseio.com"
+#define FIREBASE_DATABASE_URL_DEFAULT "https://YOUR_PROJECT-default-rtdb.firebaseio.com"
 #define FIREBASE_API_KEY_DEFAULT "YOUR_FIREBASE_API_KEY"
+#define FIREBASE_USER_EMAIL_DEFAULT "YOUR_DEVICE_EMAIL"
+#define FIREBASE_USER_PASSWORD_DEFAULT "YOUR_DEVICE_PASSWORD"
+#define FIREBASE_COMMAND_PATH_DEFAULT "/ttgo_tcall/commands/pending"
+#define FIREBASE_HISTORY_PATH_DEFAULT "/ttgo_tcall/commands/history"
+#define FIREBASE_COUNTER_PATH_DEFAULT "/ttgo_tcall/counters"
+#define FIREBASE_STATUS_PATH_DEFAULT "/ttgo_tcall/status"
 
 // Polling and limits
 #define POLLING_INTERVAL_SECONDS_DEFAULT 5
 #define DAILY_SMS_LIMIT_DEFAULT 200
 #define WEEKLY_SMS_LIMIT_DEFAULT 950
 #define MONTHLY_SMS_LIMIT_DEFAULT 4900
+
+// Logging defaults
+#define LOG_VERBOSE_DEFAULT 1
 
 #endif

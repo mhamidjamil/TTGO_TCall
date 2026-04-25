@@ -4,7 +4,7 @@
 class DisplayManager {
 public:
   bool begin();
-  void update();
+  void update(float temperature, float humidity, const char *networkMode, const char *cloudMode);
 };
 
 #endif
