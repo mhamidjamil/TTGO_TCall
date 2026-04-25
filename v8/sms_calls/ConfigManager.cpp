@@ -49,8 +49,11 @@ void ConfigManager::loadDefaults() {
   config.wifiEnabled = true;
   config.apFallbackEnabled = true;
   config.logVerbose = LOG_VERBOSE_DEFAULT != 0;
+  config.firebaseUseAnonymous = FIREBASE_USE_ANONYMOUS_DEFAULT != 0;
   copyText(config.wifiSsid, sizeof(config.wifiSsid), WIFI_SSID_DEFAULT);
   copyText(config.wifiPass, sizeof(config.wifiPass), WIFI_PASS_DEFAULT);
+  copyText(config.wifiSsidBackup, sizeof(config.wifiSsidBackup), WIFI_SSID_BACKUP_DEFAULT);
+  copyText(config.wifiPassBackup, sizeof(config.wifiPassBackup), WIFI_PASS_BACKUP_DEFAULT);
   copyText(config.apSsid, sizeof(config.apSsid), AP_SSID_DEFAULT);
   copyText(config.apPass, sizeof(config.apPass), AP_PASS_DEFAULT);
   config.webServerPort = WEB_SERVER_PORT_DEFAULT;
@@ -75,6 +78,7 @@ void ConfigManager::loadDefaults() {
   copyText(config.firebaseHistoryPath, sizeof(config.firebaseHistoryPath), FIREBASE_HISTORY_PATH_DEFAULT);
   copyText(config.firebaseCounterPath, sizeof(config.firebaseCounterPath), FIREBASE_COUNTER_PATH_DEFAULT);
   copyText(config.firebaseStatusPath, sizeof(config.firebaseStatusPath), FIREBASE_STATUS_PATH_DEFAULT);
+  copyText(config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath), FIREBASE_TELEMETRY_PATH_DEFAULT);
 }
 
 bool ConfigManager::loadFromSPIFFS() {
@@ -118,8 +122,11 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   config.wifiEnabled = doc["wifiEnabled"] | config.wifiEnabled;
   config.apFallbackEnabled = doc["apFallbackEnabled"] | config.apFallbackEnabled;
   config.logVerbose = doc["logVerbose"] | config.logVerbose;
+  config.firebaseUseAnonymous = doc["firebaseUseAnonymous"] | config.firebaseUseAnonymous;
   strlcpy(config.wifiSsid, doc["wifiSsid"] | config.wifiSsid, sizeof(config.wifiSsid));
   strlcpy(config.wifiPass, doc["wifiPass"] | config.wifiPass, sizeof(config.wifiPass));
+  strlcpy(config.wifiSsidBackup, doc["wifiSsidBackup"] | config.wifiSsidBackup, sizeof(config.wifiSsidBackup));
+  strlcpy(config.wifiPassBackup, doc["wifiPassBackup"] | config.wifiPassBackup, sizeof(config.wifiPassBackup));
   strlcpy(config.apSsid, doc["apSsid"] | config.apSsid, sizeof(config.apSsid));
   strlcpy(config.apPass, doc["apPass"] | config.apPass, sizeof(config.apPass));
   config.webServerPort = doc["webServerPort"] | config.webServerPort;
@@ -144,6 +151,7 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   strlcpy(config.firebaseHistoryPath, doc["firebaseHistoryPath"] | config.firebaseHistoryPath, sizeof(config.firebaseHistoryPath));
   strlcpy(config.firebaseCounterPath, doc["firebaseCounterPath"] | config.firebaseCounterPath, sizeof(config.firebaseCounterPath));
   strlcpy(config.firebaseStatusPath, doc["firebaseStatusPath"] | config.firebaseStatusPath, sizeof(config.firebaseStatusPath));
+  strlcpy(config.firebaseTelemetryPath, doc["firebaseTelemetryPath"] | config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath));
 }
 
 String ConfigManager::writeJsonConfig() const {
@@ -151,8 +159,11 @@ String ConfigManager::writeJsonConfig() const {
   doc["wifiEnabled"] = config.wifiEnabled;
   doc["apFallbackEnabled"] = config.apFallbackEnabled;
   doc["logVerbose"] = config.logVerbose;
+  doc["firebaseUseAnonymous"] = config.firebaseUseAnonymous;
   doc["wifiSsid"] = config.wifiSsid;
   doc["wifiPass"] = config.wifiPass;
+  doc["wifiSsidBackup"] = config.wifiSsidBackup;
+  doc["wifiPassBackup"] = config.wifiPassBackup;
   doc["apSsid"] = config.apSsid;
   doc["apPass"] = config.apPass;
   doc["webServerPort"] = config.webServerPort;
@@ -177,6 +188,7 @@ String ConfigManager::writeJsonConfig() const {
   doc["firebaseHistoryPath"] = config.firebaseHistoryPath;
   doc["firebaseCounterPath"] = config.firebaseCounterPath;
   doc["firebaseStatusPath"] = config.firebaseStatusPath;
+  doc["firebaseTelemetryPath"] = config.firebaseTelemetryPath;
 
   String jsonText;
   serializeJsonPretty(doc, jsonText);

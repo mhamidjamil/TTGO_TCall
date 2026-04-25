@@ -37,9 +37,14 @@ bool FirebaseManager::begin(const V8Config &incomingConfig) {
   error = String();
 
   if (String(config.firebaseProjectId).isEmpty() || String(config.firebaseDatabaseUrl).isEmpty() ||
-      String(config.firebaseApiKey).isEmpty() || String(config.firebaseUserEmail).isEmpty() ||
-      String(config.firebaseUserPassword).isEmpty()) {
+      String(config.firebaseApiKey).isEmpty()) {
     error = "Firebase config missing";
+    return false;
+  }
+
+  if (!config.firebaseUseAnonymous &&
+      (String(config.firebaseUserEmail).isEmpty() || String(config.firebaseUserPassword).isEmpty())) {
+    error = "Firebase email/password missing";
     return false;
   }
 
@@ -212,11 +217,17 @@ bool FirebaseManager::authenticate() {
     return false;
   }
 
-  const String url = String("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=") + config.firebaseApiKey;
+  String url;
   DynamicJsonDocument authDoc(512);
-  authDoc["email"] = config.firebaseUserEmail;
-  authDoc["password"] = config.firebaseUserPassword;
-  authDoc["returnSecureToken"] = true;
+  if (config.firebaseUseAnonymous) {
+    url = String("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=") + config.firebaseApiKey;
+    authDoc["returnSecureToken"] = true;
+  } else {
+    url = String("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=") + config.firebaseApiKey;
+    authDoc["email"] = config.firebaseUserEmail;
+    authDoc["password"] = config.firebaseUserPassword;
+    authDoc["returnSecureToken"] = true;
+  }
   String payload;
   serializeJson(authDoc, payload);
 
@@ -255,6 +266,32 @@ bool FirebaseManager::authenticate() {
   tokenExpiresAtMs = millis() + (unsigned long)(expiresIn - 60) * 1000UL;
   error = String();
   return true;
+}
+
+bool FirebaseManager::pushTelemetry(float temperature, float humidity, int sentToday, int sentWeek, int sentMonth, unsigned long epochSeconds) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(512);
+  doc["temperature"] = temperature;
+  doc["humidity"] = humidity;
+  doc["sentToday"] = sentToday;
+  doc["sentWeek"] = sentWeek;
+  doc["sentMonth"] = sentMonth;
+  doc["timestamp"] = epochSeconds;
+  doc["updatedAtMs"] = millis();
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  if (!httpPatchJson(buildPathUrl(String(config.firebaseTelemetryPath)), payload, response, statusCode)) {
+    return false;
+  }
+
+  return statusCode >= 200 && statusCode < 300;
 }
 
 String FirebaseManager::buildPathUrl(const String &path) const {

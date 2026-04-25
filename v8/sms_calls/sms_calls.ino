@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <time.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -30,6 +31,7 @@ static WebDashboard webDashboard;
 
 static unsigned long lastUiRefresh = 0;
 static unsigned long lastCloudPoll = 0;
+static unsigned long lastTelemetryPush = 0;
 static V8Config runtimeConfig;
 
 static void initializeModemHardware() {
@@ -128,6 +130,9 @@ void setup() {
 
   wifiManager.begin(runtimeConfig);
   Logger::info("WIFI", wifiManager.modeName().c_str());
+  if (wifiManager.isStationConnected()) {
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  }
 
   firebaseManager.begin(runtimeConfig);
   if (firebaseManager.isReady()) {
@@ -165,6 +170,26 @@ void loop() {
     lastUiRefresh = millis();
     float temperature = dhtManager.readTemperature();
     float humidity = dhtManager.readHumidity();
-    displayManager.update(temperature, humidity, wifiManager.modeName().c_str(), firebaseManager.isReady() ? "FIREBASE" : "LOCAL");
+    displayManager.update(
+        temperature,
+        humidity,
+        wifiManager.modeName().c_str(),
+        firebaseManager.isReady() ? "FIREBASE" : "LOCAL",
+        rateLimitManager.dailyCount(),
+        rateLimitManager.weeklyCount(),
+        rateLimitManager.monthlyCount());
+
+    if (firebaseManager.isReady() && millis() - lastTelemetryPush > 15000) {
+      lastTelemetryPush = millis();
+      time_t now = time(nullptr);
+      unsigned long epochSeconds = (now > 1000) ? (unsigned long)now : (millis() / 1000UL);
+      firebaseManager.pushTelemetry(
+          temperature,
+          humidity,
+          rateLimitManager.dailyCount(),
+          rateLimitManager.weeklyCount(),
+          rateLimitManager.monthlyCount(),
+          epochSeconds);
+    }
   }
 }

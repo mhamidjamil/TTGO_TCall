@@ -7,8 +7,11 @@ struct V8Config {
   bool wifiEnabled;
   bool apFallbackEnabled;
   bool logVerbose;
+  bool firebaseUseAnonymous;
   char wifiSsid[64];
   char wifiPass[64];
+  char wifiSsidBackup[64];
+  char wifiPassBackup[64];
   char apSsid[32];
   char apPass[32];
   int webServerPort;
@@ -33,6 +36,7 @@ struct V8Config {
   char firebaseHistoryPath[96];
   char firebaseCounterPath[96];
   char firebaseStatusPath[96];
+  char firebaseTelemetryPath[96];
 };
 
 class ConfigManager {

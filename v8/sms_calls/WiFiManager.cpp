@@ -18,16 +18,37 @@ bool WiFiManager::begin(const V8Config &config) {
 }
 
 bool WiFiManager::connectStation(const V8Config &config) {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(config.wifiSsid, config.wifiPass);
+  auto attempt = [&](const char *ssid, const char *pass) -> bool {
+    if (ssid == nullptr || strlen(ssid) == 0) {
+      return false;
+    }
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, pass);
 
-  const unsigned long timeoutMs = 15000;
-  unsigned long started = millis();
-  while (WiFi.status() != WL_CONNECTED && (millis() - started) < timeoutMs) {
-    delay(250);
+    const unsigned long timeoutMs = 15000;
+    unsigned long started = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - started) < timeoutMs) {
+      delay(250);
+    }
+
+    return WiFi.status() == WL_CONNECTED;
+  };
+
+  if (attempt(config.wifiSsid, config.wifiPass)) {
+    return true;
   }
 
-  return WiFi.status() == WL_CONNECTED;
+  WiFi.disconnect(true);
+  delay(200);
+
+  if (attempt(config.wifiSsidBackup, config.wifiPassBackup)) {
+    return true;
+  }
+
+  WiFi.disconnect(true);
+  delay(200);
+
+  return false;
 }
 
 void WiFiManager::startAccessPoint(const V8Config &config) {

@@ -21,6 +21,7 @@ public:
   bool fetchNextCommand(FirebaseCommand &outCommand);
   bool updateCommandStatus(const FirebaseCommand &command, const String &status, const String &errorReason = String());
   bool updateCounterSnapshot(int dailyCount, int weeklyCount, int monthlyCount);
+  bool pushTelemetry(float temperature, float humidity, int sentToday, int sentWeek, int sentMonth, unsigned long epochSeconds);
   String lastError() const;
 
 private:
