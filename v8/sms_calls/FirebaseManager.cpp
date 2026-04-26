@@ -527,32 +527,100 @@ String FirebaseManager::buildPathUrl(const String &path) const {
 }
 
 bool FirebaseManager::httpGetJson(const String &url, String &responseBody, int &statusCode) {
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  if (!http.begin(client, url)) {
-    error = "http get begin failed";
-    return false;
+  String requestUrl = url;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    if (!http.begin(client, requestUrl)) {
+      error = String("http get begin failed url=") + requestUrl;
+      return false;
+    }
+
+    statusCode = http.GET();
+    responseBody = http.getString();
+    http.end();
+
+    if (statusCode == 404 && attempt == 0 && tryUpdateDatabaseUrlFromBody(responseBody)) {
+      requestUrl = rebuildUrlWithCurrentBase(requestUrl);
+      continue;
+    }
+    break;
   }
 
-  statusCode = http.GET();
-  responseBody = http.getString();
-  http.end();
   return true;
 }
 
 bool FirebaseManager::httpPatchJson(const String &url, const String &payload, String &responseBody, int &statusCode) {
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  if (!http.begin(client, url)) {
-    error = "http patch begin failed";
+  String requestUrl = url;
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    if (!http.begin(client, requestUrl)) {
+      error = String("http patch begin failed url=") + requestUrl;
+      return false;
+    }
+
+    http.addHeader("Content-Type", "application/json");
+    statusCode = http.PATCH(payload);
+    responseBody = http.getString();
+    http.end();
+
+    if (statusCode == 404 && attempt == 0 && tryUpdateDatabaseUrlFromBody(responseBody)) {
+      requestUrl = rebuildUrlWithCurrentBase(requestUrl);
+      continue;
+    }
+    break;
+  }
+
+  return true;
+}
+
+bool FirebaseManager::tryUpdateDatabaseUrlFromBody(const String &responseBody) {
+  if (responseBody.length() == 0) {
     return false;
   }
 
-  http.addHeader("Content-Type", "application/json");
-  statusCode = http.PATCH(payload);
-  responseBody = http.getString();
-  http.end();
+  DynamicJsonDocument doc(768);
+  if (deserializeJson(doc, responseBody)) {
+    return false;
+  }
+
+  String correctUrl = doc["correctUrl"] | "";
+  if (correctUrl.length() == 0 || !correctUrl.startsWith("http")) {
+    return false;
+  }
+
+  if (correctUrl.endsWith("/")) {
+    correctUrl.remove(correctUrl.length() - 1);
+  }
+
+  String current = String(config.firebaseDatabaseUrl);
+  if (current == correctUrl) {
+    return false;
+  }
+
+  strlcpy(config.firebaseDatabaseUrl, correctUrl.c_str(), sizeof(config.firebaseDatabaseUrl));
+  error = String("database url auto-corrected to ") + correctUrl;
   return true;
+}
+
+String FirebaseManager::rebuildUrlWithCurrentBase(const String &originalUrl) const {
+  String base = String(config.firebaseDatabaseUrl);
+  if (base.endsWith("/")) {
+    base.remove(base.length() - 1);
+  }
+
+  int schemePos = originalUrl.indexOf("://");
+  if (schemePos < 0) {
+    return originalUrl;
+  }
+
+  int pathStart = originalUrl.indexOf('/', schemePos + 3);
+  if (pathStart < 0) {
+    return base;
+  }
+
+  return base + originalUrl.substring(pathStart);
 }
