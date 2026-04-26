@@ -62,6 +62,15 @@ void RateLimitManager::sync() {
   rolloverIfNeeded();
 }
 
+void RateLimitManager::loadSnapshot(int dailyCount, int weeklyCount, int monthlyCount) {
+  daily = dailyCount < 0 ? 0 : dailyCount;
+  weekly = weeklyCount < 0 ? 0 : weeklyCount;
+  monthly = monthlyCount < 0 ? 0 : monthlyCount;
+  dayWindowStartMs = millis();
+  weekWindowStartMs = millis();
+  monthWindowStartMs = millis();
+}
+
 int RateLimitManager::dailyCount() const {
   return daily;
 }

@@ -14,6 +14,7 @@ Firebase Realtime Database is the cloud direction for v8.
 - Claim work atomically to avoid duplicate sends.
 - Preserve local fallback behavior when internet is unavailable.
 - Keep device-side configuration isolated from any service-account material.
+- Server posting details live in [10-SERVER-SMS-FLOW.md](10-SERVER-SMS-FLOW.md).
 
 ## What The ESP32 Actually Uses
 - WiFi STA mode means the ESP32 is acting as a client connecting to your router.

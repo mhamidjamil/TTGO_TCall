@@ -197,6 +197,33 @@ bool FirebaseManager::updateCounterSnapshot(int dailyCount, int weeklyCount, int
   return statusCode >= 200 && statusCode < 300;
 }
 
+bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, int &monthlyCount) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  String response;
+  int statusCode = 0;
+  if (!httpGetJson(buildPathUrl(String(config.firebaseCounterPath)), response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode < 200 || statusCode >= 300 || response == "null") {
+    return false;
+  }
+
+  DynamicJsonDocument doc(512);
+  if (deserializeJson(doc, response)) {
+    error = String("counter parse failed body=") + response;
+    return false;
+  }
+
+  dailyCount = doc["daily"] | 0;
+  weeklyCount = doc["weekly"] | 0;
+  monthlyCount = doc["monthly"] | 0;
+  return true;
+}
+
 String FirebaseManager::lastError() const {
   return error;
 }
@@ -334,6 +361,53 @@ bool FirebaseManager::pushStartupStatus(const String &bootTime, const String &wi
   String response;
   int statusCode = 0;
   if (!httpPatchJson(buildPathUrl(String(config.firebaseStatusPath)), payload, response, statusCode)) {
+    return false;
+  }
+
+  return statusCode >= 200 && statusCode < 300;
+}
+
+bool FirebaseManager::pushLandingSnapshot(float temperature,
+                                         float humidity,
+                                         int sentToday,
+                                         int sentWeek,
+                                         int sentMonth,
+                                         int dailyLimit,
+                                         int weeklyLimit,
+                                         int monthlyLimit,
+                                         const String &wifiMode,
+                                         const String &ipAddress,
+                                         bool firebaseReady,
+                                         bool telemetryPushOk,
+                                         const String &telemetryMessage,
+                                         unsigned long epochSeconds) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(1024);
+  doc["temperature"] = temperature;
+  doc["humidity"] = humidity;
+  doc["sentToday"] = sentToday;
+  doc["sentWeek"] = sentWeek;
+  doc["sentMonth"] = sentMonth;
+  doc["dailyLimit"] = dailyLimit;
+  doc["weeklyLimit"] = weeklyLimit;
+  doc["monthlyLimit"] = monthlyLimit;
+  doc["wifiMode"] = wifiMode;
+  doc["ipAddress"] = ipAddress;
+  doc["firebaseReady"] = firebaseReady;
+  doc["telemetryPushOk"] = telemetryPushOk;
+  doc["telemetryMessage"] = telemetryMessage;
+  doc["timestamp"] = epochSeconds;
+  doc["updatedAtMs"] = millis();
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  if (!httpPatchJson(buildPathUrl(String("/") + String("ttgo_tcall")), payload, response, statusCode)) {
     return false;
   }
 

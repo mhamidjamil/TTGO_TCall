@@ -57,13 +57,14 @@ h1,h2{margin-top:24px}
 <li><b>Service account JSON is server-side only</b>. It is not used on the ESP32.</li>
 </ul>
 
-<h2>Why auth failed with code 400</h2>
-<p>The error body <code>ADMIN_ONLY_OPERATION</code> usually means anonymous sign-in is disabled or blocked for the project.</p>
-<ul>
-<li>If you want the current firmware default to work, enable <b>Anonymous</b> auth in Firebase Authentication.</li>
-<li>If anonymous auth is not allowed, create a dedicated Firebase Auth user and set email/password in the local <code>secrets.h</code>.</li>
-<li>Use the exact RTDB URL for the project.</li>
-</ul>
+<h2>Firebase setup</h2>
+<ol>
+<li>Enable Realtime Database.</li>
+<li>Enable Authentication.</li>
+<li>Enable Anonymous sign-in or set device email/password in <code>secrets.h</code>.</li>
+<li>Use the exact RTDB URL from the same Firebase project as the API key.</li>
+<li>Allow the device to read/write the <code>ttgo_tcall</code> subtree during development.</li>
+</ol>
 
 <h2>Realtime Database path layout</h2>
 <ul>
@@ -74,7 +75,7 @@ h1,h2{margin-top:24px}
 <li><code>/ttgo_tcall/telemetry</code> - temperature/humidity and counters with timestamp</li>
 </ul>
 
-<h2>What a pending SMS command should look like</h2>
+<h2>Pending SMS format for the server team</h2>
 <pre>{
   "type": "sms",
   "number": "+923001234567",
@@ -91,18 +92,12 @@ h1,h2{margin-top:24px}
   }
 }</pre>
 
-<h2>Checklist to make Firebase work</h2>
-<ol>
-<li>Enable Realtime Database.</li>
-<li>Enable Firebase Authentication.</li>
-<li>Enable Anonymous sign-in or create a device user.</li>
-<li>Use the project API key and RTDB URL from the same project.</li>
-<li>Make sure the device can reach the internet from WiFi STA mode.</li>
-<li>Check the serial log for the full auth error body if it still fails.</li>
-</ol>
-
-<h2>Local status</h2>
-<p>This device reports temperature, humidity, sent-today, week, and month counts on the OLED and uploads telemetry periodically when Firebase is ready.</p>
+<h2>On boot</h2>
+<ul>
+<li>The device first restores counters from Firebase.</li>
+<li>It waits 60 seconds before polling pending SMS.</li>
+<li>Telemetry includes temperature, humidity, counts, and timestamp.</li>
+</ul>
 </body></html>
 )rawliteral";
     server->send(200, "text/html", html);

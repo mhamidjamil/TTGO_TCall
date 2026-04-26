@@ -32,8 +32,12 @@ static WebDashboard webDashboard;
 static unsigned long lastUiRefresh = 0;
 static unsigned long lastCloudPoll = 0;
 static unsigned long lastTelemetryPush = 0;
+static unsigned long pendingPollStartMs = 0;
 static V8Config runtimeConfig;
 static String startupBootTime;
+static String startupIp;
+static bool lastTelemetryPushOk = false;
+static String lastTelemetryPushMessage = "not_attempted";
 
 static void initializeModemHardware() {
   Wire.begin(I2C_SDA_PIN_DEFAULT, I2C_SCL_PIN_DEFAULT);
@@ -117,6 +121,18 @@ static void processPendingCommand() {
   firebaseManager.updateCommandStatus(cmd, "sent", String());
 }
 
+static void syncCountersFromCloud() {
+  int daily = 0;
+  int weekly = 0;
+  int monthly = 0;
+  if (firebaseManager.fetchCounterSnapshot(daily, weekly, monthly)) {
+    rateLimitManager.loadSnapshot(daily, weekly, monthly);
+    Logger::info("RATE_LIMIT", "Counters restored from Firebase");
+  } else {
+    Logger::warn("RATE_LIMIT", firebaseManager.lastError().c_str());
+  }
+}
+
 static void printDhtStatus(const char *source) {
   float temperature = dhtManager.readTemperature();
   float humidity = dhtManager.readHumidity();
@@ -177,6 +193,7 @@ void setup() {
   firebaseManager.begin(runtimeConfig);
   if (firebaseManager.isReady()) {
     Logger::info("FIREBASE", "Firebase manager ready");
+    syncCountersFromCloud();
   } else {
     Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
   }
@@ -191,9 +208,10 @@ void setup() {
   dhtManager.begin();
   webDashboard.begin(runtimeConfig, wifiManager, firebaseManager);
 
-  String startupIp = wifiManager.localIp().toString();
+  startupIp = wifiManager.localIp().toString();
   Logger::info("BOOT", startupIp.c_str());
   Logger::info("API", webDashboard.docsUrl().c_str());
+  pendingPollStartMs = millis() + 60000UL;
 
   if (firebaseManager.isReady()) {
     if (firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), startupIp, true)) {
@@ -206,7 +224,8 @@ void setup() {
 
 void loop() {
   firebaseManager.pollCommands();
-  if (millis() - lastCloudPoll >= (unsigned long)runtimeConfig.pollingIntervalSeconds * 1000UL) {
+  if (firebaseManager.isReady() && millis() >= pendingPollStartMs &&
+      millis() - lastCloudPoll >= (unsigned long)runtimeConfig.pollingIntervalSeconds * 1000UL) {
     lastCloudPoll = millis();
     processPendingCommand();
   }
@@ -223,11 +242,13 @@ void loop() {
     lastUiRefresh = millis();
     float temperature = dhtManager.readTemperature();
     float humidity = dhtManager.readHumidity();
+
+    String telemetryState = lastTelemetryPushOk ? "ok" : "fail";
     displayManager.update(
         temperature,
         humidity,
         wifiManager.modeName().c_str(),
-        firebaseManager.isReady() ? "FIREBASE" : "LOCAL",
+        firebaseManager.isReady() ? telemetryState.c_str() : "LOCAL",
         rateLimitManager.dailyCount(),
         rateLimitManager.weeklyCount(),
         rateLimitManager.monthlyCount());
@@ -236,14 +257,40 @@ void loop() {
       lastTelemetryPush = millis();
       time_t now = time(nullptr);
       unsigned long epochSeconds = (now > 1000) ? (unsigned long)now : (millis() / 1000UL);
-      firebaseManager.pushTelemetry(
+      lastTelemetryPushOk = firebaseManager.pushTelemetry(
           temperature,
           humidity,
           rateLimitManager.dailyCount(),
           rateLimitManager.weeklyCount(),
           rateLimitManager.monthlyCount(),
           epochSeconds);
-      Logger::info("FIREBASE", "Telemetry pushed");
+      lastTelemetryPushMessage = lastTelemetryPushOk ? "Telemetry pushed" : firebaseManager.lastError();
+      if (lastTelemetryPushOk) {
+        Logger::info("FIREBASE", lastTelemetryPushMessage.c_str());
+      } else {
+        Logger::warn("FIREBASE", lastTelemetryPushMessage.c_str());
+      }
+
+      bool landingOk = firebaseManager.pushLandingSnapshot(
+          temperature,
+          humidity,
+          rateLimitManager.dailyCount(),
+          rateLimitManager.weeklyCount(),
+          rateLimitManager.monthlyCount(),
+          runtimeConfig.dailySmsLimit,
+          runtimeConfig.weeklySmsLimit,
+          runtimeConfig.monthlySmsLimit,
+          wifiManager.modeName(),
+          startupIp,
+          firebaseManager.isReady(),
+          lastTelemetryPushOk,
+          lastTelemetryPushMessage,
+          epochSeconds);
+      if (landingOk) {
+        Logger::info("FIREBASE", "Landing snapshot pushed");
+      } else {
+        Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
+      }
     }
   }
 }

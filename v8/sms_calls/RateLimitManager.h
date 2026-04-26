@@ -10,6 +10,7 @@ public:
   bool canSend(String &reason) const;
   void recordSend();
   void sync();
+  void loadSnapshot(int dailyCount, int weeklyCount, int monthlyCount);
   int dailyCount() const;
   int weeklyCount() const;
   int monthlyCount() const;
