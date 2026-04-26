@@ -46,6 +46,7 @@ static unsigned long telemetryIntervalMs = 15000UL;
 static unsigned long thingSpeakIntervalMs = 15000UL;
 static const unsigned long runtimeSettingsSyncIntervalMs = 10UL * 60UL * 1000UL;
 static bool showFirebasePushLogs = true;
+static bool showThingSpeakPushLogs = true;
 
 static void initializeModemHardware() {
   Wire.begin(I2C_SDA_PIN_DEFAULT, I2C_SCL_PIN_DEFAULT);
@@ -189,15 +190,17 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
 
   const uint32_t defaultIntervalOfDhtSeconds = 15;
   const bool defaultShowFirebasePushLogs = true;
+  const bool defaultShowThingSpeakPushLogs = true;
 
   FirebaseRuntimeSettings settings;
-  if (!firebaseManager.fetchRuntimeSettings(settings, defaultIntervalOfDhtSeconds, defaultShowFirebasePushLogs)) {
+  if (!firebaseManager.fetchRuntimeSettings(settings, defaultIntervalOfDhtSeconds, defaultShowFirebasePushLogs, defaultShowThingSpeakPushLogs)) {
     Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
     return false;
   }
 
   unsigned long oldIntervalSeconds = telemetryIntervalMs / 1000UL;
   bool oldShowFirebasePushLogs = showFirebasePushLogs;
+  bool oldShowThingSpeakPushLogs = showThingSpeakPushLogs;
   int oldDailyLimit = runtimeConfig.dailySmsLimit;
   int oldWeeklyLimit = runtimeConfig.weeklySmsLimit;
   int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
@@ -205,6 +208,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
   thingSpeakIntervalMs = telemetryIntervalMs < 15000UL ? 15000UL : telemetryIntervalMs;
   showFirebasePushLogs = settings.showFirebasePushLogs;
+  showThingSpeakPushLogs = settings.showThingSpeakPushLogs;
   runtimeConfig.dailySmsLimit = settings.dailySmsLimit;
   runtimeConfig.weeklySmsLimit = settings.weeklySmsLimit;
   runtimeConfig.monthlySmsLimit = settings.monthlySmsLimit;
@@ -215,6 +219,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   }
   if (settings.createdShowFirebasePushLogs) {
     Serial.println("[SYNC] created or healed Firebase variable: showFirebasePushLogs");
+  }
+  if (settings.createdShowThingSpeakPushLogs) {
+    Serial.println("[SYNC] created or healed Firebase variable: showThingSpeakPushLogs");
   }
   if (settings.createdDailySmsLimit) {
     Serial.println("[SYNC] created or healed Firebase variable: dailySmsLimit");
@@ -232,6 +239,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (oldShowFirebasePushLogs != showFirebasePushLogs) {
     printRuntimeSettingChange("showFirebasePushLogs", oldShowFirebasePushLogs ? "true" : "false", showFirebasePushLogs ? "true" : "false");
   }
+  if (oldShowThingSpeakPushLogs != showThingSpeakPushLogs) {
+    printRuntimeSettingChange("showThingSpeakPushLogs", oldShowThingSpeakPushLogs ? "true" : "false", showThingSpeakPushLogs ? "true" : "false");
+  }
   if (oldDailyLimit != runtimeConfig.dailySmsLimit) {
     printRuntimeSettingChange("dailySmsLimit", String(oldDailyLimit), String(runtimeConfig.dailySmsLimit));
   }
@@ -247,7 +257,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   Serial.print(" intervalOfDhtSeconds=");
   Serial.print(settings.intervalOfDhtSeconds);
   Serial.print(" showFirebasePushLogs=");
-  Serial.println(showFirebasePushLogs ? "true" : "false");
+  Serial.print(showFirebasePushLogs ? "true" : "false");
+  Serial.print(" showThingSpeakPushLogs=");
+  Serial.println(showThingSpeakPushLogs ? "true" : "false");
 
   lastRuntimeSettingsSync = millis();
   return true;
@@ -398,7 +410,9 @@ void loop() {
         lastThingSpeakPush = millis();
         bool thingSpeakOk = thingSpeakManager.update(temperature, humidity);
         if (thingSpeakOk) {
-          Logger::info("THINGSPEAK", "Temperature and humidity pushed");
+          if (showThingSpeakPushLogs) {
+            Logger::info("THINGSPEAK", "Temperature and humidity pushed");
+          }
         } else {
           Logger::warn("THINGSPEAK", thingSpeakManager.lastError().c_str());
         }
