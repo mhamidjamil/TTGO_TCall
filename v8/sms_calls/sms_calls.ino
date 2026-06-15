@@ -152,11 +152,11 @@ static unsigned long currentEpochSeconds() {
 
 static String formatEventTime(unsigned long epochSeconds) {
   if (epochSeconds > 1000) {
-    time_t eventTime = (time_t)epochSeconds;
+    time_t pakistanTime = (time_t)epochSeconds + (5 * 60 * 60);
     struct tm timeInfo;
-    if (localtime_r(&eventTime, &timeInfo)) {
+    if (gmtime_r(&pakistanTime, &timeInfo)) {
       char buffer[24];
-      strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeInfo);
+      strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S PKT", &timeInfo);
       return String(buffer);
     }
   }
@@ -182,12 +182,12 @@ static String quotedField(const String &line, int fieldIndex) {
   return String();
 }
 
-static bool pushSimEvent(const String &type, const String &number, const String &message, bool blocked, unsigned long epochSeconds) {
+static bool pushSimEvent(const String &type, const String &number, const String &message, bool blocked, const String &pakistanTimestamp, int simIndex = -1) {
   if (!firebaseManager.isReady()) {
     Logger::warn("FIREBASE", "SIM event skipped: firebase not ready");
     return false;
   }
-  if (!firebaseManager.pushSimModuleEvent(type, number, message, blocked, epochSeconds)) {
+  if (!firebaseManager.pushSimModuleEvent(type, number, message, blocked, pakistanTimestamp, simIndex)) {
     Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
     return false;
   }
@@ -197,6 +197,7 @@ static bool pushSimEvent(const String &type, const String &number, const String 
 static void processIncomingCall(const String &rawNumber) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
+  String pakistanTimestamp = formatEventTime(epochSeconds);
   if (numbersMatch(number, lastCallNumber) && millis() - lastCallHandledMs < duplicateCallWindowMs) {
     Serial.print("[CALL] duplicate ignored number=");
     Serial.println(number);
@@ -206,14 +207,14 @@ static void processIncomingCall(const String &rawNumber) {
   lastCallHandledMs = millis();
 
   bool blocked = isBlockedNumber(number, blockedCallers, blockedCallerCount);
-  bool firebaseOk = pushSimEvent("call", number, String(), blocked, epochSeconds);
+  bool firebaseOk = pushSimEvent("call", number, String(), blocked, pakistanTimestamp);
 
   Serial.print("[CALL] incoming number=");
   Serial.print(number);
   Serial.print(" blocked=");
   Serial.print(blocked ? "yes" : "no");
   Serial.print(" time=");
-  Serial.print(formatEventTime(epochSeconds));
+  Serial.print(pakistanTimestamp);
   Serial.print(" firestore=");
   Serial.println(firebaseOk ? "ok" : "failed");
 
@@ -222,7 +223,7 @@ static void processIncomingCall(const String &rawNumber) {
     return;
   }
 
-  String message = String("Incoming call at ") + formatEventTime(epochSeconds);
+  String message = String("Incoming call at ") + pakistanTimestamp;
   if (ntfyManager.notify(String("call from ") + number, message)) {
     Serial.print("[NTFY] call notification sent number=");
     Serial.println(number);
@@ -234,8 +235,9 @@ static void processIncomingCall(const String &rawNumber) {
 static void processIncomingSms(const String &rawNumber, const String &message, int smsIndex) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
+  String pakistanTimestamp = formatEventTime(epochSeconds);
   bool blocked = isBlockedNumber(number, blockedSmsSenders, blockedSmsSenderCount);
-  bool firebaseOk = pushSimEvent("sms", number, message, blocked, epochSeconds);
+  bool firebaseOk = pushSimEvent("sms", number, message, blocked, pakistanTimestamp, smsIndex);
 
   Serial.print("[SMS] incoming index=");
   Serial.print(smsIndex);
@@ -243,6 +245,8 @@ static void processIncomingSms(const String &rawNumber, const String &message, i
   Serial.print(number);
   Serial.print(" blocked=");
   Serial.print(blocked ? "yes" : "no");
+  Serial.print(" time=");
+  Serial.print(pakistanTimestamp);
   Serial.print(" firestore=");
   Serial.print(firebaseOk ? "ok" : "failed");
   Serial.print(" message=");

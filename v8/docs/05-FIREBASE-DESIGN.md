@@ -122,37 +122,28 @@ Runtime settings should contain telemetry interval, log verbosity, SMS limit con
 If runtime keys are missing or invalid, device firmware should create/heal them with safe defaults and print an operator-facing serial log.
 
 ### Firestore SIM Module
-Firestore collection `sim_module` stores call/SMS archives and editable block lists:
+Firestore collection `sim_module` stores one simple settings document and phone-number-based event documents.
 
-- `sim_module/calls/entries/{autoId}` - unblocked call events.
-- `sim_module/sms/entries/{autoId}` - unblocked SMS events.
-- `sim_module/blocked_calls/entries/{autoId}` - blocked call events.
-- `sim_module/blocked_sms/entries/{autoId}` - blocked SMS events.
-- `sim_module/blocked_callers/numbers/{docId}` - caller numbers that should not trigger ntfy.
-- `sim_module/blocked_sms_senders/numbers/{docId}` - SMS sender numbers that should not trigger ntfy.
+- `sim_module/settings` - editable block lists.
+- `sim_module/sms/by_number/{sender_or_number}` - latest SMS details for that sender.
+- `sim_module/calls/by_number/{caller_number}` - latest call details for that caller.
 
-Event documents contain `type`, `number`, `message`, `blocked`, `source`, `timestamp`, and `updatedAtMs`.
-
-Block-list documents should contain:
+`sim_module/settings` should contain:
 
 ```json
 {
-	"number": "+923001234567",
-	"enabled": true
+	"blockedCallers": ["+923001234567", "100"],
+	"blockedSmsSenders": ["Jazz", "samosa", "100"],
+	"blockedCallersCsv": "",
+	"blockedSmsSendersCsv": ""
 }
 ```
 
-If `number` is missing, the firmware treats the Firestore document ID as the number.
-For compatibility with operator-created folders, the firmware also reads `sim_module/blocked_caller/numbers/{docId}` and `sim_module/blocked_sms_sender/numbers/{docId}`.
+Event documents contain `type`, `number`, `documentId`, `message`, `blocked`, `source`, `pakistanTime`, `receivedAtPakistan`, `updatedAtPakistan`, and `uptimeSeconds`. SMS documents also include `simIndex` when the message came from SIM memory.
 
-On startup, firmware checks and creates these visible Firestore documents if missing:
+Firestore paths must alternate collection/document. Because of that, `sim_module/sms/{number}` is not a valid document path, so the firmware uses `sim_module/sms/by_number/{number}`.
 
-- `sim_module/calls` and `sim_module/calls/entries/_meta`
-- `sim_module/sms` and `sim_module/sms/entries/_meta`
-- `sim_module/blocked_calls` and `sim_module/blocked_calls/entries/_meta`
-- `sim_module/blocked_sms` and `sim_module/blocked_sms/entries/_meta`
-- `sim_module/blocked_callers` and `sim_module/blocked_callers/numbers/_meta`
-- `sim_module/blocked_sms_senders` and `sim_module/blocked_sms_senders/numbers/_meta`
+On startup, firmware creates `sim_module/settings`, `sim_module/sms`, and `sim_module/calls` if missing. It also deletes legacy documents under `entries`, `numbers`, `_meta`, `blocked_calls`, `blocked_sms`, `blocked_callers`, and `blocked_sms_senders`.
 
 ## Device Auth Direction
 - Realtime Database access should use Firebase Authentication from the device.

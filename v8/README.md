@@ -33,16 +33,15 @@ v8 is the Firebase-backed evolution of the TTGO T-Call project.
 ## Firestore `sim_module`
 The ESP32 uses Firebase Auth and Firestore REST with the same Firebase project ID/API key.
 
-- Call events: `sim_module/calls/entries/{autoId}`.
-- SMS events: `sim_module/sms/entries/{autoId}`.
-- Blocked call events: `sim_module/blocked_calls/entries/{autoId}`.
-- Blocked SMS events: `sim_module/blocked_sms/entries/{autoId}`.
-- Blocked callers list: `sim_module/blocked_callers/numbers/{docId}`.
-- Blocked SMS senders list: `sim_module/blocked_sms_senders/numbers/{docId}`.
+- Block lists: `sim_module/settings` with `blockedCallers` and `blockedSmsSenders` string arrays.
+- Optional CSV fields: `blockedCallersCsv` and `blockedSmsSendersCsv`.
+- SMS documents: `sim_module/sms/by_number/{sender_or_number}`.
+- Call documents: `sim_module/calls/by_number/{caller_number}`.
+- Timestamps: human-readable Pakistan time, for example `2026-06-16 14:30:22 PKT`.
 
-For block-list documents, set `number` to the phone number and optionally set `enabled` to `false` to disable it without deleting the document. The firmware also accepts the document ID as the number when the `number` field is missing, and it also reads singular aliases `blocked_caller` and `blocked_sms_sender`.
+Firestore paths must alternate collection/document, so the smallest valid phone-number document path is `sim_module/sms/by_number/{number}` rather than `sim_module/sms/{number}`.
 
-On startup the firmware checks the required Firestore documents and `_meta` subcollection documents. Missing paths are created and printed to Serial.
+On startup the firmware creates `sim_module/settings`, `sim_module/sms`, and `sim_module/calls` if missing, then removes legacy `entries`, `numbers`, `_meta`, and blocked bucket documents created by the previous schema.
 
 ## Serial SMS Memory Commands
 - `show sms` prints `AT+CMGL="ALL"` output with SIM indexes.

@@ -141,6 +141,38 @@ String firestoreDocumentId(const String &name) {
   }
   return name.substring(slash + 1);
 }
+
+String safeFirestoreDocumentId(const String &value) {
+  String id;
+  for (size_t i = 0; i < value.length(); ++i) {
+    char c = value.charAt(i);
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '_') {
+      id += c;
+    } else {
+      id += '_';
+    }
+  }
+  id.trim();
+  if (id.length() == 0 || id == "." || id == "..") {
+    return String("unknown");
+  }
+  return id;
+}
+
+void appendFirestoreArrayStrings(const JsonVariantConst &field, String *numbers, size_t maxNumbers, size_t &numberCount) {
+  JsonArrayConst values = field["arrayValue"]["values"].as<JsonArrayConst>();
+  for (JsonVariantConst value : values) {
+    if (numberCount >= maxNumbers) {
+      return;
+    }
+    String number = value["stringValue"] | "";
+    number.trim();
+    if (number.length() > 0) {
+      numbers[numberCount++] = number;
+    }
+  }
+}
 }
 
 bool FirebaseManager::begin(const V8Config &incomingConfig) {
@@ -701,38 +733,48 @@ bool FirebaseManager::pushSimModuleEvent(const String &type,
                                          const String &number,
                                          const String &message,
                                          bool blocked,
-                                         unsigned long epochSeconds) {
+                                         const String &pakistanTimestamp,
+                                         int simIndex) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  String bucket;
+  String section;
   if (type == "call") {
-    bucket = blocked ? "blocked_calls" : "calls";
+    section = "calls";
   } else if (type == "sms") {
-    bucket = blocked ? "blocked_sms" : "sms";
+    section = "sms";
   } else {
     error = "invalid sim event type";
     return false;
   }
 
-  DynamicJsonDocument doc(1536);
+  String documentId = safeFirestoreDocumentId(number);
+  String documentPath = String("sim_module/") + section + String("/by_number/") + documentId;
+
+  DynamicJsonDocument doc(1792);
   JsonObject fields = doc.createNestedObject("fields");
   fields["type"]["stringValue"] = type;
   fields["number"]["stringValue"] = number;
+  fields["documentId"]["stringValue"] = documentId;
   fields["message"]["stringValue"] = message;
   fields["blocked"]["booleanValue"] = blocked;
   fields["source"]["stringValue"] = "ttgo_tcall_v8";
-  fields["timestamp"]["integerValue"] = String(epochSeconds);
-  fields["updatedAtMs"]["integerValue"] = String(millis());
+  fields["pakistanTime"]["stringValue"] = pakistanTimestamp;
+  fields["receivedAtPakistan"]["stringValue"] = pakistanTimestamp;
+  fields["updatedAtPakistan"]["stringValue"] = pakistanTimestamp;
+  fields["uptimeSeconds"]["integerValue"] = String(millis() / 1000UL);
+  if (simIndex > 0) {
+    fields["simIndex"]["integerValue"] = String(simIndex);
+  }
 
   String payload;
   serializeJson(doc, payload);
 
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(String("sim_module/") + bucket + String("/entries"));
-  if (!httpPostBearerJson(url, payload, response, statusCode)) {
+  String url = buildFirestoreUrl(documentPath);
+  if (!httpPatchBearerJson(url, payload, response, statusCode)) {
     return false;
   }
 
@@ -758,17 +800,15 @@ bool FirebaseManager::fetchSimBlockLists(String *blockedCallers,
   blockedCallerCount = 0;
   blockedSmsSenderCount = 0;
 
-  if (!fetchFirestoreNumberList("blocked_callers", blockedCallers, maxBlockedCallers, blockedCallerCount)) {
-    return false;
-  }
-  if (!fetchFirestoreNumberList("blocked_caller", blockedCallers, maxBlockedCallers, blockedCallerCount)) {
+  if (!ensureSimSettingsDocument()) {
     return false;
   }
 
-  if (!fetchFirestoreNumberList("blocked_sms_senders", blockedSmsSenders, maxBlockedSmsSenders, blockedSmsSenderCount)) {
+  if (!fetchFirestoreSettingsList("blockedCallers", blockedCallers, maxBlockedCallers, blockedCallerCount)) {
     return false;
   }
-  if (!fetchFirestoreNumberList("blocked_sms_sender", blockedSmsSenders, maxBlockedSmsSenders, blockedSmsSenderCount)) {
+
+  if (!fetchFirestoreSettingsList("blockedSmsSenders", blockedSmsSenders, maxBlockedSmsSenders, blockedSmsSenderCount)) {
     return false;
   }
 
@@ -782,22 +822,57 @@ bool FirebaseManager::bootstrapSimModulePaths() {
   }
 
   const char *paths[] = {
-      "sim_module/calls",
-      "sim_module/calls/entries/_meta",
       "sim_module/sms",
-      "sim_module/sms/entries/_meta",
-      "sim_module/blocked_calls",
-      "sim_module/blocked_calls/entries/_meta",
-      "sim_module/blocked_sms",
-      "sim_module/blocked_sms/entries/_meta",
-      "sim_module/blocked_callers",
-      "sim_module/blocked_callers/numbers/_meta",
-      "sim_module/blocked_sms_senders",
-      "sim_module/blocked_sms_senders/numbers/_meta",
+      "sim_module/calls",
   };
 
   for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
     if (!ensureFirestoreDocument(paths[i])) {
+      return false;
+    }
+  }
+
+  if (!ensureSimSettingsDocument()) {
+    return false;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::cleanupLegacySimModulePaths() {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  const char *legacyCollections[] = {
+      "sim_module/calls/entries",
+      "sim_module/sms/entries",
+      "sim_module/blocked_calls/entries",
+      "sim_module/blocked_sms/entries",
+      "sim_module/blocked_callers/numbers",
+      "sim_module/blocked_sms_senders/numbers",
+      "sim_module/blocked_caller/numbers",
+      "sim_module/blocked_sms_sender/numbers",
+  };
+
+  for (size_t i = 0; i < sizeof(legacyCollections) / sizeof(legacyCollections[0]); ++i) {
+    if (!deleteFirestoreCollectionDocuments(legacyCollections[i])) {
+      return false;
+    }
+  }
+
+  const char *legacyDocuments[] = {
+      "sim_module/blocked_calls",
+      "sim_module/blocked_sms",
+      "sim_module/blocked_callers",
+      "sim_module/blocked_sms_senders",
+      "sim_module/blocked_caller",
+      "sim_module/blocked_sms_sender",
+  };
+
+  for (size_t i = 0; i < sizeof(legacyDocuments) / sizeof(legacyDocuments[0]); ++i) {
+    if (!deleteFirestoreDocument(legacyDocuments[i])) {
       return false;
     }
   }
@@ -812,6 +887,10 @@ bool FirebaseManager::bootstrapPaths() {
   }
 
   if (!bootstrapSimModulePaths()) {
+    return false;
+  }
+
+  if (!cleanupLegacySimModulePaths()) {
     return false;
   }
 
@@ -959,10 +1038,127 @@ bool FirebaseManager::httpPatchBearerJson(const String &url, const String &paylo
   return true;
 }
 
-bool FirebaseManager::fetchFirestoreNumberList(const String &bucketName, String *numbers, size_t maxNumbers, size_t &numberCount) {
+bool FirebaseManager::httpDeleteBearer(const String &url, String &responseBody, int &statusCode) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, url)) {
+    error = String("http bearer delete begin failed url=") + url;
+    return false;
+  }
+
+  http.addHeader("Authorization", String("Bearer ") + idToken);
+  statusCode = http.sendRequest("DELETE");
+  responseBody = http.getString();
+  http.end();
+  return true;
+}
+
+bool FirebaseManager::appendCsvNumbers(const String &csvText, String *numbers, size_t maxNumbers, size_t &numberCount) {
+  int start = 0;
+  while (start < (int)csvText.length() && numberCount < maxNumbers) {
+    int comma = csvText.indexOf(',', start);
+    String number = comma >= 0 ? csvText.substring(start, comma) : csvText.substring(start);
+    number.trim();
+    if (number.startsWith("\"") && number.endsWith("\"") && number.length() >= 2) {
+      number = number.substring(1, number.length() - 1);
+      number.trim();
+    }
+    if (number.length() > 0) {
+      numbers[numberCount++] = number;
+    }
+    if (comma < 0) {
+      break;
+    }
+    start = comma + 1;
+  }
+  return true;
+}
+
+bool FirebaseManager::fetchFirestoreSettingsList(const String &fieldName, String *numbers, size_t maxNumbers, size_t &numberCount) {
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(String("sim_module/") + bucketName + String("/numbers"));
+  String url = buildFirestoreUrl("sim_module/settings");
+  if (!httpGetBearer(url, response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "firestore settings fetch", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(4096);
+  if (deserializeJson(doc, response)) {
+    error = String("firestore settings parse failed body=") + response;
+    return false;
+  }
+
+  JsonObjectConst fields = doc["fields"].as<JsonObjectConst>();
+  appendFirestoreArrayStrings(fields[fieldName.c_str()], numbers, maxNumbers, numberCount);
+
+  String csvFieldName = fieldName + String("Csv");
+  String csvText = firestoreStringField(fields, csvFieldName.c_str());
+  if (csvText.length() > 0) {
+    appendCsvNumbers(csvText, numbers, maxNumbers, numberCount);
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::ensureSimSettingsDocument() {
+  String url = buildFirestoreUrl("sim_module/settings");
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(url, response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode >= 200 && statusCode < 300) {
+    return true;
+  }
+
+  if (statusCode != 404) {
+    setHttpStatusError(error, "firestore settings check", statusCode, response);
+    return false;
+  }
+
+  Serial.println("[FIRESTORE] sim_module/settings not found; creating simple block-list arrays");
+
+  DynamicJsonDocument doc(1024);
+  JsonObject fields = doc.createNestedObject("fields");
+  JsonArray callers = fields["blockedCallers"]["arrayValue"].createNestedArray("values");
+  JsonArray smsSenders = fields["blockedSmsSenders"]["arrayValue"].createNestedArray("values");
+  (void)callers;
+  (void)smsSenders;
+  fields["blockedCallersCsv"]["stringValue"] = "";
+  fields["blockedSmsSendersCsv"]["stringValue"] = "";
+  fields["updatedAtPakistan"]["stringValue"] = "";
+  fields["source"]["stringValue"] = "ttgo_tcall_v8";
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String writeResponse;
+  int writeStatusCode = 0;
+  if (!httpPatchBearerJson(url, payload, writeResponse, writeStatusCode)) {
+    return false;
+  }
+
+  if (writeStatusCode < 200 || writeStatusCode >= 300) {
+    setHttpStatusError(error, "firestore settings create", writeStatusCode, writeResponse);
+    return false;
+  }
+
+  Serial.println("[FIRESTORE] sim_module/settings created");
+  return true;
+}
+
+bool FirebaseManager::deleteFirestoreCollectionDocuments(const String &collectionPath) {
+  String response;
+  int statusCode = 0;
+  String url = buildFirestoreUrl(collectionPath);
   if (!httpGetBearer(url, response, statusCode)) {
     return false;
   }
@@ -973,51 +1169,55 @@ bool FirebaseManager::fetchFirestoreNumberList(const String &bucketName, String 
   }
 
   if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "firestore blocklist fetch", statusCode, response);
+    setHttpStatusError(error, "legacy collection list", statusCode, response);
     return false;
   }
 
-  DynamicJsonDocument doc(6144);
+  DynamicJsonDocument doc(8192);
   if (deserializeJson(doc, response)) {
-    error = String("firestore blocklist parse failed body=") + response;
+    error = String("legacy collection parse failed body=") + response;
     return false;
   }
 
   JsonArray documents = doc["documents"].as<JsonArray>();
   for (JsonVariant item : documents) {
-    if (numberCount >= maxNumbers) {
-      break;
-    }
-
-    JsonObjectConst itemObj = item.as<JsonObjectConst>();
-    String documentId = firestoreDocumentId(String(itemObj["name"] | ""));
-    if (documentId.startsWith("_")) {
+    String name = item["name"] | "";
+    if (name.length() == 0) {
       continue;
     }
 
-    JsonObjectConst fields = itemObj["fields"].as<JsonObjectConst>();
-    String kind = firestoreStringField(fields, "kind");
-    if (kind == "sim_module_folder") {
-      continue;
+    String deleteResponse;
+    int deleteStatusCode = 0;
+    String deleteUrl = String("https://firestore.googleapis.com/v1/") + name;
+    if (!httpDeleteBearer(deleteUrl, deleteResponse, deleteStatusCode)) {
+      return false;
     }
-
-    if (!firestoreBoolField(fields, "enabled", true)) {
-      continue;
+    if (deleteStatusCode != 404 && (deleteStatusCode < 200 || deleteStatusCode >= 300)) {
+      setHttpStatusError(error, "legacy collection delete", deleteStatusCode, deleteResponse);
+      return false;
     }
-
-    String number = firestoreStringField(fields, "number");
-    if (number.length() == 0) {
-      number = documentId;
-    }
-    number.trim();
-    if (number.length() == 0) {
-      continue;
-    }
-    numbers[numberCount++] = number;
+    Serial.print("[FIRESTORE] deleted legacy document ");
+    Serial.println(name);
   }
 
   error = String();
   return true;
+}
+
+bool FirebaseManager::deleteFirestoreDocument(const String &documentPath) {
+  String response;
+  int statusCode = 0;
+  if (!httpDeleteBearer(buildFirestoreUrl(documentPath), response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode == 404 || (statusCode >= 200 && statusCode < 300)) {
+    error = String();
+    return true;
+  }
+
+  setHttpStatusError(error, "legacy document delete", statusCode, response);
+  return false;
 }
 
 bool FirebaseManager::ensureFirestoreDocument(const String &documentPath) {
@@ -1046,7 +1246,7 @@ bool FirebaseManager::ensureFirestoreDocument(const String &documentPath) {
   fields["kind"]["stringValue"] = "sim_module_folder";
   fields["path"]["stringValue"] = documentPath;
   fields["source"]["stringValue"] = "ttgo_tcall_v8";
-  fields["updatedAtMs"]["integerValue"] = String(millis());
+  fields["createdBy"]["stringValue"] = "ttgo_tcall_v8";
 
   String payload;
   serializeJson(doc, payload);

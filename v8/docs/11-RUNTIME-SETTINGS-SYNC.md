@@ -28,10 +28,9 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Default: `https://ntfy.innovorix.com/oracle_ntfy`
 
 ## Firestore Block Lists
-- Blocked callers: `sim_module/blocked_callers/numbers/{docId}`.
-- Blocked SMS senders: `sim_module/blocked_sms_senders/numbers/{docId}`.
-- Singular aliases are also read: `blocked_caller` and `blocked_sms_sender`.
-- Each document may contain `number` and `enabled`; if `number` is missing, the document ID is used.
+- Blocked callers: `sim_module/settings` field `blockedCallers`.
+- Blocked SMS senders: `sim_module/settings` field `blockedSmsSenders`.
+- Optional comma-separated fields are also read: `blockedCallersCsv` and `blockedSmsSendersCsv`.
 - Startup, periodic, and manual `sync` refresh these lists.
 
 ## Sync Strategy
