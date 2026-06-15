@@ -776,8 +776,42 @@ bool FirebaseManager::fetchSimBlockLists(String *blockedCallers,
   return true;
 }
 
+bool FirebaseManager::bootstrapSimModulePaths() {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  const char *paths[] = {
+      "sim_module/calls",
+      "sim_module/calls/entries/_meta",
+      "sim_module/sms",
+      "sim_module/sms/entries/_meta",
+      "sim_module/blocked_calls",
+      "sim_module/blocked_calls/entries/_meta",
+      "sim_module/blocked_sms",
+      "sim_module/blocked_sms/entries/_meta",
+      "sim_module/blocked_callers",
+      "sim_module/blocked_callers/numbers/_meta",
+      "sim_module/blocked_sms_senders",
+      "sim_module/blocked_sms_senders/numbers/_meta",
+  };
+
+  for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+    if (!ensureFirestoreDocument(paths[i])) {
+      return false;
+    }
+  }
+
+  error = String();
+  return true;
+}
+
 bool FirebaseManager::bootstrapPaths() {
   if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  if (!bootstrapSimModulePaths()) {
     return false;
   }
 
@@ -908,6 +942,23 @@ bool FirebaseManager::httpPostBearerJson(const String &url, const String &payloa
   return true;
 }
 
+bool FirebaseManager::httpPatchBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, url)) {
+    error = String("http bearer patch begin failed url=") + url;
+    return false;
+  }
+
+  http.addHeader("Authorization", String("Bearer ") + idToken);
+  http.addHeader("Content-Type", "application/json");
+  statusCode = http.PATCH(payload);
+  responseBody = http.getString();
+  http.end();
+  return true;
+}
+
 bool FirebaseManager::fetchFirestoreNumberList(const String &bucketName, String *numbers, size_t maxNumbers, size_t &numberCount) {
   String response;
   int statusCode = 0;
@@ -939,14 +990,24 @@ bool FirebaseManager::fetchFirestoreNumberList(const String &bucketName, String 
     }
 
     JsonObjectConst itemObj = item.as<JsonObjectConst>();
+    String documentId = firestoreDocumentId(String(itemObj["name"] | ""));
+    if (documentId.startsWith("_")) {
+      continue;
+    }
+
     JsonObjectConst fields = itemObj["fields"].as<JsonObjectConst>();
+    String kind = firestoreStringField(fields, "kind");
+    if (kind == "sim_module_folder") {
+      continue;
+    }
+
     if (!firestoreBoolField(fields, "enabled", true)) {
       continue;
     }
 
     String number = firestoreStringField(fields, "number");
     if (number.length() == 0) {
-      number = firestoreDocumentId(String(itemObj["name"] | ""));
+      number = documentId;
     }
     number.trim();
     if (number.length() == 0) {
@@ -956,6 +1017,54 @@ bool FirebaseManager::fetchFirestoreNumberList(const String &bucketName, String 
   }
 
   error = String();
+  return true;
+}
+
+bool FirebaseManager::ensureFirestoreDocument(const String &documentPath) {
+  String url = buildFirestoreUrl(documentPath);
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(url, response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode >= 200 && statusCode < 300) {
+    return true;
+  }
+
+  if (statusCode != 404) {
+    setHttpStatusError(error, "firestore folder check", statusCode, response);
+    return false;
+  }
+
+  Serial.print("[FIRESTORE] ");
+  Serial.print(documentPath);
+  Serial.println(" not found; creating now");
+
+  DynamicJsonDocument doc(768);
+  JsonObject fields = doc.createNestedObject("fields");
+  fields["kind"]["stringValue"] = "sim_module_folder";
+  fields["path"]["stringValue"] = documentPath;
+  fields["source"]["stringValue"] = "ttgo_tcall_v8";
+  fields["updatedAtMs"]["integerValue"] = String(millis());
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String writeResponse;
+  int writeStatusCode = 0;
+  if (!httpPatchBearerJson(url, payload, writeResponse, writeStatusCode)) {
+    return false;
+  }
+
+  if (writeStatusCode < 200 || writeStatusCode >= 300) {
+    setHttpStatusError(error, "firestore folder create", writeStatusCode, writeResponse);
+    return false;
+  }
+
+  Serial.print("[FIRESTORE] ");
+  Serial.print(documentPath);
+  Serial.println(" created");
   return true;
 }
 

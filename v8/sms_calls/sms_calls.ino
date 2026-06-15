@@ -57,6 +57,10 @@ static size_t blockedSmsSenderCount = 0;
 static String modemLineBuffer;
 static bool awaitingSmsBody = false;
 static String pendingSmsNumber;
+static int pendingSmsIndex = -1;
+static String lastCallNumber;
+static unsigned long lastCallHandledMs = 0;
+static const unsigned long duplicateCallWindowMs = 30000UL;
 
 static void initializeModemHardware() {
   Wire.begin(I2C_SDA_PIN_DEFAULT, I2C_SCL_PIN_DEFAULT);
@@ -178,22 +182,41 @@ static String quotedField(const String &line, int fieldIndex) {
   return String();
 }
 
-static void pushSimEvent(const String &type, const String &number, const String &message, bool blocked, unsigned long epochSeconds) {
+static bool pushSimEvent(const String &type, const String &number, const String &message, bool blocked, unsigned long epochSeconds) {
   if (!firebaseManager.isReady()) {
     Logger::warn("FIREBASE", "SIM event skipped: firebase not ready");
-    return;
+    return false;
   }
   if (!firebaseManager.pushSimModuleEvent(type, number, message, blocked, epochSeconds)) {
     Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
+    return false;
   }
+  return true;
 }
 
 static void processIncomingCall(const String &rawNumber) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
-  bool blocked = isBlockedNumber(number, blockedCallers, blockedCallerCount);
+  if (numbersMatch(number, lastCallNumber) && millis() - lastCallHandledMs < duplicateCallWindowMs) {
+    Serial.print("[CALL] duplicate ignored number=");
+    Serial.println(number);
+    return;
+  }
+  lastCallNumber = number;
+  lastCallHandledMs = millis();
 
-  pushSimEvent("call", number, String(), blocked, epochSeconds);
+  bool blocked = isBlockedNumber(number, blockedCallers, blockedCallerCount);
+  bool firebaseOk = pushSimEvent("call", number, String(), blocked, epochSeconds);
+
+  Serial.print("[CALL] incoming number=");
+  Serial.print(number);
+  Serial.print(" blocked=");
+  Serial.print(blocked ? "yes" : "no");
+  Serial.print(" time=");
+  Serial.print(formatEventTime(epochSeconds));
+  Serial.print(" firestore=");
+  Serial.println(firebaseOk ? "ok" : "failed");
+
   if (blocked) {
     Logger::info("CALL", "Blocked caller logged without ntfy");
     return;
@@ -201,27 +224,54 @@ static void processIncomingCall(const String &rawNumber) {
 
   String message = String("Incoming call at ") + formatEventTime(epochSeconds);
   if (ntfyManager.notify(String("call from ") + number, message)) {
-    Logger::info("NTFY", "Call notification sent");
+    Serial.print("[NTFY] call notification sent number=");
+    Serial.println(number);
   } else {
     Logger::warn("NTFY", ntfyManager.lastError().c_str());
   }
 }
 
-static void processIncomingSms(const String &rawNumber, const String &message) {
+static void processIncomingSms(const String &rawNumber, const String &message, int smsIndex) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
   bool blocked = isBlockedNumber(number, blockedSmsSenders, blockedSmsSenderCount);
+  bool firebaseOk = pushSimEvent("sms", number, message, blocked, epochSeconds);
 
-  pushSimEvent("sms", number, message, blocked, epochSeconds);
+  Serial.print("[SMS] incoming index=");
+  Serial.print(smsIndex);
+  Serial.print(" number=");
+  Serial.print(number);
+  Serial.print(" blocked=");
+  Serial.print(blocked ? "yes" : "no");
+  Serial.print(" firestore=");
+  Serial.print(firebaseOk ? "ok" : "failed");
+  Serial.print(" message=");
+  Serial.println(message);
+
   if (blocked) {
     Logger::info("SMS", "Blocked SMS sender logged without ntfy");
-    return;
+  } else {
+    if (ntfyManager.notify(String("sms from ") + number, message)) {
+      Serial.print("[NTFY] sms notification sent number=");
+      Serial.print(number);
+      Serial.print(" message=");
+      Serial.println(message);
+    } else {
+      Logger::warn("NTFY", ntfyManager.lastError().c_str());
+    }
   }
 
-  if (ntfyManager.notify(String("sms from ") + number, message)) {
-    Logger::info("NTFY", "SMS notification sent");
-  } else {
-    Logger::warn("NTFY", ntfyManager.lastError().c_str());
+  if (firebaseOk && smsIndex > 0) {
+    if (smsManager.deleteMessage(smsIndex)) {
+      Serial.print("[SMS] deleted from SIM index=");
+      Serial.println(smsIndex);
+    } else {
+      Serial.print("[SMS] delete failed index=");
+      Serial.println(smsIndex);
+    }
+  } else if (!firebaseOk && smsIndex > 0) {
+    Serial.print("[SMS] kept on SIM because Firestore upload failed index=");
+    Serial.println(smsIndex);
   }
 }
 
@@ -233,8 +283,9 @@ static void handleModemLine(String line) {
 
   if (awaitingSmsBody) {
     awaitingSmsBody = false;
-    processIncomingSms(pendingSmsNumber, line);
+    processIncomingSms(pendingSmsNumber, line, pendingSmsIndex);
     pendingSmsNumber = String();
+    pendingSmsIndex = -1;
     return;
   }
 
@@ -245,8 +296,14 @@ static void handleModemLine(String line) {
     return;
   }
 
-  if (line.startsWith("+CMT:") || line.startsWith("+CMGR:")) {
+  if (line.startsWith("+CMT:")) {
     pendingSmsNumber = quotedField(line, 0);
+    awaitingSmsBody = pendingSmsNumber.length() > 0;
+    return;
+  }
+
+  if (line.startsWith("+CMGR:")) {
+    pendingSmsNumber = quotedField(line, 1);
     awaitingSmsBody = pendingSmsNumber.length() > 0;
     return;
   }
@@ -256,6 +313,7 @@ static void handleModemLine(String line) {
     if (comma > 0) {
       String index = line.substring(comma + 1);
       index.trim();
+      pendingSmsIndex = index.toInt();
       Serial1.print("AT+CMGR=");
       Serial1.println(index);
     }
@@ -352,6 +410,9 @@ static void printCommandHelp() {
   Serial.println(" - status : print wifi/ip/firebase status");
   Serial.println(" - sync   : sync runtime settings from Firebase now");
   Serial.println(" - ntfy test | test ntfy : send ntfy test notification");
+  Serial.println(" - show sms : list all SMS messages with SIM indexes");
+  Serial.println(" - delete sms <index> : delete one SMS by SIM index");
+  Serial.println(" - delete all sms : delete every SMS from SIM memory");
   Serial.println(" - help   : show this command list");
 }
 
@@ -517,6 +578,36 @@ static void handleSerialCommand(String command) {
     } else {
       Serial.print("[NTFY] test failed: ");
       Serial.println(ntfyManager.lastError());
+    }
+    return;
+  }
+  if (command == "show sms") {
+    Serial.println("[SMS] listing SIM messages");
+    Serial.println(smsManager.listMessages());
+    return;
+  }
+  if (command == "delete all sms" || command == "delete sms all") {
+    if (smsManager.deleteAllMessages()) {
+      Serial.println("[SMS] all SIM messages deleted");
+    } else {
+      Serial.println("[SMS] delete all failed");
+    }
+    return;
+  }
+  if (command.startsWith("delete sms ")) {
+    String indexText = command.substring(String("delete sms ").length());
+    indexText.trim();
+    int index = indexText.toInt();
+    if (index <= 0) {
+      Serial.println("[SMS] invalid delete index");
+      return;
+    }
+    if (smsManager.deleteMessage(index)) {
+      Serial.print("[SMS] deleted index=");
+      Serial.println(index);
+    } else {
+      Serial.print("[SMS] delete failed index=");
+      Serial.println(index);
     }
     return;
   }

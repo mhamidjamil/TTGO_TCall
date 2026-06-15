@@ -68,6 +68,7 @@ public:
                           String *blockedSmsSenders,
                           size_t maxBlockedSmsSenders,
                           size_t &blockedSmsSenderCount);
+  bool bootstrapSimModulePaths();
   String lastError() const;
 
 private:
@@ -83,7 +84,9 @@ private:
   bool httpPatchJson(const String &url, const String &payload, String &responseBody, int &statusCode);
   bool httpGetBearer(const String &url, String &responseBody, int &statusCode);
   bool httpPostBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
+  bool httpPatchBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
   bool fetchFirestoreNumberList(const String &bucketName, String *numbers, size_t maxNumbers, size_t &numberCount);
+  bool ensureFirestoreDocument(const String &documentPath);
 
   V8Config config{};
   bool ready = false;
