@@ -51,6 +51,9 @@
 #define FIREBASE_STATUS_PATH_DEFAULT "/ttgo_tcall/status"
 #define FIREBASE_TELEMETRY_PATH_DEFAULT "/ttgo_tcall/telemetry"
 
+// ntfy defaults
+#define NTFY_URL_DEFAULT "https://ntfy.innovorix.com/oracle_ntfy"
+
 // ThingSpeak defaults
 #define THINGSPEAK_CHANNEL_ID_DEFAULT 0UL
 #define THINGSPEAK_WRITE_API_KEY_DEFAULT "YOUR_THINGSPEAK_WRITE_API_KEY"

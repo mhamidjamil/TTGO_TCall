@@ -5,6 +5,7 @@ class CallManager {
 public:
   bool begin();
   void loop();
+  bool hangUp();
 };
 
 #endif

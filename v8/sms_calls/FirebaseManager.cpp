@@ -91,6 +91,56 @@ bool parseLimitVariant(const JsonVariantConst &variant, int &outValue) {
   outValue = (int)parsed;
   return true;
 }
+
+bool parseStringVariant(const JsonVariantConst &variant, String &outValue) {
+  if (!variant.is<const char *>()) {
+    return false;
+  }
+  String parsed = variant.as<const char *>();
+  parsed.trim();
+  if (!parsed.startsWith("http://") && !parsed.startsWith("https://")) {
+    return false;
+  }
+  outValue = parsed;
+  return true;
+}
+
+String firestoreStringField(const JsonObjectConst &fields, const char *name) {
+  JsonVariantConst field = fields[name];
+  if (field["stringValue"].is<const char *>()) {
+    return String(field["stringValue"].as<const char *>());
+  }
+  return String();
+}
+
+bool firestoreBoolField(const JsonObjectConst &fields, const char *name, bool defaultValue) {
+  JsonVariantConst field = fields[name];
+  if (field["booleanValue"].is<bool>()) {
+    return field["booleanValue"].as<bool>();
+  }
+  if (field["integerValue"].is<const char *>()) {
+    return String(field["integerValue"].as<const char *>()).toInt() != 0;
+  }
+  if (field["stringValue"].is<const char *>()) {
+    String text = field["stringValue"].as<const char *>();
+    text.toLowerCase();
+    if (text == "false" || text == "0" || text == "no" || text == "off") {
+      return false;
+    }
+    if (text == "true" || text == "1" || text == "yes" || text == "on") {
+      return true;
+    }
+  }
+  return defaultValue;
+}
+
+String firestoreDocumentId(const String &name) {
+  int slash = name.lastIndexOf('/');
+  if (slash < 0 || slash >= (int)name.length() - 1) {
+    return name;
+  }
+  return name.substring(slash + 1);
+}
 }
 
 bool FirebaseManager::begin(const V8Config &incomingConfig) {
@@ -517,7 +567,8 @@ bool FirebaseManager::pushLandingSnapshot(float temperature,
 bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
                                            uint32_t defaultIntervalOfDhtSeconds,
                                            bool defaultShowFirebasePushLogs,
-                                           bool defaultShowThingSpeakPushLogs) {
+                                           bool defaultShowThingSpeakPushLogs,
+                                           const String &defaultNtfyUrl) {
   if (!ensureAuthenticated()) {
     return false;
   }
@@ -529,6 +580,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
   outSettings.dailySmsLimit = config.dailySmsLimit;
   outSettings.weeklySmsLimit = config.weeklySmsLimit;
   outSettings.monthlySmsLimit = config.monthlySmsLimit;
+  outSettings.ntfyUrl = defaultNtfyUrl.length() > 0 ? defaultNtfyUrl : String(config.ntfyUrl);
 
   String runtimePath = rootPathFromConfig() + String("/settings/runtime");
   String response;
@@ -537,7 +589,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     return false;
   }
 
-  DynamicJsonDocument writeDoc(384);
+  DynamicJsonDocument writeDoc(640);
   bool shouldWriteBack = false;
 
   if (statusCode == 404 || response == "null") {
@@ -547,12 +599,13 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     outSettings.createdDailySmsLimit = true;
     outSettings.createdWeeklySmsLimit = true;
     outSettings.createdMonthlySmsLimit = true;
+    outSettings.createdNtfyUrl = true;
     shouldWriteBack = true;
   } else if (statusCode < 200 || statusCode >= 300) {
     setHttpStatusError(error, "runtime settings fetch", statusCode, response);
     return false;
   } else {
-    DynamicJsonDocument readDoc(768);
+    DynamicJsonDocument readDoc(1024);
     if (deserializeJson(readDoc, response)) {
       error = String("runtime settings parse failed body=") + response;
       return false;
@@ -606,6 +659,14 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       outSettings.createdMonthlySmsLimit = true;
       shouldWriteBack = true;
     }
+
+    String parsedNtfyUrl;
+    if (parseStringVariant(root["ntfyUrl"], parsedNtfyUrl)) {
+      outSettings.ntfyUrl = parsedNtfyUrl;
+    } else {
+      outSettings.createdNtfyUrl = true;
+      shouldWriteBack = true;
+    }
   }
 
   if (shouldWriteBack) {
@@ -615,6 +676,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     writeDoc["dailySmsLimit"] = outSettings.dailySmsLimit;
     writeDoc["weeklySmsLimit"] = outSettings.weeklySmsLimit;
     writeDoc["monthlySmsLimit"] = outSettings.monthlySmsLimit;
+    writeDoc["ntfyUrl"] = outSettings.ntfyUrl;
     writeDoc["updatedAtMs"] = millis();
 
     String payload;
@@ -629,6 +691,85 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       setHttpStatusError(error, "runtime settings write", writeCode, writeResp);
       return false;
     }
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::pushSimModuleEvent(const String &type,
+                                         const String &number,
+                                         const String &message,
+                                         bool blocked,
+                                         unsigned long epochSeconds) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  String bucket;
+  if (type == "call") {
+    bucket = blocked ? "blocked_calls" : "calls";
+  } else if (type == "sms") {
+    bucket = blocked ? "blocked_sms" : "sms";
+  } else {
+    error = "invalid sim event type";
+    return false;
+  }
+
+  DynamicJsonDocument doc(1536);
+  JsonObject fields = doc.createNestedObject("fields");
+  fields["type"]["stringValue"] = type;
+  fields["number"]["stringValue"] = number;
+  fields["message"]["stringValue"] = message;
+  fields["blocked"]["booleanValue"] = blocked;
+  fields["source"]["stringValue"] = "ttgo_tcall_v8";
+  fields["timestamp"]["integerValue"] = String(epochSeconds);
+  fields["updatedAtMs"]["integerValue"] = String(millis());
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  String url = buildFirestoreUrl(String("sim_module/") + bucket + String("/entries"));
+  if (!httpPostBearerJson(url, payload, response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "firestore sim event push", statusCode, response);
+    return false;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::fetchSimBlockLists(String *blockedCallers,
+                                         size_t maxBlockedCallers,
+                                         size_t &blockedCallerCount,
+                                         String *blockedSmsSenders,
+                                         size_t maxBlockedSmsSenders,
+                                         size_t &blockedSmsSenderCount) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  blockedCallerCount = 0;
+  blockedSmsSenderCount = 0;
+
+  if (!fetchFirestoreNumberList("blocked_callers", blockedCallers, maxBlockedCallers, blockedCallerCount)) {
+    return false;
+  }
+  if (!fetchFirestoreNumberList("blocked_caller", blockedCallers, maxBlockedCallers, blockedCallerCount)) {
+    return false;
+  }
+
+  if (!fetchFirestoreNumberList("blocked_sms_senders", blockedSmsSenders, maxBlockedSmsSenders, blockedSmsSenderCount)) {
+    return false;
+  }
+  if (!fetchFirestoreNumberList("blocked_sms_sender", blockedSmsSenders, maxBlockedSmsSenders, blockedSmsSenderCount)) {
+    return false;
   }
 
   error = String();
@@ -670,6 +811,17 @@ String FirebaseManager::buildPathUrl(const String &path) const {
   }
 
   return base + normalizedPath + ".json?auth=" + idToken;
+}
+
+String FirebaseManager::buildFirestoreUrl(const String &path) const {
+  String normalizedPath = path;
+  if (normalizedPath.startsWith("/")) {
+    normalizedPath.remove(0, 1);
+  }
+  return String("https://firestore.googleapis.com/v1/projects/") +
+         config.firebaseProjectId +
+         String("/databases/(default)/documents/") +
+         normalizedPath;
 }
 
 bool FirebaseManager::httpGetJson(const String &url, String &responseBody, int &statusCode) {
@@ -720,6 +872,90 @@ bool FirebaseManager::httpPatchJson(const String &url, const String &payload, St
     break;
   }
 
+  return true;
+}
+
+bool FirebaseManager::httpGetBearer(const String &url, String &responseBody, int &statusCode) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, url)) {
+    error = String("http bearer get begin failed url=") + url;
+    return false;
+  }
+
+  http.addHeader("Authorization", String("Bearer ") + idToken);
+  statusCode = http.GET();
+  responseBody = http.getString();
+  http.end();
+  return true;
+}
+
+bool FirebaseManager::httpPostBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  if (!http.begin(client, url)) {
+    error = String("http bearer post begin failed url=") + url;
+    return false;
+  }
+
+  http.addHeader("Authorization", String("Bearer ") + idToken);
+  http.addHeader("Content-Type", "application/json");
+  statusCode = http.POST(payload);
+  responseBody = http.getString();
+  http.end();
+  return true;
+}
+
+bool FirebaseManager::fetchFirestoreNumberList(const String &bucketName, String *numbers, size_t maxNumbers, size_t &numberCount) {
+  String response;
+  int statusCode = 0;
+  String url = buildFirestoreUrl(String("sim_module/") + bucketName + String("/numbers"));
+  if (!httpGetBearer(url, response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode == 404) {
+    error = String();
+    return true;
+  }
+
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "firestore blocklist fetch", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(6144);
+  if (deserializeJson(doc, response)) {
+    error = String("firestore blocklist parse failed body=") + response;
+    return false;
+  }
+
+  JsonArray documents = doc["documents"].as<JsonArray>();
+  for (JsonVariant item : documents) {
+    if (numberCount >= maxNumbers) {
+      break;
+    }
+
+    JsonObjectConst itemObj = item.as<JsonObjectConst>();
+    JsonObjectConst fields = itemObj["fields"].as<JsonObjectConst>();
+    if (!firestoreBoolField(fields, "enabled", true)) {
+      continue;
+    }
+
+    String number = firestoreStringField(fields, "number");
+    if (number.length() == 0) {
+      number = firestoreDocumentId(String(itemObj["name"] | ""));
+    }
+    number.trim();
+    if (number.length() == 0) {
+      continue;
+    }
+    numbers[numberCount++] = number;
+  }
+
+  error = String();
   return true;
 }
 

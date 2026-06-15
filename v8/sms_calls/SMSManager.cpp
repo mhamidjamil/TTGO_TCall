@@ -30,7 +30,9 @@ bool sendAtCommand(const String &command, const String &expected, unsigned long 
 }
 
 bool SMSManager::begin() {
-  return sendAtCommand("AT", "OK", 1500) && sendAtCommand("AT+CMGF=1", "OK", 1500);
+  return sendAtCommand("AT", "OK", 1500) &&
+         sendAtCommand("AT+CMGF=1", "OK", 1500) &&
+         sendAtCommand("AT+CNMI=2,2,0,0,0", "OK", 1500);
 }
 
 bool SMSManager::sendMessage(const String &number, const String &message) {

@@ -10,6 +10,10 @@
 #include "secrets.example.h"
 #endif
 
+#ifndef NTFY_URL_DEFAULT
+#define NTFY_URL_DEFAULT "https://ntfy.innovorix.com/oracle_ntfy"
+#endif
+
 namespace {
 constexpr const char *kConfigPath = "/v8_config.json";
 }
@@ -79,6 +83,7 @@ void ConfigManager::loadDefaults() {
   copyText(config.firebaseCounterPath, sizeof(config.firebaseCounterPath), FIREBASE_COUNTER_PATH_DEFAULT);
   copyText(config.firebaseStatusPath, sizeof(config.firebaseStatusPath), FIREBASE_STATUS_PATH_DEFAULT);
   copyText(config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath), FIREBASE_TELEMETRY_PATH_DEFAULT);
+  copyText(config.ntfyUrl, sizeof(config.ntfyUrl), NTFY_URL_DEFAULT);
   config.thingSpeakChannelId = THINGSPEAK_CHANNEL_ID_DEFAULT;
   copyText(config.thingSpeakWriteApiKey, sizeof(config.thingSpeakWriteApiKey), THINGSPEAK_WRITE_API_KEY_DEFAULT);
 }
@@ -116,7 +121,7 @@ bool ConfigManager::saveToSPIFFS() {
 }
 
 void ConfigManager::readJsonConfig(const String &jsonText) {
-  DynamicJsonDocument doc(2048);
+  DynamicJsonDocument doc(2560);
   if (deserializeJson(doc, jsonText)) {
     return;
   }
@@ -154,12 +159,13 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   strlcpy(config.firebaseCounterPath, doc["firebaseCounterPath"] | config.firebaseCounterPath, sizeof(config.firebaseCounterPath));
   strlcpy(config.firebaseStatusPath, doc["firebaseStatusPath"] | config.firebaseStatusPath, sizeof(config.firebaseStatusPath));
   strlcpy(config.firebaseTelemetryPath, doc["firebaseTelemetryPath"] | config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath));
+  strlcpy(config.ntfyUrl, doc["ntfyUrl"] | config.ntfyUrl, sizeof(config.ntfyUrl));
   config.thingSpeakChannelId = doc["thingSpeakChannelId"] | config.thingSpeakChannelId;
   strlcpy(config.thingSpeakWriteApiKey, doc["thingSpeakWriteApiKey"] | config.thingSpeakWriteApiKey, sizeof(config.thingSpeakWriteApiKey));
 }
 
 String ConfigManager::writeJsonConfig() const {
-  DynamicJsonDocument doc(2048);
+  DynamicJsonDocument doc(2560);
   doc["wifiEnabled"] = config.wifiEnabled;
   doc["apFallbackEnabled"] = config.apFallbackEnabled;
   doc["logVerbose"] = config.logVerbose;
@@ -193,6 +199,7 @@ String ConfigManager::writeJsonConfig() const {
   doc["firebaseCounterPath"] = config.firebaseCounterPath;
   doc["firebaseStatusPath"] = config.firebaseStatusPath;
   doc["firebaseTelemetryPath"] = config.firebaseTelemetryPath;
+  doc["ntfyUrl"] = config.ntfyUrl;
   doc["thingSpeakChannelId"] = config.thingSpeakChannelId;
   doc["thingSpeakWriteApiKey"] = config.thingSpeakWriteApiKey;
 

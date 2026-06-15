@@ -1,12 +1,12 @@
 # v8 Firebase Design
 
 ## Scope
-Firebase Realtime Database is the cloud direction for v8.
+Firebase Realtime Database remains the command/settings path for v8. Firestore is now also used for SIM module call/SMS archives and block lists.
 
-## Why Realtime Database For v8
+## Why Realtime Database For Commands
 - The device workflow is polling-based and updates small JSON documents frequently.
 - Realtime Database is a better fit for command queues, counters, and telemetry snapshots.
-- Firestore can still be used for a future dashboard or archival layer, but it is not the first-class device path for this firmware.
+- Firestore is used where append-only SIM event history and editable block-list documents are a better fit.
 
 ## Initial Design Intent
 - Use a polling-based command model.
@@ -29,6 +29,7 @@ Firebase Realtime Database is the cloud direction for v8.
 - Device status: `/ttgo_tcall/status`
 - Telemetry: `/ttgo_tcall/telemetry`
 - Runtime settings: `/ttgo_tcall/settings/runtime`
+- Firestore SIM module collection: `sim_module`
 
 ## Folder-Only Shape
 The root `ttgo_tcall` node is now treated as a container for folders only. Leaf variables should live under their parent folders.
@@ -74,6 +75,7 @@ The root `ttgo_tcall` node is now treated as a container for folders only. Leaf 
 	"dailySmsLimit": 200,
 	"weeklySmsLimit": 950,
 	"monthlySmsLimit": 4900,
+	"ntfyUrl": "https://ntfy.innovorix.com/oracle_ntfy",
 	"updatedAtMs": 1712345678000
 }
 ```
@@ -115,9 +117,33 @@ Store counters as a single snapshot object:
 Telemetry should contain sensor values and a timestamp.
 
 ### Runtime Settings
-Runtime settings should contain telemetry interval, log verbosity, and SMS limit controls.
+Runtime settings should contain telemetry interval, log verbosity, SMS limit controls, and `ntfyUrl`.
 
 If runtime keys are missing or invalid, device firmware should create/heal them with safe defaults and print an operator-facing serial log.
+
+### Firestore SIM Module
+Firestore collection `sim_module` stores call/SMS archives and editable block lists:
+
+- `sim_module/calls/entries/{autoId}` - unblocked call events.
+- `sim_module/sms/entries/{autoId}` - unblocked SMS events.
+- `sim_module/blocked_calls/entries/{autoId}` - blocked call events.
+- `sim_module/blocked_sms/entries/{autoId}` - blocked SMS events.
+- `sim_module/blocked_callers/numbers/{docId}` - caller numbers that should not trigger ntfy.
+- `sim_module/blocked_sms_senders/numbers/{docId}` - SMS sender numbers that should not trigger ntfy.
+
+Event documents contain `type`, `number`, `message`, `blocked`, `source`, `timestamp`, and `updatedAtMs`.
+
+Block-list documents should contain:
+
+```json
+{
+	"number": "+923001234567",
+	"enabled": true
+}
+```
+
+If `number` is missing, the firmware treats the Firestore document ID as the number.
+For compatibility with operator-created folders, the firmware also reads `sim_module/blocked_caller/numbers/{docId}` and `sim_module/blocked_sms_sender/numbers/{docId}`.
 
 ## Device Auth Direction
 - Realtime Database access should use Firebase Authentication from the device.
@@ -147,10 +173,10 @@ If runtime keys are missing or invalid, device firmware should create/heal them 
 }
 ```
 
-### Firestore (reference only, not the v8 device path)
+### Firestore
 ```text
-Firestore rules are not used by the current ESP32 firmware path.
-If Firestore is chosen later, the data model and code paths must be rewritten.
+Allow authenticated device users to read/write the sim_module collection during development.
+Tighten this rule for production device accounts.
 ```
 
 ## What `auth failed code=400` Usually Means

@@ -19,6 +19,7 @@
 #include "ThingSpeakManager.h"
 #include "WebDashboard.h"
 #include "Logger.h"
+#include "NtfyManager.h"
 
 static ConfigManager configManager;
 static WiFiManager wifiManager;
@@ -30,6 +31,7 @@ static DisplayManager displayManager;
 static DHTManager dhtManager;
 static ThingSpeakManager thingSpeakManager;
 static WebDashboard webDashboard;
+static NtfyManager ntfyManager;
 
 static unsigned long lastUiRefresh = 0;
 static unsigned long lastCloudPoll = 0;
@@ -45,8 +47,16 @@ static String lastTelemetryPushMessage = "not_attempted";
 static unsigned long telemetryIntervalMs = 15000UL;
 static unsigned long thingSpeakIntervalMs = 15000UL;
 static const unsigned long runtimeSettingsSyncIntervalMs = 10UL * 60UL * 1000UL;
+static const size_t maxBlockedNumbers = 32;
 static bool showFirebasePushLogs = true;
 static bool showThingSpeakPushLogs = true;
+static String blockedCallers[maxBlockedNumbers];
+static String blockedSmsSenders[maxBlockedNumbers];
+static size_t blockedCallerCount = 0;
+static size_t blockedSmsSenderCount = 0;
+static String modemLineBuffer;
+static bool awaitingSmsBody = false;
+static String pendingSmsNumber;
 
 static void initializeModemHardware() {
   Wire.begin(I2C_SDA_PIN_DEFAULT, I2C_SCL_PIN_DEFAULT);
@@ -93,6 +103,181 @@ static String normalizePhoneNumber(const String &raw) {
     return String();
   }
   return String("+") + digits;
+}
+
+static String displayPhoneNumber(const String &raw) {
+  String normalized = normalizePhoneNumber(raw);
+  return normalized.length() > 0 ? normalized : raw;
+}
+
+static bool numbersMatch(const String &left, const String &right) {
+  String leftDigits = digitsOnly(left);
+  String rightDigits = digitsOnly(right);
+  if (leftDigits.length() == 0 || rightDigits.length() == 0) {
+    return false;
+  }
+  if (leftDigits == rightDigits) {
+    return true;
+  }
+  String leftNormalized = normalizePhoneNumber(left);
+  String rightNormalized = normalizePhoneNumber(right);
+  if (leftNormalized.length() > 0 && rightNormalized.length() > 0 && leftNormalized == rightNormalized) {
+    return true;
+  }
+  return leftDigits.length() >= 10 &&
+         rightDigits.length() >= 10 &&
+         leftDigits.substring(leftDigits.length() - 10) == rightDigits.substring(rightDigits.length() - 10);
+}
+
+static bool isBlockedNumber(const String &number, String *blockedNumbers, size_t blockedCount) {
+  for (size_t i = 0; i < blockedCount; ++i) {
+    if (numbersMatch(number, blockedNumbers[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static unsigned long currentEpochSeconds() {
+  time_t now = time(nullptr);
+  if (now > 1000) {
+    return (unsigned long)now;
+  }
+  return millis() / 1000UL;
+}
+
+static String formatEventTime(unsigned long epochSeconds) {
+  if (epochSeconds > 1000) {
+    time_t eventTime = (time_t)epochSeconds;
+    struct tm timeInfo;
+    if (localtime_r(&eventTime, &timeInfo)) {
+      char buffer[24];
+      strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeInfo);
+      return String(buffer);
+    }
+  }
+  return String("uptime ") + String(millis() / 1000UL) + String("s");
+}
+
+static String quotedField(const String &line, int fieldIndex) {
+  int searchFrom = 0;
+  for (int i = 0; i <= fieldIndex; ++i) {
+    int startQuote = line.indexOf('"', searchFrom);
+    if (startQuote < 0) {
+      return String();
+    }
+    int endQuote = line.indexOf('"', startQuote + 1);
+    if (endQuote < 0) {
+      return String();
+    }
+    if (i == fieldIndex) {
+      return line.substring(startQuote + 1, endQuote);
+    }
+    searchFrom = endQuote + 1;
+  }
+  return String();
+}
+
+static void pushSimEvent(const String &type, const String &number, const String &message, bool blocked, unsigned long epochSeconds) {
+  if (!firebaseManager.isReady()) {
+    Logger::warn("FIREBASE", "SIM event skipped: firebase not ready");
+    return;
+  }
+  if (!firebaseManager.pushSimModuleEvent(type, number, message, blocked, epochSeconds)) {
+    Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
+  }
+}
+
+static void processIncomingCall(const String &rawNumber) {
+  String number = displayPhoneNumber(rawNumber);
+  unsigned long epochSeconds = currentEpochSeconds();
+  bool blocked = isBlockedNumber(number, blockedCallers, blockedCallerCount);
+
+  pushSimEvent("call", number, String(), blocked, epochSeconds);
+  if (blocked) {
+    Logger::info("CALL", "Blocked caller logged without ntfy");
+    return;
+  }
+
+  String message = String("Incoming call at ") + formatEventTime(epochSeconds);
+  if (ntfyManager.notify(String("call from ") + number, message)) {
+    Logger::info("NTFY", "Call notification sent");
+  } else {
+    Logger::warn("NTFY", ntfyManager.lastError().c_str());
+  }
+}
+
+static void processIncomingSms(const String &rawNumber, const String &message) {
+  String number = displayPhoneNumber(rawNumber);
+  unsigned long epochSeconds = currentEpochSeconds();
+  bool blocked = isBlockedNumber(number, blockedSmsSenders, blockedSmsSenderCount);
+
+  pushSimEvent("sms", number, message, blocked, epochSeconds);
+  if (blocked) {
+    Logger::info("SMS", "Blocked SMS sender logged without ntfy");
+    return;
+  }
+
+  if (ntfyManager.notify(String("sms from ") + number, message)) {
+    Logger::info("NTFY", "SMS notification sent");
+  } else {
+    Logger::warn("NTFY", ntfyManager.lastError().c_str());
+  }
+}
+
+static void handleModemLine(String line) {
+  line.trim();
+  if (line.length() == 0) {
+    return;
+  }
+
+  if (awaitingSmsBody) {
+    awaitingSmsBody = false;
+    processIncomingSms(pendingSmsNumber, line);
+    pendingSmsNumber = String();
+    return;
+  }
+
+  if (line.startsWith("+CLIP:")) {
+    String callerNumber = quotedField(line, 0);
+    callManager.hangUp();
+    processIncomingCall(callerNumber);
+    return;
+  }
+
+  if (line.startsWith("+CMT:") || line.startsWith("+CMGR:")) {
+    pendingSmsNumber = quotedField(line, 0);
+    awaitingSmsBody = pendingSmsNumber.length() > 0;
+    return;
+  }
+
+  if (line.startsWith("+CMTI:")) {
+    int comma = line.lastIndexOf(',');
+    if (comma > 0) {
+      String index = line.substring(comma + 1);
+      index.trim();
+      Serial1.print("AT+CMGR=");
+      Serial1.println(index);
+    }
+  }
+}
+
+static void handleModemEvents() {
+  while (Serial1.available()) {
+    char c = (char)Serial1.read();
+    if (c == '\r') {
+      continue;
+    }
+    if (c == '\n') {
+      handleModemLine(modemLineBuffer);
+      modemLineBuffer = String();
+      continue;
+    }
+    modemLineBuffer += c;
+    if (modemLineBuffer.length() > 512) {
+      modemLineBuffer = String();
+    }
+  }
 }
 
 static void processPendingCommand() {
@@ -166,6 +351,7 @@ static void printCommandHelp() {
   Serial.println(" - dht    : print temperature and humidity");
   Serial.println(" - status : print wifi/ip/firebase status");
   Serial.println(" - sync   : sync runtime settings from Firebase now");
+  Serial.println(" - ntfy test | test ntfy : send ntfy test notification");
   Serial.println(" - help   : show this command list");
 }
 
@@ -193,7 +379,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   const bool defaultShowThingSpeakPushLogs = true;
 
   FirebaseRuntimeSettings settings;
-  if (!firebaseManager.fetchRuntimeSettings(settings, defaultIntervalOfDhtSeconds, defaultShowFirebasePushLogs, defaultShowThingSpeakPushLogs)) {
+  if (!firebaseManager.fetchRuntimeSettings(settings, defaultIntervalOfDhtSeconds, defaultShowFirebasePushLogs, defaultShowThingSpeakPushLogs, String(runtimeConfig.ntfyUrl))) {
     Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
     return false;
   }
@@ -204,6 +390,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   int oldDailyLimit = runtimeConfig.dailySmsLimit;
   int oldWeeklyLimit = runtimeConfig.weeklySmsLimit;
   int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
+  String oldNtfyUrl = runtimeConfig.ntfyUrl;
 
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
   thingSpeakIntervalMs = telemetryIntervalMs < 15000UL ? 15000UL : telemetryIntervalMs;
@@ -212,6 +399,8 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   runtimeConfig.dailySmsLimit = settings.dailySmsLimit;
   runtimeConfig.weeklySmsLimit = settings.weeklySmsLimit;
   runtimeConfig.monthlySmsLimit = settings.monthlySmsLimit;
+  strlcpy(runtimeConfig.ntfyUrl, settings.ntfyUrl.c_str(), sizeof(runtimeConfig.ntfyUrl));
+  ntfyManager.setUrl(settings.ntfyUrl);
   rateLimitManager.setLimits(runtimeConfig.dailySmsLimit, runtimeConfig.weeklySmsLimit, runtimeConfig.monthlySmsLimit);
 
   if (settings.createdIntervalOfDht) {
@@ -232,6 +421,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (settings.createdMonthlySmsLimit) {
     Serial.println("[SYNC] created or healed Firebase variable: monthlySmsLimit");
   }
+  if (settings.createdNtfyUrl) {
+    Serial.println("[SYNC] created or healed Firebase variable: ntfyUrl");
+  }
 
   if (oldIntervalSeconds != settings.intervalOfDhtSeconds) {
     printRuntimeSettingChange("intervalOfDhtSeconds", String(oldIntervalSeconds), String(settings.intervalOfDhtSeconds));
@@ -251,6 +443,28 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (oldMonthlyLimit != runtimeConfig.monthlySmsLimit) {
     printRuntimeSettingChange("monthlySmsLimit", String(oldMonthlyLimit), String(runtimeConfig.monthlySmsLimit));
   }
+  if (oldNtfyUrl != String(runtimeConfig.ntfyUrl)) {
+    printRuntimeSettingChange("ntfyUrl", oldNtfyUrl, String(runtimeConfig.ntfyUrl));
+  }
+
+  size_t oldBlockedCallerCount = blockedCallerCount;
+  size_t oldBlockedSmsSenderCount = blockedSmsSenderCount;
+  if (firebaseManager.fetchSimBlockLists(
+          blockedCallers,
+          maxBlockedNumbers,
+          blockedCallerCount,
+          blockedSmsSenders,
+          maxBlockedNumbers,
+          blockedSmsSenderCount)) {
+    if (oldBlockedCallerCount != blockedCallerCount) {
+      printRuntimeSettingChange("blocked_callers_count", String(oldBlockedCallerCount), String(blockedCallerCount));
+    }
+    if (oldBlockedSmsSenderCount != blockedSmsSenderCount) {
+      printRuntimeSettingChange("blocked_sms_senders_count", String(oldBlockedSmsSenderCount), String(blockedSmsSenderCount));
+    }
+  } else {
+    Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
+  }
 
   Serial.print("[SYNC] source=");
   Serial.print(source);
@@ -259,7 +473,11 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   Serial.print(" showFirebasePushLogs=");
   Serial.print(showFirebasePushLogs ? "true" : "false");
   Serial.print(" showThingSpeakPushLogs=");
-  Serial.println(showThingSpeakPushLogs ? "true" : "false");
+  Serial.print(showThingSpeakPushLogs ? "true" : "false");
+  Serial.print(" blockedCallers=");
+  Serial.print(blockedCallerCount);
+  Serial.print(" blockedSmsSenders=");
+  Serial.println(blockedSmsSenderCount);
 
   lastRuntimeSettingsSync = millis();
   return true;
@@ -293,6 +511,15 @@ static void handleSerialCommand(String command) {
     }
     return;
   }
+  if (command == "ntfy test" || command == "test ntfy") {
+    if (ntfyManager.test()) {
+      Serial.println("[NTFY] test notification sent");
+    } else {
+      Serial.print("[NTFY] test failed: ");
+      Serial.println(ntfyManager.lastError());
+    }
+    return;
+  }
   printCommandHelp();
 }
 
@@ -305,6 +532,7 @@ void setup() {
 
   configManager.begin();
   runtimeConfig = configManager.get();
+  ntfyManager.begin(runtimeConfig.ntfyUrl);
 
   initializeModemHardware();
   Logger::info("MODEM", "Hardware initialized");
@@ -367,6 +595,7 @@ void loop() {
   }
 
   callManager.loop();
+  handleModemEvents();
   webDashboard.loop();
 
   while (Serial.available()) {
