@@ -145,6 +145,15 @@ Block-list documents should contain:
 If `number` is missing, the firmware treats the Firestore document ID as the number.
 For compatibility with operator-created folders, the firmware also reads `sim_module/blocked_caller/numbers/{docId}` and `sim_module/blocked_sms_sender/numbers/{docId}`.
 
+On startup, firmware checks and creates these visible Firestore documents if missing:
+
+- `sim_module/calls` and `sim_module/calls/entries/_meta`
+- `sim_module/sms` and `sim_module/sms/entries/_meta`
+- `sim_module/blocked_calls` and `sim_module/blocked_calls/entries/_meta`
+- `sim_module/blocked_sms` and `sim_module/blocked_sms/entries/_meta`
+- `sim_module/blocked_callers` and `sim_module/blocked_callers/numbers/_meta`
+- `sim_module/blocked_sms_senders` and `sim_module/blocked_sms_senders/numbers/_meta`
+
 ## Device Auth Direction
 - Realtime Database access should use Firebase Authentication from the device.
 - Default device mode in v8 is anonymous auth for quick bootstrapping.

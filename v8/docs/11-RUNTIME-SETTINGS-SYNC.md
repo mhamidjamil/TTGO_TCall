@@ -54,4 +54,4 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 - Firestore block lists sync on startup, periodically, and through `sync`.
 - Startup and periodic sync both work.
 - Manual `sync` command applies changes immediately.
-- `help` command documents all available serial commands.
+- `help` command documents all available serial commands, including `show sms`, `delete sms <index>`, and `delete all sms`.

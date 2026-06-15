@@ -42,6 +42,14 @@ The ESP32 uses Firebase Auth and Firestore REST with the same Firebase project I
 
 For block-list documents, set `number` to the phone number and optionally set `enabled` to `false` to disable it without deleting the document. The firmware also accepts the document ID as the number when the `number` field is missing, and it also reads singular aliases `blocked_caller` and `blocked_sms_sender`.
 
+On startup the firmware checks the required Firestore documents and `_meta` subcollection documents. Missing paths are created and printed to Serial.
+
+## Serial SMS Memory Commands
+- `show sms` prints `AT+CMGL="ALL"` output with SIM indexes.
+- `delete sms <index>` deletes one SIM message with `AT+CMGD=<index>`.
+- `delete all sms` deletes all SIM messages with `AT+CMGD=1,4`.
+- Incoming SMS uses the stored-message flow: receive index, read with `AT+CMGR=<index>`, upload to Firestore, then delete that index only after upload succeeds.
+
 ## Arduino CLI Setup
 Install Arduino CLI, add the ESP32 core, then compile or upload from this folder:
 
