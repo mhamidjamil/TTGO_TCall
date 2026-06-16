@@ -1,17 +1,21 @@
 #include "WebDashboard.h"
 
+#include <FS.h>
+#include <SPIFFS.h>
 #include <WebServer.h>
 #include "FirebaseManager.h"
+#include "NtfyManager.h"
 #include "WiFiManager.h"
 
 namespace {
 WebServer *server = nullptr;
 }
 
-bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager) {
+bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager, NtfyManager &incomingNtfyManager) {
   config = &incomingConfig;
   wifiManager = &incomingWiFiManager;
   firebaseManager = &incomingFirebaseManager;
+  ntfyManager = &incomingNtfyManager;
 
   if (server != nullptr) {
     delete server;
@@ -21,8 +25,14 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
   server = new WebServer(config->webServerPort);
 
   server->on("/", [this]() {
-    server->send(200, "text/plain", "TTGO T-Call v8 running");
+    server->sendHeader("Location", "/dashboard.html");
+    server->send(302, "text/plain", "dashboard");
   });
+
+  server->serveStatic("/dashboard.html", SPIFFS, "/dashboard.html");
+  server->serveStatic("/dashboard.css", SPIFFS, "/dashboard.css");
+  server->serveStatic("/dashboard.js", SPIFFS, "/dashboard.js");
+  server->serveStatic("/version.txt", SPIFFS, "/version.txt");
 
   server->on("/api/status", [this]() {
     String payload = String("{\"mode\":\"") + wifiManager->modeName() +
@@ -30,6 +40,27 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
                      String("\",\"firebase\":") + (firebaseManager->isReady() ? "true" : "false") +
                      String("}");
     server->send(200, "application/json", payload);
+  });
+
+  server->on("/api/firebase-web-config", [this]() {
+    String authDomain = String(config->firebaseProjectId) + ".firebaseapp.com";
+    String payload = String("{\"projectId\":\"") + config->firebaseProjectId +
+                     String("\",\"apiKey\":\"") + config->firebaseApiKey +
+                     String("\",\"authDomain\":\"") + authDomain +
+                     String("\",\"deviceId\":\"") + config->deviceId +
+                     String("\",\"useAnonymous\":") + (config->firebaseUseAnonymous ? "true" : "false") +
+                     String("}");
+    server->send(200, "application/json", payload);
+  });
+
+  server->on("/api/notify-test", HTTP_POST, [this]() {
+    bool ok = ntfyManager != nullptr && ntfyManager->test();
+    String message = ok ? String("notification sent") : (ntfyManager != nullptr ? ntfyManager->lastError() : String("ntfy manager missing"));
+    message.replace("\"", "\\\"");
+    String payload = String("{\"ok\":") + (ok ? "true" : "false") +
+                     String(",\"message\":\"") + message +
+                     String("\"}");
+    server->send(ok ? 200 : 500, "application/json", payload);
   });
 
   server->on("/docs", [this]() {

@@ -4,6 +4,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <WiFi.h>
+#include <time.h>
 
 #if __has_include(<Firebase_ESP_Client.h>)
 #include <Firebase_ESP_Client.h>
@@ -113,6 +114,20 @@ String firestoreStringField(const JsonObjectConst &fields, const char *name) {
   return String();
 }
 
+int firestoreIntField(const JsonObjectConst &fields, const char *name, int defaultValue) {
+  JsonVariantConst field = fields[name];
+  if (field["integerValue"].is<const char *>()) {
+    return String(field["integerValue"].as<const char *>()).toInt();
+  }
+  if (field["doubleValue"].is<float>()) {
+    return (int)field["doubleValue"].as<float>();
+  }
+  if (field["stringValue"].is<const char *>()) {
+    return String(field["stringValue"].as<const char *>()).toInt();
+  }
+  return defaultValue;
+}
+
 bool firestoreBoolField(const JsonObjectConst &fields, const char *name, bool defaultValue) {
   JsonVariantConst field = fields[name];
   if (field["booleanValue"].is<bool>()) {
@@ -130,6 +145,14 @@ bool firestoreBoolField(const JsonObjectConst &fields, const char *name, bool de
     if (text == "true" || text == "1" || text == "yes" || text == "on") {
       return true;
     }
+  }
+  return defaultValue;
+}
+
+unsigned long firestoreEpochField(const JsonObjectConst &fields, const char *name, unsigned long defaultValue) {
+  JsonVariantConst field = fields[name];
+  if (field["integerValue"].is<const char *>()) {
+    return (unsigned long)String(field["integerValue"].as<const char *>()).toInt();
   }
   return defaultValue;
 }
@@ -172,6 +195,71 @@ void appendFirestoreArrayStrings(const JsonVariantConst &field, String *numbers,
       numbers[numberCount++] = number;
     }
   }
+}
+
+String isoTimestampFromEpoch(unsigned long epochSeconds) {
+  if (epochSeconds <= 1000) {
+    epochSeconds = millis() / 1000UL;
+  }
+  time_t raw = (time_t)epochSeconds;
+  struct tm timeInfo;
+  if (!gmtime_r(&raw, &timeInfo)) {
+    return String("1970-01-01T00:00:00Z");
+  }
+  char buffer[25];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &timeInfo);
+  return String(buffer);
+}
+
+String dayKeyFromEpoch(unsigned long epochSeconds) {
+  if (epochSeconds <= 1000) {
+    epochSeconds = millis() / 1000UL;
+  }
+  time_t raw = (time_t)epochSeconds;
+  struct tm timeInfo;
+  if (!gmtime_r(&raw, &timeInfo)) {
+    return String("1970-01-01");
+  }
+  char buffer[12];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d", &timeInfo);
+  return String(buffer);
+}
+
+unsigned long currentFirestoreEpoch() {
+  time_t now = time(nullptr);
+  if (now > 1000) {
+    return (unsigned long)now;
+  }
+  return millis() / 1000UL;
+}
+
+void setStringField(JsonObject fields, const char *name, const String &value) {
+  fields[name]["stringValue"] = value;
+}
+
+void setBoolField(JsonObject fields, const char *name, bool value) {
+  fields[name]["booleanValue"] = value;
+}
+
+void setIntField(JsonObject fields, const char *name, int value) {
+  fields[name]["integerValue"] = String(value);
+}
+
+void setTimestampField(JsonObject fields, const char *name, unsigned long epochSeconds) {
+  fields[name]["timestampValue"] = isoTimestampFromEpoch(epochSeconds);
+}
+
+void parseFirestoreJob(const JsonObjectConst &document, FirestoreJob &outJob) {
+  outJob = FirestoreJob();
+  outJob.id = firestoreDocumentId(document["name"] | "");
+  JsonObjectConst fields = document["fields"].as<JsonObjectConst>();
+  outJob.deviceId = firestoreStringField(fields, "device_id");
+  outJob.phoneNumber = firestoreStringField(fields, "phone_number");
+  outJob.message = firestoreStringField(fields, "message");
+  outJob.status = firestoreStringField(fields, "status");
+  outJob.error = firestoreStringField(fields, "error");
+  outJob.userPicked = firestoreBoolField(fields, "user_picked", false);
+  outJob.durationSeconds = firestoreIntField(fields, "duration_seconds", 0);
 }
 }
 
@@ -781,6 +869,623 @@ bool FirebaseManager::pushSimModuleEvent(const String &type,
   if (statusCode < 200 || statusCode >= 300) {
     setHttpStatusError(error, "firestore sim event push", statusCode, response);
     return false;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::bootstrapGatewayCollections(const String &deviceId,
+                                                  int pollIntervalSeconds,
+                                                  int dailySmsDefaultLimit,
+                                                  int dailyCallDefaultLimit,
+                                                  bool missedCallMode) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  String normalizedDeviceId = safeFirestoreDocumentId(deviceId);
+  if (normalizedDeviceId.length() == 0) {
+    normalizedDeviceId = "device_001";
+  }
+
+  String url = buildFirestoreUrl(String("sim_modules/") + normalizedDeviceId);
+  DynamicJsonDocument doc(1536);
+  JsonObject fields = doc.createNestedObject("fields");
+  setStringField(fields, "name", deviceId);
+  setBoolField(fields, "active", true);
+  setIntField(fields, "poll_interval_seconds", pollIntervalSeconds);
+  setBoolField(fields, "missed_call_mode", missedCallMode);
+  setIntField(fields, "daily_sms_default_limit", dailySmsDefaultLimit);
+  setIntField(fields, "daily_call_default_limit", dailyCallDefaultLimit);
+  setStringField(fields, "source", "ttgo_tcall_v8");
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  String patchUrl = url +
+                    "?updateMask.fieldPaths=name"
+                    "&updateMask.fieldPaths=active"
+                    "&updateMask.fieldPaths=poll_interval_seconds"
+                    "&updateMask.fieldPaths=missed_call_mode"
+                    "&updateMask.fieldPaths=daily_sms_default_limit"
+                    "&updateMask.fieldPaths=daily_call_default_limit"
+                    "&updateMask.fieldPaths=source";
+  if (!httpPatchBearerJson(patchUrl, payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "gateway bootstrap", statusCode, response);
+    return false;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::fetchNextSmsJob(const String &deviceId, FirestoreJob &outJob) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(buildFirestoreUrl("sms_jobs"), response, statusCode)) {
+    return false;
+  }
+  if (statusCode == 404) {
+    error = String();
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "sms job fetch", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(12288);
+  if (deserializeJson(doc, response)) {
+    error = String("sms job parse failed body=") + response;
+    return false;
+  }
+
+  JsonArray documents = doc["documents"].as<JsonArray>();
+  for (JsonVariant item : documents) {
+    FirestoreJob candidate;
+    parseFirestoreJob(item.as<JsonObjectConst>(), candidate);
+    if (candidate.status != "pending") {
+      continue;
+    }
+    if (candidate.deviceId.length() > 0 && candidate.deviceId != deviceId) {
+      continue;
+    }
+
+    DynamicJsonDocument claimDoc(768);
+    JsonObject fields = claimDoc.createNestedObject("fields");
+    setStringField(fields, "status", "processing");
+    unsigned long now = currentFirestoreEpoch();
+    setTimestampField(fields, "processing_started_at", now);
+    setIntField(fields, "processing_started_epoch", (int)now);
+    String payload;
+    serializeJson(claimDoc, payload);
+
+    String claimResponse;
+    int claimStatus = 0;
+    String claimUrl = buildFirestoreUrl(String("sms_jobs/") + candidate.id) +
+                      "?updateMask.fieldPaths=status"
+                      "&updateMask.fieldPaths=processing_started_at"
+                      "&updateMask.fieldPaths=processing_started_epoch";
+    if (!httpPatchBearerJson(claimUrl, payload, claimResponse, claimStatus) ||
+        claimStatus < 200 || claimStatus >= 300) {
+      setHttpStatusError(error, "sms job claim", claimStatus, claimResponse);
+      return false;
+    }
+
+    candidate.status = "processing";
+    outJob = candidate;
+    error = String();
+    return true;
+  }
+
+  error = String();
+  return false;
+}
+
+bool FirebaseManager::fetchNextCallJob(const String &deviceId, FirestoreJob &outJob) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(buildFirestoreUrl("call_jobs"), response, statusCode)) {
+    return false;
+  }
+  if (statusCode == 404) {
+    error = String();
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "call job fetch", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(12288);
+  if (deserializeJson(doc, response)) {
+    error = String("call job parse failed body=") + response;
+    return false;
+  }
+
+  JsonArray documents = doc["documents"].as<JsonArray>();
+  for (JsonVariant item : documents) {
+    FirestoreJob candidate;
+    parseFirestoreJob(item.as<JsonObjectConst>(), candidate);
+    if (candidate.status != "pending") {
+      continue;
+    }
+    if (candidate.deviceId.length() > 0 && candidate.deviceId != deviceId) {
+      continue;
+    }
+
+    DynamicJsonDocument claimDoc(768);
+    JsonObject fields = claimDoc.createNestedObject("fields");
+    setStringField(fields, "status", "processing");
+    unsigned long now = currentFirestoreEpoch();
+    setTimestampField(fields, "processing_started_at", now);
+    setIntField(fields, "processing_started_epoch", (int)now);
+    String payload;
+    serializeJson(claimDoc, payload);
+
+    String claimResponse;
+    int claimStatus = 0;
+    String claimUrl = buildFirestoreUrl(String("call_jobs/") + candidate.id) +
+                      "?updateMask.fieldPaths=status"
+                      "&updateMask.fieldPaths=processing_started_at"
+                      "&updateMask.fieldPaths=processing_started_epoch";
+    if (!httpPatchBearerJson(claimUrl, payload, claimResponse, claimStatus) ||
+        claimStatus < 200 || claimStatus >= 300) {
+      setHttpStatusError(error, "call job claim", claimStatus, claimResponse);
+      return false;
+    }
+
+    candidate.status = "processing";
+    outJob = candidate;
+    error = String();
+    return true;
+  }
+
+  error = String();
+  return false;
+}
+
+bool FirebaseManager::fetchDeviceActive(const String &deviceId, bool &outActive) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  outActive = true;
+  String normalizedDeviceId = safeFirestoreDocumentId(deviceId);
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(buildFirestoreUrl(String("sim_modules/") + normalizedDeviceId), response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode == 404) {
+    error = String();
+    return true;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "device active fetch", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(2048);
+  if (deserializeJson(doc, response)) {
+    error = String("device active parse failed body=") + response;
+    return false;
+  }
+
+  JsonObjectConst fields = doc["fields"].as<JsonObjectConst>();
+  outActive = firestoreBoolField(fields, "active", true);
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::updateSmsJobStatus(const FirestoreJob &job, const String &status, const String &errorReason) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(1024);
+  JsonObject fields = doc.createNestedObject("fields");
+  setStringField(fields, "status", status);
+  unsigned long now = currentFirestoreEpoch();
+  setTimestampField(fields, "completed_at", now);
+  setIntField(fields, "completed_epoch", (int)now);
+  setStringField(fields, "error", errorReason);
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  String url = buildFirestoreUrl(String("sms_jobs/") + job.id) +
+               "?updateMask.fieldPaths=status"
+               "&updateMask.fieldPaths=completed_at"
+               "&updateMask.fieldPaths=completed_epoch"
+               "&updateMask.fieldPaths=error";
+  if (!httpPatchBearerJson(url, payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "sms job status", statusCode, response);
+    return false;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::updateCallJobStatus(const FirestoreJob &job,
+                                          const String &status,
+                                          bool userPicked,
+                                          int durationSeconds,
+                                          const String &errorReason) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(1280);
+  JsonObject fields = doc.createNestedObject("fields");
+  setStringField(fields, "status", status);
+  unsigned long now = currentFirestoreEpoch();
+  setTimestampField(fields, "completed_at", now);
+  setIntField(fields, "completed_epoch", (int)now);
+  setBoolField(fields, "user_picked", userPicked);
+  setIntField(fields, "duration_seconds", durationSeconds);
+  setStringField(fields, "error", errorReason);
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  String url = buildFirestoreUrl(String("call_jobs/") + job.id) +
+               "?updateMask.fieldPaths=status"
+               "&updateMask.fieldPaths=completed_at"
+               "&updateMask.fieldPaths=completed_epoch"
+               "&updateMask.fieldPaths=user_picked"
+               "&updateMask.fieldPaths=duration_seconds"
+               "&updateMask.fieldPaths=error";
+  if (!httpPatchBearerJson(url, payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "call job status", statusCode, response);
+    return false;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::fetchAllowedNumber(const String &phoneNumber, FirestoreAllowedNumber &outAllowedNumber) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  outAllowedNumber = FirestoreAllowedNumber();
+  String documentId = safeFirestoreDocumentId(phoneNumber);
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(buildFirestoreUrl(String("allowed_numbers/") + documentId), response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode == 404) {
+    error = String();
+    return true;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "allowed number fetch", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(2048);
+  if (deserializeJson(doc, response)) {
+    error = String("allowed number parse failed body=") + response;
+    return false;
+  }
+
+  JsonObjectConst fields = doc["fields"].as<JsonObjectConst>();
+  outAllowedNumber.found = true;
+  outAllowedNumber.enabled = firestoreBoolField(fields, "enabled", false);
+  outAllowedNumber.smsLimitPerDay = firestoreIntField(fields, "sms_limit_per_day", 0);
+  outAllowedNumber.callLimitPerDay = firestoreIntField(fields, "call_limit_per_day", 0);
+  outAllowedNumber.notes = firestoreStringField(fields, "notes");
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::pushSmsLog(const String &deviceId,
+                                 const String &direction,
+                                 const String &phoneNumber,
+                                 const String &message,
+                                 unsigned long epochSeconds,
+                                 const String &status,
+                                 const String &errorReason) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  String documentId = safeFirestoreDocumentId(String("sms_") + String(millis()) + "_" + phoneNumber);
+  DynamicJsonDocument doc(1536);
+  JsonObject fields = doc.createNestedObject("fields");
+  setStringField(fields, "device_id", deviceId);
+  setStringField(fields, "direction", direction);
+  setStringField(fields, "phone_number", phoneNumber);
+  setStringField(fields, "message", message);
+  setStringField(fields, "status", status);
+  setStringField(fields, "error", errorReason);
+  setTimestampField(fields, "timestamp", epochSeconds);
+  setIntField(fields, "timestamp_epoch", (int)epochSeconds);
+  setStringField(fields, "day_key", dayKeyFromEpoch(epochSeconds));
+  setStringField(fields, "source", "ttgo_tcall_v8");
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  if (!httpPatchBearerJson(buildFirestoreUrl(String("sms_logs/") + documentId), payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "sms log push", statusCode, response);
+    return false;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::pushCallLog(const String &deviceId,
+                                  const String &direction,
+                                  const String &phoneNumber,
+                                  int durationSeconds,
+                                  bool answered,
+                                  unsigned long epochSeconds,
+                                  const String &status,
+                                  const String &errorReason) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  String documentId = safeFirestoreDocumentId(String("call_") + String(millis()) + "_" + phoneNumber);
+  DynamicJsonDocument doc(1536);
+  JsonObject fields = doc.createNestedObject("fields");
+  setStringField(fields, "device_id", deviceId);
+  setStringField(fields, "direction", direction);
+  setStringField(fields, "phone_number", phoneNumber);
+  setIntField(fields, "duration_seconds", durationSeconds);
+  setBoolField(fields, "answered", answered);
+  setStringField(fields, "status", status);
+  setStringField(fields, "error", errorReason);
+  setTimestampField(fields, "timestamp", epochSeconds);
+  setIntField(fields, "timestamp_epoch", (int)epochSeconds);
+  setStringField(fields, "day_key", dayKeyFromEpoch(epochSeconds));
+  setStringField(fields, "source", "ttgo_tcall_v8");
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  if (!httpPatchBearerJson(buildFirestoreUrl(String("call_logs/") + documentId), payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "call log push", statusCode, response);
+    return false;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::countDailySmsUsage(const String &phoneNumber, const String &dayKey, int &outCount) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  outCount = 0;
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(buildFirestoreUrl("sms_logs"), response, statusCode)) {
+    return false;
+  }
+  if (statusCode == 404) {
+    error = String();
+    return true;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "sms quota fetch", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(16384);
+  if (deserializeJson(doc, response)) {
+    error = String("sms quota parse failed body=") + response;
+    return false;
+  }
+
+  JsonArray documents = doc["documents"].as<JsonArray>();
+  for (JsonVariant item : documents) {
+    JsonObjectConst fields = item["fields"].as<JsonObjectConst>();
+    if (firestoreStringField(fields, "direction") == "outgoing" &&
+        firestoreStringField(fields, "status") == "sent" &&
+        firestoreStringField(fields, "phone_number") == phoneNumber &&
+        firestoreStringField(fields, "day_key") == dayKey) {
+      outCount++;
+    }
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::countDailyCallUsage(const String &phoneNumber, const String &dayKey, int &outCount) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  outCount = 0;
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(buildFirestoreUrl("call_logs"), response, statusCode)) {
+    return false;
+  }
+  if (statusCode == 404) {
+    error = String();
+    return true;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "call quota fetch", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(16384);
+  if (deserializeJson(doc, response)) {
+    error = String("call quota parse failed body=") + response;
+    return false;
+  }
+
+  JsonArray documents = doc["documents"].as<JsonArray>();
+  for (JsonVariant item : documents) {
+    JsonObjectConst fields = item["fields"].as<JsonObjectConst>();
+    if (firestoreStringField(fields, "direction") == "outgoing" &&
+        firestoreStringField(fields, "status") == "completed" &&
+        firestoreStringField(fields, "phone_number") == phoneNumber &&
+        firestoreStringField(fields, "day_key") == dayKey) {
+      outCount++;
+    }
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::pushDeviceHeartbeat(const String &deviceId,
+                                          int batteryPercent,
+                                          int signalStrength,
+                                          const String &networkOperator,
+                                          unsigned long epochSeconds,
+                                          int pollIntervalSeconds,
+                                          bool missedCallMode) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  String normalizedDeviceId = safeFirestoreDocumentId(deviceId);
+  DynamicJsonDocument doc(1536);
+  JsonObject fields = doc.createNestedObject("fields");
+  setStringField(fields, "name", deviceId);
+  setBoolField(fields, "active", true);
+  setTimestampField(fields, "last_seen_at", epochSeconds);
+  setIntField(fields, "last_seen_epoch", (int)epochSeconds);
+  setIntField(fields, "battery_percent", batteryPercent);
+  setIntField(fields, "signal_strength", signalStrength);
+  setStringField(fields, "network_operator", networkOperator);
+  setIntField(fields, "poll_interval_seconds", pollIntervalSeconds);
+  setBoolField(fields, "missed_call_mode", missedCallMode);
+  setStringField(fields, "source", "ttgo_tcall_v8");
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String response;
+  int statusCode = 0;
+  String url = buildFirestoreUrl(String("sim_modules/") + normalizedDeviceId) +
+               "?updateMask.fieldPaths=name"
+               "&updateMask.fieldPaths=active"
+               "&updateMask.fieldPaths=last_seen_at"
+               "&updateMask.fieldPaths=last_seen_epoch"
+               "&updateMask.fieldPaths=battery_percent"
+               "&updateMask.fieldPaths=signal_strength"
+               "&updateMask.fieldPaths=network_operator"
+               "&updateMask.fieldPaths=poll_interval_seconds"
+               "&updateMask.fieldPaths=missed_call_mode"
+               "&updateMask.fieldPaths=source";
+  if (!httpPatchBearerJson(url, payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "device heartbeat", statusCode, response);
+    return false;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  const char *collections[] = {"sms_jobs", "call_jobs"};
+  for (size_t i = 0; i < sizeof(collections) / sizeof(collections[0]); ++i) {
+    String response;
+    int statusCode = 0;
+    if (!httpGetBearer(buildFirestoreUrl(collections[i]), response, statusCode)) {
+      return false;
+    }
+    if (statusCode == 404) {
+      continue;
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+      setHttpStatusError(error, "stuck job fetch", statusCode, response);
+      return false;
+    }
+
+    DynamicJsonDocument readDoc(16384);
+    if (deserializeJson(readDoc, response)) {
+      error = String("stuck job parse failed body=") + response;
+      return false;
+    }
+
+    JsonArray documents = readDoc["documents"].as<JsonArray>();
+    for (JsonVariant item : documents) {
+      JsonObjectConst fields = item["fields"].as<JsonObjectConst>();
+      String status = firestoreStringField(fields, "status");
+      unsigned long started = firestoreEpochField(fields, "processing_started_epoch", 0);
+      if (status != "processing" || started == 0 || started >= cutoffEpochSeconds) {
+        continue;
+      }
+
+      String jobId = firestoreDocumentId(item["name"] | "");
+      DynamicJsonDocument writeDoc(512);
+      JsonObject writeFields = writeDoc.createNestedObject("fields");
+      setStringField(writeFields, "status", "pending");
+      setStringField(writeFields, "error", "recovered_from_stale_processing");
+      String payload;
+      serializeJson(writeDoc, payload);
+
+      String writeResponse;
+      int writeStatus = 0;
+      String url = buildFirestoreUrl(String(collections[i]) + "/" + jobId) +
+                   "?updateMask.fieldPaths=status"
+                   "&updateMask.fieldPaths=error";
+      if (!httpPatchBearerJson(url, payload, writeResponse, writeStatus)) {
+        return false;
+      }
+      if (writeStatus < 200 || writeStatus >= 300) {
+        setHttpStatusError(error, "stuck job reset", writeStatus, writeResponse);
+        return false;
+      }
+    }
   }
 
   error = String();

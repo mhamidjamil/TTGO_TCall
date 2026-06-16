@@ -1,12 +1,15 @@
 # v8 API Endpoints
 
-## Planned Surface
-- Device status endpoint.
-- Configuration read/write endpoint.
-- SMS and call control endpoints.
-- Docs endpoint.
+## Active Surface
+- `GET /` redirects to `/dashboard.html`.
+- `GET /dashboard.html`, `GET /dashboard.css`, `GET /dashboard.js`, `GET /version.txt` serve SPIFFS assets.
+- `GET /api/status` returns WiFi mode, IP, and Firebase readiness.
+- `GET /api/firebase-web-config` returns browser-safe Firebase settings.
+- `POST /api/notify-test` sends a local ntfy test using the configured topic.
+- `GET /docs` returns the built-in firmware documentation page.
 
 ## Acceptance Criteria
-- Each endpoint has a clear method and auth policy.
+- Public routes are clearly identified.
+- Browser routes do not expose device email/password or service-account material.
+- The notification test path is local to the device.
 - Docs URL is printed at startup.
-- Public vs protected routes are distinguished.

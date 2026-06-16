@@ -1,12 +1,9 @@
 # v8 Firebase Design
 
 ## Scope
-Firebase Realtime Database remains the command/settings path for v8. Firestore is now also used for SIM module call/SMS archives and block lists.
+Firestore is the primary data plane for the GSM gateway. It stores device health, allowed numbers, outgoing job queues, audit logs, quotas by log count, and SIM module archives.
 
-## Why Realtime Database For Commands
-- The device workflow is polling-based and updates small JSON documents frequently.
-- Realtime Database is a better fit for command queues, counters, and telemetry snapshots.
-- Firestore is used where append-only SIM event history and editable block-list documents are a better fit.
+Firebase Realtime Database remains in v8 only for legacy telemetry snapshots, runtime settings, and counter compatibility.
 
 ## Initial Design Intent
 - Use a polling-based command model.
@@ -14,7 +11,7 @@ Firebase Realtime Database remains the command/settings path for v8. Firestore i
 - Claim work atomically to avoid duplicate sends.
 - Preserve local fallback behavior when internet is unavailable.
 - Keep device-side configuration isolated from any service-account material.
-- Server posting details live in [10-SERVER-SMS-FLOW.md](10-SERVER-SMS-FLOW.md).
+- Server posting details live in [10-SERVER-SMS-FLOW.md](10-SERVER-SMS-FLOW.md), but new queue writers should create Firestore `sms_jobs` and `call_jobs`.
 
 ## What The ESP32 Actually Uses
 - WiFi STA mode means the ESP32 is acting as a client connecting to your router.
@@ -23,13 +20,19 @@ Firebase Realtime Database remains the command/settings path for v8. Firestore i
 - The service-account JSON belongs only on a backend or local admin tool, never on the ESP32.
 
 ## Proposed Paths
-- Commands: `/ttgo_tcall/commands/pending`
-- Command history: `/ttgo_tcall/commands/history`
+- Legacy RTDB commands: `/ttgo_tcall/commands/pending`
+- Legacy RTDB command history: `/ttgo_tcall/commands/history`
 - Counters: `/ttgo_tcall/counters`
 - Device status: `/ttgo_tcall/status`
 - Telemetry: `/ttgo_tcall/telemetry`
 - Runtime settings: `/ttgo_tcall/settings/runtime`
-- Firestore SIM module collection: `sim_module`
+- Firestore devices: `sim_modules`
+- Firestore allowed numbers: `allowed_numbers`
+- Firestore SMS jobs: `sms_jobs`
+- Firestore call jobs: `call_jobs`
+- Firestore SMS logs: `sms_logs`
+- Firestore call logs: `call_logs`
+- Firestore SIM module archive collection: `sim_module`
 
 ## Folder-Only Shape
 The root `ttgo_tcall` node is now treated as a container for folders only. Leaf variables should live under their parent folders.
@@ -80,7 +83,149 @@ The root `ttgo_tcall` node is now treated as a container for folders only. Leaf 
 }
 ```
 
-## Data Model
+## Firestore Gateway Data Model
+
+### Device ID
+The firmware uses `deviceId` from config, defaulting to `device_001`. Firestore jobs target that ID through `device_id`.
+
+### Device Document
+Path: `sim_modules/{deviceId}`
+
+```json
+{
+	"name": "TTGO Bedroom",
+	"active": true,
+	"poll_interval_seconds": 3,
+	"missed_call_mode": true,
+	"daily_sms_default_limit": 5,
+	"daily_call_default_limit": 5,
+	"last_seen_at": "timestamp",
+	"last_seen_epoch": 1780000000,
+	"signal_strength": 22,
+	"battery_percent": 84,
+	"network_operator": "Jazz"
+}
+```
+
+`active = false` blocks pending outgoing jobs.
+
+### Allowed Numbers
+Path: `allowed_numbers/{safe_phone_number}`
+
+```json
+{
+	"phone_number": "+923001111111",
+	"enabled": true,
+	"sms_limit_per_day": 5,
+	"call_limit_per_day": 5,
+	"notes": "Owner",
+	"updated_at": "timestamp"
+}
+```
+
+Document IDs are sanitized the same way as firmware: letters, digits, `+`, `_`, and `-` are preserved; other characters become `_`.
+
+### SMS Jobs
+Path: `sms_jobs/{auto_id}`
+
+```json
+{
+	"device_id": "device_001",
+	"phone_number": "+923001111111",
+	"message": "Hello",
+	"status": "pending",
+	"created_at": "timestamp",
+	"processing_started_at": null,
+	"completed_at": null,
+	"error": null
+}
+```
+
+Statuses: `pending`, `processing`, `sent`, `failed`, `blocked`, `quota_exceeded`.
+
+### Call Jobs
+Path: `call_jobs/{auto_id}`
+
+```json
+{
+	"device_id": "device_001",
+	"phone_number": "+923001111111",
+	"status": "pending",
+	"created_at": "timestamp",
+	"processing_started_at": null,
+	"completed_at": null,
+	"user_picked": false,
+	"duration_seconds": 0,
+	"error": null
+}
+```
+
+Statuses: `pending`, `processing`, `completed`, `failed`, `blocked`, `quota_exceeded`.
+
+### SMS Logs
+Path: `sms_logs/{auto_id}`
+
+```json
+{
+	"device_id": "device_001",
+	"direction": "outgoing",
+	"phone_number": "+923001111111",
+	"message": "Hello",
+	"status": "sent",
+	"error": "",
+	"timestamp": "timestamp",
+	"timestamp_epoch": 1780000000,
+	"day_key": "2026-06-16"
+}
+```
+
+Directions: `incoming`, `outgoing`.
+
+### Call Logs
+Path: `call_logs/{auto_id}`
+
+```json
+{
+	"device_id": "device_001",
+	"direction": "outgoing",
+	"phone_number": "+923001111111",
+	"duration_seconds": 8,
+	"answered": false,
+	"status": "completed",
+	"error": "",
+	"timestamp": "timestamp",
+	"timestamp_epoch": 1780000000,
+	"day_key": "2026-06-16"
+}
+```
+
+Directions: `incoming`, `outgoing`.
+
+## Queue Processing
+Every poll cycle:
+
+1. Fetch one pending SMS job for this `device_id`.
+2. Fetch one pending call job for this `device_id`.
+3. Validate `sim_modules/{deviceId}.active`.
+4. Validate `allowed_numbers/{phone_number}` exists and is enabled.
+5. Count successful outgoing logs for the current `day_key`.
+6. Execute the GSM action.
+7. Write an audit log.
+8. Update final job status.
+
+The firmware keeps one polling cycle; it does not create separate SMS/call intervals.
+
+### Stuck Job Recovery
+Once per minute, the device scans `sms_jobs` and `call_jobs`. Any `processing` job with `processing_started_epoch` older than 5 minutes is reset to `pending` and marked with `error = recovered_from_stale_processing`.
+
+### Quotas
+Daily quota is counted from logs, not a separate counter collection:
+
+- SMS usage: successful outgoing `sms_logs` with `status = sent`.
+- Call usage: successful outgoing `call_logs` with `status = completed`.
+- Reset: automatic through `day_key`, based on UTC date from device time.
+
+## Legacy RTDB Data Model
 
 ### Pending Commands
 Each pending command should look like this:
@@ -101,6 +246,8 @@ Each pending command should look like this:
 2. `processing` - claimed by the ESP32.
 3. `sent` - SMS sent successfully.
 4. `errored` - rejected or failed, with `errorReason`.
+
+New implementations should prefer Firestore `sms_jobs`; this RTDB path is retained for older tooling.
 
 ### Counters
 Store counters as a single snapshot object:

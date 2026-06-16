@@ -14,6 +14,10 @@
 #define NTFY_URL_DEFAULT "https://ntfy.innovorix.com/oracle_ntfy"
 #endif
 
+#ifndef DEVICE_ID_DEFAULT
+#define DEVICE_ID_DEFAULT "device_001"
+#endif
+
 namespace {
 constexpr const char *kConfigPath = "/v8_config.json";
 }
@@ -66,6 +70,7 @@ void ConfigManager::loadDefaults() {
   config.weeklySmsLimit = WEEKLY_SMS_LIMIT_DEFAULT;
   config.monthlySmsLimit = MONTHLY_SMS_LIMIT_DEFAULT;
   copyText(config.dashboardPassword, sizeof(config.dashboardPassword), DASHBOARD_PASSWORD_DEFAULT);
+  copyText(config.deviceId, sizeof(config.deviceId), DEVICE_ID_DEFAULT);
   copyText(config.deviceName, sizeof(config.deviceName), DEVICE_NAME_DEFAULT);
   copyText(config.ownerName, sizeof(config.ownerName), OWNER_NAME_DEFAULT);
   copyText(config.myNumber, sizeof(config.myNumber), MY_NUMBER_DEFAULT);
@@ -142,6 +147,7 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   config.weeklySmsLimit = doc["weeklySmsLimit"] | config.weeklySmsLimit;
   config.monthlySmsLimit = doc["monthlySmsLimit"] | config.monthlySmsLimit;
   strlcpy(config.dashboardPassword, doc["dashboardPassword"] | config.dashboardPassword, sizeof(config.dashboardPassword));
+  strlcpy(config.deviceId, doc["deviceId"] | config.deviceId, sizeof(config.deviceId));
   strlcpy(config.deviceName, doc["deviceName"] | config.deviceName, sizeof(config.deviceName));
   strlcpy(config.ownerName, doc["ownerName"] | config.ownerName, sizeof(config.ownerName));
   strlcpy(config.myNumber, doc["myNumber"] | config.myNumber, sizeof(config.myNumber));
@@ -182,6 +188,7 @@ String ConfigManager::writeJsonConfig() const {
   doc["weeklySmsLimit"] = config.weeklySmsLimit;
   doc["monthlySmsLimit"] = config.monthlySmsLimit;
   doc["dashboardPassword"] = config.dashboardPassword;
+  doc["deviceId"] = config.deviceId;
   doc["deviceName"] = config.deviceName;
   doc["ownerName"] = config.ownerName;
   doc["myNumber"] = config.myNumber;

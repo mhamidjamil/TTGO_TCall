@@ -1,69 +1,74 @@
-# Server SMS Flow
+# Server Job Flow
 
-Use this file if you are posting pending SMS jobs from a server or dashboard into Firebase Realtime Database for the TTGO T-Call v8 firmware.
+Use this file when posting outgoing SMS or call jobs into Firestore for the TTGO T-Call v8 firmware.
 
-## What the server writes
-Write pending jobs under `ttgo_tcall/commands/pending`.
+## Firestore Collections
+- `sim_modules/{deviceId}` stores the device record and health metrics.
+- `allowed_numbers/{phone_number_safe_id}` stores the permission and quota policy for each target number.
+- `sms_jobs/{auto_id}` stores outgoing SMS work.
+- `call_jobs/{auto_id}` stores outgoing call work.
+- `sms_logs/{auto_id}` stores all SMS audit events.
+- `call_logs/{auto_id}` stores all call audit events.
 
-A pending SMS job should look like this:
+## How To Queue SMS
+Create a document in `sms_jobs`:
+
 ```json
 {
-  "type": "sms",
-  "number": "+923001234567",
+  "device_id": "device_001",
+  "phone_number": "+923001234567",
   "message": "hello from server",
   "status": "pending",
-  "createdAt": 1712345678,
-  "createdAtMs": 1712345678000,
-  "source": "server"
+  "created_at": "timestamp",
+  "processing_started_at": null,
+  "completed_at": null,
+  "error": null
 }
 ```
 
-## Required fields
-- `type`: use `sms`.
-- `number`: the target phone number.
-- `message`: the text to send.
+Required fields:
+- `device_id`: target device identifier.
+- `phone_number`: the target number.
+- `message`: SMS body text.
 - `status`: set to `pending`.
-- `createdAtMs`: epoch milliseconds.
 
-## Suggested lifecycle
-1. Server creates the job with `status: pending`.
-2. ESP32 boots, restores counters from `ttgo_tcall/counters`, then waits 60 seconds before polling.
-3. ESP32 claims one job by changing it to `processing`.
-4. ESP32 updates the job to `sent` or `errored`.
-5. Server reads `ttgo_tcall/commands/history` for completed jobs.
-
-## Counter sync
-If the server also maintains counts, keep the snapshot under `ttgo_tcall/counters`.
+## How To Queue Calls
+Create a document in `call_jobs`:
 
 ```json
 {
-  "daily": 12,
-  "weekly": 48,
-  "monthly": 101,
-  "updatedAtMs": 1712345678000
+  "device_id": "device_001",
+  "phone_number": "+923001234567",
+  "status": "pending",
+  "created_at": "timestamp",
+  "processing_started_at": null,
+  "completed_at": null,
+  "user_picked": false,
+  "duration_seconds": 0,
+  "error": null
 }
 ```
 
-The device reads this snapshot at boot before it starts polling pending SMS.
+## Suggested Lifecycle
+1. Server or dashboard creates the job with `status: pending`.
+2. ESP32 polls Firestore every 3 seconds and claims at most one SMS job and one call job per cycle.
+3. ESP32 changes a claimed job to `processing`.
+4. ESP32 finishes with `sent`, `completed`, `failed`, `blocked`, or `quota_exceeded`.
+5. ESP32 writes the matching audit log document and updates device heartbeat separately.
 
-## Status nodes
-Useful status locations:
-- `ttgo_tcall/status`
-- `ttgo_tcall/telemetry`
-- `ttgo_tcall/commands/history`
+## Allowed Number and Quota Rules
+- The target number must exist in `allowed_numbers`.
+- `enabled` must be `true`.
+- Per-number daily usage is counted from successful outgoing logs using `day_key`.
+- SMS quota counts `sms_logs` documents with `status = sent`.
+- Call quota counts `call_logs` documents with `status = completed`.
 
-## Minimal RTDB rules for development
-```json
-{
-  "rules": {
-    ".read": "auth != null",
-    ".write": "auth != null"
-  }
-}
-```
+## Recovery
+- Jobs stuck in `processing` for more than 5 minutes are reset to `pending`.
+- The reset writes `error = recovered_from_stale_processing`.
 
-## Do not do this
+## Do Not Do This
 - Do not place service-account JSON on the ESP32.
-- Do not post jobs with missing phone number or message.
-- Do not skip the `pending` status if you want the firmware to claim the job.
-- Do not write commands at the RTDB root.
+- Do not write jobs without `device_id`, `phone_number`, or `status = pending`.
+- Do not skip `allowed_numbers` if you expect the device to send or call.
+- Do not rely on the old RTDB command queue for the new gateway flow.

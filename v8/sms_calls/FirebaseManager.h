@@ -13,6 +13,25 @@ struct FirebaseCommand {
   String errorReason;
 };
 
+struct FirestoreJob {
+  String id;
+  String deviceId;
+  String phoneNumber;
+  String message;
+  String status;
+  String error;
+  bool userPicked = false;
+  int durationSeconds = 0;
+};
+
+struct FirestoreAllowedNumber {
+  bool found = false;
+  bool enabled = false;
+  int smsLimitPerDay = 0;
+  int callLimitPerDay = 0;
+  String notes;
+};
+
 struct FirebaseRuntimeSettings {
   uint32_t intervalOfDhtSeconds = 15;
   bool showFirebasePushLogs = true;
@@ -63,6 +82,46 @@ public:
                           bool blocked,
                           const String &pakistanTimestamp,
                           int simIndex = -1);
+  bool bootstrapGatewayCollections(const String &deviceId,
+                                   int pollIntervalSeconds,
+                                   int dailySmsDefaultLimit,
+                                   int dailyCallDefaultLimit,
+                                   bool missedCallMode);
+  bool fetchNextSmsJob(const String &deviceId, FirestoreJob &outJob);
+  bool fetchNextCallJob(const String &deviceId, FirestoreJob &outJob);
+  bool fetchDeviceActive(const String &deviceId, bool &outActive);
+  bool updateSmsJobStatus(const FirestoreJob &job, const String &status, const String &errorReason = String());
+  bool updateCallJobStatus(const FirestoreJob &job,
+                           const String &status,
+                           bool userPicked,
+                           int durationSeconds,
+                           const String &errorReason = String());
+  bool fetchAllowedNumber(const String &phoneNumber, FirestoreAllowedNumber &outAllowedNumber);
+  bool pushSmsLog(const String &deviceId,
+                  const String &direction,
+                  const String &phoneNumber,
+                  const String &message,
+                  unsigned long epochSeconds,
+                  const String &status = String("received"),
+                  const String &errorReason = String());
+  bool pushCallLog(const String &deviceId,
+                   const String &direction,
+                   const String &phoneNumber,
+                   int durationSeconds,
+                   bool answered,
+                   unsigned long epochSeconds,
+                   const String &status = String("received"),
+                   const String &errorReason = String());
+  bool countDailySmsUsage(const String &phoneNumber, const String &dayKey, int &outCount);
+  bool countDailyCallUsage(const String &phoneNumber, const String &dayKey, int &outCount);
+  bool pushDeviceHeartbeat(const String &deviceId,
+                           int batteryPercent,
+                           int signalStrength,
+                           const String &networkOperator,
+                           unsigned long epochSeconds,
+                           int pollIntervalSeconds,
+                           bool missedCallMode);
+  bool recoverStuckJobs(unsigned long cutoffEpochSeconds);
   bool fetchSimBlockLists(String *blockedCallers,
                           size_t maxBlockedCallers,
                           size_t &blockedCallerCount,

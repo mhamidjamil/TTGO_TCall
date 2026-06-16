@@ -38,6 +38,8 @@ static unsigned long lastCloudPoll = 0;
 static unsigned long lastTelemetryPush = 0;
 static unsigned long lastThingSpeakPush = 0;
 static unsigned long lastRuntimeSettingsSync = 0;
+static unsigned long lastHeartbeatPush = 0;
+static unsigned long lastRecoveryRun = 0;
 static unsigned long pendingPollStartMs = 0;
 static V8Config runtimeConfig;
 static String startupBootTime;
@@ -47,6 +49,12 @@ static String lastTelemetryPushMessage = "not_attempted";
 static unsigned long telemetryIntervalMs = 15000UL;
 static unsigned long thingSpeakIntervalMs = 15000UL;
 static const unsigned long runtimeSettingsSyncIntervalMs = 10UL * 60UL * 1000UL;
+static const unsigned long heartbeatIntervalMs = 60UL * 1000UL;
+static const unsigned long recoveryIntervalMs = 60UL * 1000UL;
+static const unsigned long stuckJobAgeSeconds = 5UL * 60UL;
+static const unsigned long missedCallRingMs = 8000UL;
+static const int dailyCallDefaultLimit = 5;
+static const bool missedCallMode = true;
 static const size_t maxBlockedNumbers = 32;
 static bool showFirebasePushLogs = true;
 static bool showThingSpeakPushLogs = true;
@@ -163,6 +171,78 @@ static String formatEventTime(unsigned long epochSeconds) {
   return String("uptime ") + String(millis() / 1000UL) + String("s");
 }
 
+static String dayKeyFromEpoch(unsigned long epochSeconds) {
+  if (epochSeconds > 1000) {
+    time_t raw = (time_t)epochSeconds;
+    struct tm timeInfo;
+    if (gmtime_r(&raw, &timeInfo)) {
+      char buffer[12];
+      strftime(buffer, sizeof(buffer), "%Y-%m-%d", &timeInfo);
+      return String(buffer);
+    }
+  }
+  return String("1970-01-01");
+}
+
+static String readModemResponse(unsigned long timeoutMs) {
+  String buffer;
+  unsigned long started = millis();
+  while (millis() - started < timeoutMs) {
+    while (Serial1.available()) {
+      buffer += (char)Serial1.read();
+      if (buffer.indexOf("\r\nOK\r\n") != -1 || buffer.indexOf("\r\nERROR\r\n") != -1) {
+        return buffer;
+      }
+    }
+    delay(10);
+  }
+  return buffer;
+}
+
+static int querySignalStrength() {
+  Serial1.println("AT+CSQ");
+  String response = readModemResponse(1500);
+  int marker = response.indexOf("+CSQ:");
+  if (marker < 0) {
+    return -1;
+  }
+  int comma = response.indexOf(',', marker);
+  if (comma < 0) {
+    return -1;
+  }
+  String rssi = response.substring(marker + 5, comma);
+  rssi.trim();
+  return rssi.toInt();
+}
+
+static int queryBatteryPercent() {
+  Serial1.println("AT+CBC");
+  String response = readModemResponse(1500);
+  int marker = response.indexOf("+CBC:");
+  if (marker < 0) {
+    return -1;
+  }
+  int firstComma = response.indexOf(',', marker);
+  int secondComma = response.indexOf(',', firstComma + 1);
+  if (firstComma < 0 || secondComma < 0) {
+    return -1;
+  }
+  String percent = response.substring(firstComma + 1, secondComma);
+  percent.trim();
+  return percent.toInt();
+}
+
+static String queryNetworkOperator() {
+  Serial1.println("AT+COPS?");
+  String response = readModemResponse(2000);
+  int firstQuote = response.indexOf('"');
+  int secondQuote = response.indexOf('"', firstQuote + 1);
+  if (firstQuote < 0 || secondQuote < 0) {
+    return String();
+  }
+  return response.substring(firstQuote + 1, secondQuote);
+}
+
 static String quotedField(const String &line, int fieldIndex) {
   int searchFrom = 0;
   for (int i = 0; i <= fieldIndex; ++i) {
@@ -208,6 +288,9 @@ static void processIncomingCall(const String &rawNumber) {
 
   bool blocked = isBlockedNumber(number, blockedCallers, blockedCallerCount);
   bool firebaseOk = pushSimEvent("call", number, String(), blocked, pakistanTimestamp);
+  if (firebaseManager.isReady()) {
+    firebaseManager.pushCallLog(runtimeConfig.deviceId, "incoming", number, 0, false, epochSeconds);
+  }
 
   Serial.print("[CALL] incoming number=");
   Serial.print(number);
@@ -238,6 +321,9 @@ static void processIncomingSms(const String &rawNumber, const String &message, i
   String pakistanTimestamp = formatEventTime(epochSeconds);
   bool blocked = isBlockedNumber(number, blockedSmsSenders, blockedSmsSenderCount);
   bool firebaseOk = pushSimEvent("sms", number, message, blocked, pakistanTimestamp, smsIndex);
+  if (firebaseManager.isReady()) {
+    firebaseManager.pushSmsLog(runtimeConfig.deviceId, "incoming", number, message, epochSeconds);
+  }
 
   Serial.print("[SMS] incoming index=");
   Serial.print(smsIndex);
@@ -343,38 +429,101 @@ static void handleModemEvents() {
 }
 
 static void processPendingCommand() {
-  FirebaseCommand cmd;
-  if (!firebaseManager.fetchNextCommand(cmd)) {
-    return;
+  const String deviceId = runtimeConfig.deviceId;
+  unsigned long now = currentEpochSeconds();
+  String today = dayKeyFromEpoch(now);
+
+  FirestoreJob smsJob;
+  if (firebaseManager.fetchNextSmsJob(deviceId, smsJob)) {
+    String normalizedNumber = normalizePhoneNumber(smsJob.phoneNumber);
+    if (normalizedNumber.length() == 0) {
+      firebaseManager.updateSmsJobStatus(smsJob, "failed", "number_invalid");
+    } else {
+      bool active = true;
+      FirestoreAllowedNumber allowed;
+      int usage = 0;
+      if (!firebaseManager.fetchDeviceActive(deviceId, active)) {
+        firebaseManager.updateSmsJobStatus(smsJob, "failed", "device_status_unavailable");
+      } else if (!active) {
+        firebaseManager.updateSmsJobStatus(smsJob, "blocked", "device_inactive");
+      } else if (!firebaseManager.fetchAllowedNumber(normalizedNumber, allowed)) {
+        firebaseManager.updateSmsJobStatus(smsJob, "failed", "allowed_number_lookup_failed");
+      } else if (!allowed.found || !allowed.enabled) {
+        firebaseManager.updateSmsJobStatus(smsJob, "blocked", "number_not_allowed");
+      } else if (!firebaseManager.countDailySmsUsage(normalizedNumber, today, usage)) {
+        firebaseManager.updateSmsJobStatus(smsJob, "failed", "quota_lookup_failed");
+      } else {
+        int limit = allowed.smsLimitPerDay > 0 ? allowed.smsLimitPerDay : runtimeConfig.dailySmsLimit;
+        if (limit > 0 && usage >= limit) {
+          firebaseManager.updateSmsJobStatus(smsJob, "quota_exceeded", "daily_sms_quota_exceeded");
+        } else {
+          bool sent = smsManager.sendMessage(normalizedNumber, smsJob.message);
+          firebaseManager.pushSmsLog(
+              deviceId,
+              "outgoing",
+              normalizedNumber,
+              smsJob.message,
+              currentEpochSeconds(),
+              sent ? "sent" : "failed",
+              sent ? String() : String("send_failed"));
+          if (sent) {
+            rateLimitManager.recordSend();
+            firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+            firebaseManager.updateSmsJobStatus(smsJob, "sent", String());
+          } else {
+            firebaseManager.updateSmsJobStatus(smsJob, "failed", "send_failed");
+          }
+        }
+      }
+    }
   }
 
-  if (cmd.type != "sms") {
-    firebaseManager.updateCommandStatus(cmd, "errored", "unsupported_command_type");
-    return;
+  FirestoreJob callJob;
+  if (firebaseManager.fetchNextCallJob(deviceId, callJob)) {
+    String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
+    if (normalizedNumber.length() == 0) {
+      firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "number_invalid");
+    } else {
+      bool active = true;
+      FirestoreAllowedNumber allowed;
+      int usage = 0;
+      if (!firebaseManager.fetchDeviceActive(deviceId, active)) {
+        firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
+      } else if (!active) {
+        firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
+      } else if (!firebaseManager.fetchAllowedNumber(normalizedNumber, allowed)) {
+        firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "allowed_number_lookup_failed");
+      } else if (!allowed.found || !allowed.enabled) {
+        firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "number_not_allowed");
+      } else if (!firebaseManager.countDailyCallUsage(normalizedNumber, today, usage)) {
+        firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "quota_lookup_failed");
+      } else {
+        int limit = allowed.callLimitPerDay > 0 ? allowed.callLimitPerDay : dailyCallDefaultLimit;
+        if (limit > 0 && usage >= limit) {
+          firebaseManager.updateCallJobStatus(callJob, "quota_exceeded", false, 0, "daily_call_quota_exceeded");
+        } else {
+          bool userPicked = false;
+          int durationSeconds = 0;
+          bool completed = callManager.placeMissedCall(normalizedNumber, missedCallRingMs, userPicked, durationSeconds);
+          firebaseManager.pushCallLog(
+              deviceId,
+              "outgoing",
+              normalizedNumber,
+              durationSeconds,
+              userPicked,
+              currentEpochSeconds(),
+              completed ? "completed" : "failed",
+              completed ? String() : String("call_failed"));
+          firebaseManager.updateCallJobStatus(
+              callJob,
+              completed ? "completed" : "failed",
+              userPicked,
+              durationSeconds,
+              completed ? String() : String("call_failed"));
+        }
+      }
+    }
   }
-
-  String normalizedNumber = normalizePhoneNumber(cmd.number);
-  if (normalizedNumber.length() == 0) {
-    firebaseManager.updateCommandStatus(cmd, "errored", "number_invalid");
-    return;
-  }
-
-  String limitReason;
-  rateLimitManager.sync();
-  if (!rateLimitManager.canSend(limitReason)) {
-    firebaseManager.updateCommandStatus(cmd, "errored", limitReason);
-    return;
-  }
-
-  bool sent = smsManager.sendMessage(normalizedNumber, cmd.message);
-  if (!sent) {
-    firebaseManager.updateCommandStatus(cmd, "errored", "send_failed");
-    return;
-  }
-
-  rateLimitManager.recordSend();
-  firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
-  firebaseManager.updateCommandStatus(cmd, "sent", String());
 }
 
 static void syncCountersFromCloud() {
@@ -627,6 +776,9 @@ void setup() {
 
   configManager.begin();
   runtimeConfig = configManager.get();
+  if (runtimeConfig.pollingIntervalSeconds < 3) {
+    runtimeConfig.pollingIntervalSeconds = 3;
+  }
   ntfyManager.begin(runtimeConfig.ntfyUrl);
 
   initializeModemHardware();
@@ -648,6 +800,16 @@ void setup() {
   firebaseManager.begin(runtimeConfig);
   if (firebaseManager.isReady()) {
     Logger::info("FIREBASE", "Firebase manager ready");
+    if (firebaseManager.bootstrapGatewayCollections(
+            runtimeConfig.deviceId,
+            runtimeConfig.pollingIntervalSeconds,
+            runtimeConfig.dailySmsLimit,
+            dailyCallDefaultLimit,
+            missedCallMode)) {
+      Logger::info("FIRESTORE", "Gateway collections bootstrapped");
+    } else {
+      Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
+    }
     syncCountersFromCloud();
     syncRuntimeSettingsFromCloud("startup");
   } else {
@@ -660,12 +822,12 @@ void setup() {
   callManager.begin();
   displayManager.begin();
   dhtManager.begin();
-  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager);
+  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager, ntfyManager);
 
   startupIp = wifiManager.localIp().toString();
   Logger::info("BOOT", startupIp.c_str());
   Logger::info("API", webDashboard.docsUrl().c_str());
-  pendingPollStartMs = millis() + 60000UL;
+  pendingPollStartMs = millis();
 
   if (firebaseManager.isReady()) {
     if (firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), startupIp, true)) {
@@ -673,6 +835,14 @@ void setup() {
     } else {
       Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
     }
+    firebaseManager.pushDeviceHeartbeat(
+        runtimeConfig.deviceId,
+        queryBatteryPercent(),
+        querySignalStrength(),
+        queryNetworkOperator(),
+        currentEpochSeconds(),
+        runtimeConfig.pollingIntervalSeconds,
+        missedCallMode);
   }
 }
 
@@ -681,6 +851,29 @@ void loop() {
 
   if (firebaseManager.isReady() && millis() - lastRuntimeSettingsSync >= runtimeSettingsSyncIntervalMs) {
     syncRuntimeSettingsFromCloud("periodic");
+  }
+
+  if (firebaseManager.isReady() && millis() - lastRecoveryRun >= recoveryIntervalMs) {
+    lastRecoveryRun = millis();
+    unsigned long now = currentEpochSeconds();
+    if (now > stuckJobAgeSeconds &&
+        !firebaseManager.recoverStuckJobs(now - stuckJobAgeSeconds)) {
+      Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
+    }
+  }
+
+  if (firebaseManager.isReady() && millis() - lastHeartbeatPush >= heartbeatIntervalMs) {
+    lastHeartbeatPush = millis();
+    if (!firebaseManager.pushDeviceHeartbeat(
+            runtimeConfig.deviceId,
+            queryBatteryPercent(),
+            querySignalStrength(),
+            queryNetworkOperator(),
+            currentEpochSeconds(),
+            runtimeConfig.pollingIntervalSeconds,
+            missedCallMode)) {
+      Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
+    }
   }
 
   if (firebaseManager.isReady() && millis() >= pendingPollStartMs &&

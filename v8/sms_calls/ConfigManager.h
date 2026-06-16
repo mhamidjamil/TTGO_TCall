@@ -20,6 +20,7 @@ struct V8Config {
   int weeklySmsLimit;
   int monthlySmsLimit;
   char dashboardPassword[64];
+  char deviceId[48];
   char deviceName[64];
   char ownerName[64];
   char myNumber[24];

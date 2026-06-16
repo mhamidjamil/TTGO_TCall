@@ -1,5 +1,136 @@
 <!doctype html>
-<html>
-<head><meta charset="utf-8"><title>v8 Dashboard</title></head>
-<body><h1>v8 Dashboard</h1></body>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TTGO GSM Gateway</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>TTGO GSM Gateway</h1>
+      <p id="connectionState">Connecting</p>
+      <p id="buildMeta" class="meta-line">SPIFFS version loading</p>
+    </div>
+    <button id="refreshBtn" type="button">Refresh</button>
+  </header>
+
+  <nav class="tabs" aria-label="Dashboard sections">
+    <button class="tab active" data-view="devices" type="button">Device</button>
+    <button class="tab" data-view="numbers" type="button">Numbers</button>
+    <button class="tab" data-view="sms" type="button">SMS</button>
+    <button class="tab" data-view="calls" type="button">Calls</button>
+    <button class="tab" data-view="logs" type="button">Logs</button>
+    <button class="tab" data-view="testing" type="button">Notification testing</button>
+    <button class="tab" data-view="about" type="button">About</button>
+  </nav>
+
+  <main>
+    <section id="devices" class="view active">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Device Health</h2>
+        </div>
+        <div id="deviceList" class="grid"></div>
+      </div>
+    </section>
+
+    <section id="numbers" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Allowed Numbers</h2>
+        </div>
+        <form id="numberForm" class="form-grid">
+          <input name="phone_number" placeholder="+923001111111" autocomplete="tel" required>
+          <input name="sms_limit_per_day" type="number" min="0" value="5" aria-label="SMS daily limit">
+          <input name="call_limit_per_day" type="number" min="0" value="5" aria-label="Call daily limit">
+          <input name="notes" placeholder="Notes">
+          <label class="check"><input name="enabled" type="checkbox" checked> Enabled</label>
+          <button type="submit">Save Number</button>
+        </form>
+        <div id="numbersList" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <section id="sms" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>SMS Jobs</h2>
+        </div>
+        <form id="smsForm" class="form-grid">
+          <input name="phone_number" placeholder="+923001111111" autocomplete="tel" required>
+          <textarea name="message" placeholder="Message" required></textarea>
+          <button type="submit">Queue SMS</button>
+        </form>
+        <div id="smsJobs" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <section id="calls" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Call Jobs</h2>
+        </div>
+        <form id="callForm" class="form-grid compact">
+          <input name="phone_number" placeholder="+923001111111" autocomplete="tel" required>
+          <button type="submit">Queue Call</button>
+        </form>
+        <div id="callJobs" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <section id="logs" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Logs</h2>
+          <select id="logType">
+            <option value="sms">SMS</option>
+            <option value="calls">Calls</option>
+          </select>
+        </div>
+        <div id="logsList" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <section id="testing" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Notification Testing</h2>
+        </div>
+        <div class="stack">
+          <p class="help-text">This sends a local ntfy test through the device, using the configured topic.</p>
+          <button id="notifyTestBtn" type="button">Send Test Notification</button>
+          <div id="notifyTestState" class="status-box">Idle</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="about" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>About</h2>
+        </div>
+        <div class="about-grid">
+          <div>
+            <h3>Build</h3>
+            <p id="aboutVersion">Loading version</p>
+            <p id="aboutDate" class="help-text">Loading build date</p>
+          </div>
+          <div>
+            <h3>Filesystem</h3>
+            <p class="help-text">Upload the `v8/sms_calls/data` folder to SPIFFS whenever this page changes.</p>
+            <p class="help-text">The firmware reads `/version.txt` so you can confirm the deployed UI matches the source.</p>
+          </div>
+          <div>
+            <h3>Flow</h3>
+            <p class="help-text">SMS and call jobs are created in Firestore. The device polls every few seconds, claims pending work, enforces allowed numbers and quotas, and then writes logs back.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/dashboard.js"></script>
+</body>
 </html>
