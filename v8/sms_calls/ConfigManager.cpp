@@ -53,6 +53,15 @@ const V8Config &ConfigManager::get() const {
   return config;
 }
 
+bool ConfigManager::updateUserWifi(const String &ssid1, const String &pass1,
+                                   const String &ssid2, const String &pass2) {
+  copyText(config.userWifiSsid1, sizeof(config.userWifiSsid1), ssid1.c_str());
+  copyText(config.userWifiPass1, sizeof(config.userWifiPass1), pass1.c_str());
+  copyText(config.userWifiSsid2, sizeof(config.userWifiSsid2), ssid2.c_str());
+  copyText(config.userWifiPass2, sizeof(config.userWifiPass2), pass2.c_str());
+  return saveToSPIFFS();
+}
+
 void ConfigManager::loadDefaults() {
   config.wifiEnabled = true;
   config.apFallbackEnabled = true;
@@ -62,6 +71,11 @@ void ConfigManager::loadDefaults() {
   copyText(config.wifiPass, sizeof(config.wifiPass), WIFI_PASS_DEFAULT);
   copyText(config.wifiSsidBackup, sizeof(config.wifiSsidBackup), WIFI_SSID_BACKUP_DEFAULT);
   copyText(config.wifiPassBackup, sizeof(config.wifiPassBackup), WIFI_PASS_BACKUP_DEFAULT);
+  // User WiFi overrides start empty; only set from the dashboard.
+  config.userWifiSsid1[0] = '\0';
+  config.userWifiPass1[0] = '\0';
+  config.userWifiSsid2[0] = '\0';
+  config.userWifiPass2[0] = '\0';
   copyText(config.apSsid, sizeof(config.apSsid), AP_SSID_DEFAULT);
   copyText(config.apPass, sizeof(config.apPass), AP_PASS_DEFAULT);
   config.webServerPort = WEB_SERVER_PORT_DEFAULT;
@@ -126,7 +140,7 @@ bool ConfigManager::saveToSPIFFS() {
 }
 
 void ConfigManager::readJsonConfig(const String &jsonText) {
-  DynamicJsonDocument doc(2560);
+  DynamicJsonDocument doc(3072);
   if (deserializeJson(doc, jsonText)) {
     return;
   }
@@ -139,6 +153,10 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   strlcpy(config.wifiPass, doc["wifiPass"] | config.wifiPass, sizeof(config.wifiPass));
   strlcpy(config.wifiSsidBackup, doc["wifiSsidBackup"] | config.wifiSsidBackup, sizeof(config.wifiSsidBackup));
   strlcpy(config.wifiPassBackup, doc["wifiPassBackup"] | config.wifiPassBackup, sizeof(config.wifiPassBackup));
+  strlcpy(config.userWifiSsid1, doc["userWifiSsid1"] | config.userWifiSsid1, sizeof(config.userWifiSsid1));
+  strlcpy(config.userWifiPass1, doc["userWifiPass1"] | config.userWifiPass1, sizeof(config.userWifiPass1));
+  strlcpy(config.userWifiSsid2, doc["userWifiSsid2"] | config.userWifiSsid2, sizeof(config.userWifiSsid2));
+  strlcpy(config.userWifiPass2, doc["userWifiPass2"] | config.userWifiPass2, sizeof(config.userWifiPass2));
   strlcpy(config.apSsid, doc["apSsid"] | config.apSsid, sizeof(config.apSsid));
   strlcpy(config.apPass, doc["apPass"] | config.apPass, sizeof(config.apPass));
   config.webServerPort = doc["webServerPort"] | config.webServerPort;
@@ -171,7 +189,7 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
 }
 
 String ConfigManager::writeJsonConfig() const {
-  DynamicJsonDocument doc(2560);
+  DynamicJsonDocument doc(3072);
   doc["wifiEnabled"] = config.wifiEnabled;
   doc["apFallbackEnabled"] = config.apFallbackEnabled;
   doc["logVerbose"] = config.logVerbose;
@@ -180,6 +198,10 @@ String ConfigManager::writeJsonConfig() const {
   doc["wifiPass"] = config.wifiPass;
   doc["wifiSsidBackup"] = config.wifiSsidBackup;
   doc["wifiPassBackup"] = config.wifiPassBackup;
+  doc["userWifiSsid1"] = config.userWifiSsid1;
+  doc["userWifiPass1"] = config.userWifiPass1;
+  doc["userWifiSsid2"] = config.userWifiSsid2;
+  doc["userWifiPass2"] = config.userWifiPass2;
   doc["apSsid"] = config.apSsid;
   doc["apPass"] = config.apPass;
   doc["webServerPort"] = config.webServerPort;

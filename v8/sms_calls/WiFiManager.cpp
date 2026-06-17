@@ -18,10 +18,15 @@ bool WiFiManager::begin(const V8Config &config) {
 }
 
 bool WiFiManager::connectStation(const V8Config &config) {
-  auto attempt = [&](const char *ssid, const char *pass) -> bool {
+  auto attempt = [&](const char *ssid, const char *pass, const char *origin) -> bool {
     if (ssid == nullptr || strlen(ssid) == 0) {
       return false;
     }
+    Serial.print("[WIFI] trying ");
+    Serial.print(origin);
+    Serial.print(" ssid=");
+    Serial.println(ssid);
+
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, pass);
 
@@ -31,23 +36,34 @@ bool WiFiManager::connectStation(const V8Config &config) {
       delay(250);
     }
 
-    return WiFi.status() == WL_CONNECTED;
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.print("[WIFI] connected via ");
+      Serial.print(origin);
+      Serial.print(" ssid=");
+      Serial.println(ssid);
+      return true;
+    }
+
+    WiFi.disconnect(true);
+    delay(200);
+    return false;
   };
 
-  if (attempt(config.wifiSsid, config.wifiPass)) {
+  // SPIFFS user-entered pairs first, then the secrets.h networks, then AP.
+  if (attempt(config.userWifiSsid1, config.userWifiPass1, "saved pair 1")) {
+    return true;
+  }
+  if (attempt(config.userWifiSsid2, config.userWifiPass2, "saved pair 2")) {
+    return true;
+  }
+  if (attempt(config.wifiSsid, config.wifiPass, "secrets primary")) {
+    return true;
+  }
+  if (attempt(config.wifiSsidBackup, config.wifiPassBackup, "secrets backup")) {
     return true;
   }
 
-  WiFi.disconnect(true);
-  delay(200);
-
-  if (attempt(config.wifiSsidBackup, config.wifiPassBackup)) {
-    return true;
-  }
-
-  WiFi.disconnect(true);
-  delay(200);
-
+  Serial.println("[WIFI] all station networks failed");
   return false;
 }
 
