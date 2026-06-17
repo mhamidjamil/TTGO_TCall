@@ -37,29 +37,42 @@ v8 is the Firebase-backed evolution of the TTGO T-Call project.
 ## Firestore `sim_module`
 The ESP32 uses Firebase Auth and Firestore REST with the same Firebase project ID/API key.
 
-- Device/settings document: `sim_module/settings`.
-- Allowed numbers: `sim_module/settings/allowed_numbers/{phone_number_safe_id}`.
-- SMS queue: `sim_module/settings/sms_jobs/{auto_id}`.
-- Call queue: `sim_module/settings/call_jobs/{auto_id}`.
-- SMS audit: `sim_module/settings/sms_logs/{auto_id}`.
-- Call audit: `sim_module/settings/call_logs/{auto_id}`.
-- Block lists: `sim_module/settings` with `blockedCallers` and `blockedSmsSenders` string arrays.
+- Device/settings document: `sim_module/config`.
+- Allowed numbers: `sim_module/allowed_numbers/items/{phone_number_safe_id}`.
+- SMS queue: `sim_module/sms_jobs/items/{auto_id}`.
+- Call queue: `sim_module/call_jobs/items/{auto_id}`.
+- SMS audit: `sim_module/sms_logs/items/{auto_id}`.
+- Call audit: `sim_module/call_logs/items/{auto_id}`.
+- Block lists: `sim_module/config` with `blockedCallers` and `blockedSmsSenders` string arrays.
 - SMS documents: `sim_module/sms/by_number/{sender_or_number}`.
 - Call documents: `sim_module/calls/by_number/{caller_number}`.
 - Timestamps: human-readable Pakistan time, for example `2026-06-16 14:30:22 PKT`.
 
 Firestore paths must alternate collection/document, so the smallest valid phone-number document path is `sim_module/sms/by_number/{number}` rather than `sim_module/sms/{number}`.
 
-On startup the firmware creates `sim_module/settings`, `sim_module/sms`, and `sim_module/calls` if missing, then removes legacy `entries`, `numbers`, `_meta`, blocked buckets, and the old top-level gateway collections.
+On startup the firmware creates `sim_module/config`, `sim_module/sms`, and `sim_module/calls` if missing, then removes legacy `entries`, `numbers`, `_meta`, blocked buckets, and the old top-level gateway collections.
 
 ## Two-Way GSM Gateway
 - Poll interval: one cloud cycle every 3 seconds or the configured value if higher.
-- The cycle claims at most one `sim_module/settings/sms_jobs` document and one `sim_module/settings/call_jobs` document with `status = pending`.
+- The cycle claims at most one `sim_module/sms_jobs/items` document and one `sim_module/call_jobs/items` document with `status = pending`.
 - Status flow: `pending -> processing -> sent/completed/failed/blocked/quota_exceeded`.
 - Jobs stuck in `processing` for more than 5 minutes are reset to `pending`.
-- Outgoing SMS and calls are allowed only when the target number exists in `sim_module/settings/allowed_numbers` and `enabled = true`.
-- Daily quotas are counted from successful outgoing `sim_module/settings/sms_logs` and `sim_module/settings/call_logs` with the current `day_key`.
+- Outgoing SMS and calls are allowed only when the target number exists in `sim_module/allowed_numbers/items` and `enabled = true`.
+- Daily quotas are counted from successful outgoing `sim_module/sms_logs/items` and `sim_module/call_logs/items` with the current `day_key`.
 - Missed-call mode rings briefly; if the modem reports an answer, firmware hangs up immediately and records `user_picked = true`.
+
+## Allowed numbers vs blocked numbers (read this first)
+These are two **separate** mechanisms — confusing them is the most common gotcha:
+
+- **Allowed numbers** (`allowed_numbers`) is an **allow-list for OUTGOING** SMS/calls. The device will only send or dial a number that exists here with `enabled = true`. If you queue a job to a number that is not on this list, it ends as `status = blocked, error = number_not_allowed`. **This is not a block — it just means you never allowed it.** Add it (Numbers tab, or the "Allow + Retry" button on the job) and retry.
+- **Blocked numbers** (`blockedCallers` / `blockedSmsSenders`) is a **block-list for INCOMING** calls/SMS. A matching incoming event is archived to Firestore but does **not** trigger an ntfy notification. Alphanumeric sender IDs (e.g. `JAZZ`, `Telenor`) are matched case-insensitively as text; numeric senders match by digits.
+
+Both lists are read by the device on startup, every 10 minutes, and whenever you press **Sync** (or type `sync` on serial). After editing blocked numbers, press **Sync** so the device picks them up.
+
+Phone numbers are stored in one canonical form (`+<countrycode><number>`, e.g. `+923001234567`). The dashboard normalizes what you type to the same form the device uses, so allow-list lookups always match regardless of whether you enter `0300…`, `92300…`, or `+92300…`.
+
+## Editable WiFi (no reflash to change networks)
+The **WiFi tab** stores up to two SSID/password pairs on the device (SPIFFS). On boot the device tries, in order: saved pair 1 → saved pair 2 → the `secrets.h` networks → its own AP. Set new networks before moving the device to a new location, then use the **Reboot Device** button to reconnect. Leave a password field blank to keep the one already stored. Serial prints which network it connects through.
 
 ## Dashboard
 Upload `v8/sms_calls/data` to SPIFFS with the sketch. The local web UI is served from:
@@ -70,12 +83,12 @@ http://<device-ip>:<webServerPort>/dashboard.html
 
 The dashboard uses Firebase anonymous auth from the browser and manages:
 
-- `sim_module/settings`
-- `sim_module/settings/allowed_numbers`
-- `sim_module/settings/sms_jobs`
-- `sim_module/settings/call_jobs`
-- `sim_module/settings/sms_logs`
-- `sim_module/settings/call_logs`
+- `sim_module/config`
+- `sim_module/allowed_numbers/items`
+- `sim_module/sms_jobs/items`
+- `sim_module/call_jobs/items`
+- `sim_module/sms_logs/items`
+- `sim_module/call_logs/items`
 - RTDB `/ttgo_tcall/settings/runtime` for runtime flags such as `jobLogs`
 
 If anonymous auth is disabled, use a separate hosted admin dashboard or adapt `dashboard.js` to your preferred sign-in method. Device email/password is intentionally not exposed to the browser.

@@ -31,8 +31,8 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Default: `https://ntfy.innovorix.com/oracle_ntfy`
 
 ## Firestore Block Lists
-- Blocked callers: `sim_module/settings` field `blockedCallers`.
-- Blocked SMS senders: `sim_module/settings` field `blockedSmsSenders`.
+- Blocked callers: `sim_module/config` field `blockedCallers`.
+- Blocked SMS senders: `sim_module/config` field `blockedSmsSenders`.
 - Startup, periodic, and manual `sync` refresh these lists.
 
 ## Sync Strategy

@@ -3,17 +3,17 @@
 Use this when a Rails app or another backend queues outgoing SMS/call work for the TTGO T-Call v8 firmware.
 
 ## Firestore Paths
-- Device and policy document: `sim_module/settings`
-- Allowed numbers: `sim_module/settings/allowed_numbers/{safePhoneNumber}`
-- SMS jobs: `sim_module/settings/sms_jobs/{autoId}`
-- Call jobs: `sim_module/settings/call_jobs/{autoId}`
-- SMS logs: `sim_module/settings/sms_logs/{autoId}`
-- Call logs: `sim_module/settings/call_logs/{autoId}`
+- Device and policy document: `sim_module/config`
+- Allowed numbers: `sim_module/allowed_numbers/items/{safePhoneNumber}`
+- SMS jobs: `sim_module/sms_jobs/items/{autoId}`
+- Call jobs: `sim_module/call_jobs/items/{autoId}`
+- SMS logs: `sim_module/sms_logs/items/{autoId}`
+- Call logs: `sim_module/call_logs/items/{autoId}`
 
 Do not write new gateway jobs to top-level `sms_jobs`, `call_jobs`, `allowed_numbers`, or `sim_modules`. Those were removed from the active flow.
 
 ## Required Policy Before Sending
-Every outgoing target must exist in `sim_module/settings/allowed_numbers`:
+Every outgoing target must exist in `sim_module/allowed_numbers/items`:
 
 ```json
 {
@@ -28,11 +28,10 @@ Every outgoing target must exist in `sim_module/settings/allowed_numbers`:
 If a job finishes as `blocked` with `error = number_not_allowed`, the number was missing from this collection or `enabled` was false. Add the number and retry the job.
 
 ## Queue SMS
-Create a document in `sim_module/settings/sms_jobs`:
+Create a document in `sim_module/sms_jobs/items`:
 
 ```json
 {
-  "device_id": "device_001",
   "phone_number": "+923354888420",
   "message": "hello from Rails",
   "status": "pending",
@@ -48,14 +47,11 @@ Required fields:
 - `message`
 - `status = pending`
 
-`device_id` can stay `device_001` for the single-module setup.
-
 ## Queue Call
-Create a document in `sim_module/settings/call_jobs`:
+Create a document in `sim_module/call_jobs/items`:
 
 ```json
 {
-  "device_id": "device_001",
   "phone_number": "+923354888420",
   "status": "pending",
   "created_at": "timestamp",
@@ -80,8 +76,8 @@ Create a document in `sim_module/settings/call_jobs`:
 Successful and failed execution attempts are written to:
 
 ```text
-sim_module/settings/sms_logs
-sim_module/settings/call_logs
+sim_module/sms_logs/items
+sim_module/call_logs/items
 ```
 
 Daily quota checks count successful outgoing logs for the current `day_key`.
@@ -98,8 +94,8 @@ Supported keys include `intervalOfDhtSeconds`, `showFirebasePushLogs`, `showThin
 `jobLogs = true` makes the ESP32 print serial lines such as job claim, validation result, quota result, send/dial attempt, and final status. Set it false to quiet those job logs.
 
 ## Test Checklist
-1. Add the target number under `sim_module/settings/allowed_numbers`.
-2. Confirm `sim_module/settings.active` is true.
+1. Add the target number under `sim_module/allowed_numbers/items`.
+2. Confirm `sim_module/config.active` is true.
 3. Set `ttgo_tcall/settings/runtime/jobLogs` to true.
 4. Create one SMS or call job with `status = pending`.
 5. Watch Serial for `[JOB]` lines.

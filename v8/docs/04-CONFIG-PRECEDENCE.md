@@ -4,9 +4,14 @@
 1. Compile-time defaults.
 2. SPIFFS persisted config.
 3. Runtime cloud settings from Firebase (`/ttgo_tcall/settings/runtime`).
-4. Firestore gateway data under `sim_module/settings` for control-plane decisions.
+4. Firestore gateway data under `sim_module/config` for control-plane decisions.
 5. Runtime changes from dashboard or cloud sync.
 6. Persist the last known good configuration.
+
+## WiFi Credentials (v8.2.1)
+- The dashboard WiFi tab stores up to two SSID/password pairs in SPIFFS (`userWifiSsid1/userWifiPass1`, `userWifiSsid2/userWifiPass2`). Empty by default; only set from the dashboard.
+- Boot connect order: saved pair 1, then saved pair 2, then the `secrets.h` networks (`wifiSsid`/`wifiSsidBackup`), then AP fallback. The `secrets.h` networks are kept as a pristine final fallback and are never overwritten from the dashboard.
+- Changes apply on the next reboot (dashboard Reboot Device button or power-cycle). Serial prints which network the device connected through.
 
 ## ThingSpeak Credentials
 - ThingSpeak upload credentials are treated as device configuration, not runtime cloud state.
