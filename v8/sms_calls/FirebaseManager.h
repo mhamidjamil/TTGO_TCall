@@ -36,6 +36,7 @@ struct FirebaseRuntimeSettings {
   uint32_t intervalOfDhtSeconds = 15;
   bool showFirebasePushLogs = true;
   bool showThingSpeakPushLogs = true;
+  bool jobLogs = true;
   int dailySmsLimit = 200;
   int weeklySmsLimit = 950;
   int monthlySmsLimit = 4900;
@@ -43,6 +44,7 @@ struct FirebaseRuntimeSettings {
   bool createdIntervalOfDht = false;
   bool createdShowFirebasePushLogs = false;
   bool createdShowThingSpeakPushLogs = false;
+  bool createdJobLogs = false;
   bool createdDailySmsLimit = false;
   bool createdWeeklySmsLimit = false;
   bool createdMonthlySmsLimit = false;
@@ -148,7 +150,6 @@ private:
   bool httpPatchBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
   bool httpDeleteBearer(const String &url, String &responseBody, int &statusCode);
   bool fetchFirestoreSettingsList(const String &fieldName, String *numbers, size_t maxNumbers, size_t &numberCount);
-  bool appendCsvNumbers(const String &csvText, String *numbers, size_t maxNumbers, size_t &numberCount);
   bool ensureSimSettingsDocument();
   bool deleteFirestoreCollectionDocuments(const String &collectionPath);
   bool deleteFirestoreDocument(const String &documentPath);

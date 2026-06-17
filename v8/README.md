@@ -37,29 +37,28 @@ v8 is the Firebase-backed evolution of the TTGO T-Call project.
 ## Firestore `sim_module`
 The ESP32 uses Firebase Auth and Firestore REST with the same Firebase project ID/API key.
 
-- Device document: `sim_modules/{deviceId}`.
-- Allowed numbers: `allowed_numbers/{phone_number_safe_id}`.
-- SMS queue: `sms_jobs/{auto_id}`.
-- Call queue: `call_jobs/{auto_id}`.
-- SMS audit: `sms_logs/{auto_id}`.
-- Call audit: `call_logs/{auto_id}`.
+- Device/settings document: `sim_module/settings`.
+- Allowed numbers: `sim_module/settings/allowed_numbers/{phone_number_safe_id}`.
+- SMS queue: `sim_module/settings/sms_jobs/{auto_id}`.
+- Call queue: `sim_module/settings/call_jobs/{auto_id}`.
+- SMS audit: `sim_module/settings/sms_logs/{auto_id}`.
+- Call audit: `sim_module/settings/call_logs/{auto_id}`.
 - Block lists: `sim_module/settings` with `blockedCallers` and `blockedSmsSenders` string arrays.
-- Optional CSV fields: `blockedCallersCsv` and `blockedSmsSendersCsv`.
 - SMS documents: `sim_module/sms/by_number/{sender_or_number}`.
 - Call documents: `sim_module/calls/by_number/{caller_number}`.
 - Timestamps: human-readable Pakistan time, for example `2026-06-16 14:30:22 PKT`.
 
 Firestore paths must alternate collection/document, so the smallest valid phone-number document path is `sim_module/sms/by_number/{number}` rather than `sim_module/sms/{number}`.
 
-On startup the firmware creates `sim_module/settings`, `sim_module/sms`, and `sim_module/calls` if missing, then removes legacy `entries`, `numbers`, `_meta`, and blocked bucket documents created by the previous schema.
+On startup the firmware creates `sim_module/settings`, `sim_module/sms`, and `sim_module/calls` if missing, then removes legacy `entries`, `numbers`, `_meta`, blocked buckets, and the old top-level gateway collections.
 
 ## Two-Way GSM Gateway
 - Poll interval: one cloud cycle every 3 seconds or the configured value if higher.
-- The cycle claims at most one `sms_jobs` document and one `call_jobs` document with `status = pending`.
+- The cycle claims at most one `sim_module/settings/sms_jobs` document and one `sim_module/settings/call_jobs` document with `status = pending`.
 - Status flow: `pending -> processing -> sent/completed/failed/blocked/quota_exceeded`.
 - Jobs stuck in `processing` for more than 5 minutes are reset to `pending`.
-- Outgoing SMS and calls are allowed only when the target number exists in `allowed_numbers` and `enabled = true`.
-- Daily quotas are counted from successful outgoing `sms_logs` and `call_logs` with the current `day_key`.
+- Outgoing SMS and calls are allowed only when the target number exists in `sim_module/settings/allowed_numbers` and `enabled = true`.
+- Daily quotas are counted from successful outgoing `sim_module/settings/sms_logs` and `sim_module/settings/call_logs` with the current `day_key`.
 - Missed-call mode rings briefly; if the modem reports an answer, firmware hangs up immediately and records `user_picked = true`.
 
 ## Dashboard
@@ -71,12 +70,13 @@ http://<device-ip>:<webServerPort>/dashboard.html
 
 The dashboard uses Firebase anonymous auth from the browser and manages:
 
-- `allowed_numbers`
-- `sms_jobs`
-- `call_jobs`
-- `sms_logs`
-- `call_logs`
-- `sim_modules`
+- `sim_module/settings`
+- `sim_module/settings/allowed_numbers`
+- `sim_module/settings/sms_jobs`
+- `sim_module/settings/call_jobs`
+- `sim_module/settings/sms_logs`
+- `sim_module/settings/call_logs`
+- RTDB `/ttgo_tcall/settings/runtime` for runtime flags such as `jobLogs`
 
 If anonymous auth is disabled, use a separate hosted admin dashboard or adapt `dashboard.js` to your preferred sign-in method. Device email/password is intentionally not exposed to the browser.
 

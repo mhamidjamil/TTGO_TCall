@@ -33,6 +33,13 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 h1,
 h2,
 p {
@@ -168,6 +175,45 @@ main {
 
 .form-grid.compact {
   grid-template-columns: minmax(220px, 360px) auto;
+}
+
+.form-grid.runtime-grid {
+  grid-template-columns: repeat(3, minmax(120px, auto)) 140px 140px auto;
+}
+
+.two-column-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.two-column-form label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.two-column-form button {
+  justify-self: start;
+}
+
+.guide {
+  display: grid;
+  gap: 12px;
+}
+
+.guide h3 {
+  margin: 6px 0 0;
+  font-size: 14px;
+}
+
+.guide pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
 }
 
 input,
@@ -317,7 +363,9 @@ th {
   }
 
   .form-grid,
-  .form-grid.compact {
+  .form-grid.compact,
+  .form-grid.runtime-grid,
+  .two-column-form {
     grid-template-columns: 1fr;
   }
 

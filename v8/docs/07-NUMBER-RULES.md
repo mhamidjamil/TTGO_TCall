@@ -7,9 +7,9 @@
 - Mark invalid numbers as errored instead of silently retrying forever.
 
 ## Firestore Allowed Numbers
-- Outgoing SMS and calls are only allowed when the number exists in `allowed_numbers`.
+- Outgoing SMS and calls are only allowed when the number exists in `sim_module/settings/allowed_numbers`.
 - The number document must have `enabled = true`.
-- Daily usage is counted from `sms_logs` and `call_logs`.
+- Daily usage is counted from `sim_module/settings/sms_logs` and `sim_module/settings/call_logs`.
 - The device falls back to the device-wide default quota only if the number-specific limit is missing or zero.
 
 ## Acceptance Criteria

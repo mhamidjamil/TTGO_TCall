@@ -58,6 +58,7 @@ static const bool missedCallMode = true;
 static const size_t maxBlockedNumbers = 32;
 static bool showFirebasePushLogs = true;
 static bool showThingSpeakPushLogs = true;
+static bool jobLogs = true;
 static String blockedCallers[maxBlockedNumbers];
 static String blockedSmsSenders[maxBlockedNumbers];
 static size_t blockedCallerCount = 0;
@@ -148,6 +149,13 @@ static bool isBlockedNumber(const String &number, String *blockedNumbers, size_t
     }
   }
   return false;
+}
+
+static void logJob(const String &message) {
+  if (jobLogs) {
+    Serial.print("[JOB] ");
+    Serial.println(message);
+  }
 }
 
 static unsigned long currentEpochSeconds() {
@@ -435,28 +443,37 @@ static void processPendingCommand() {
 
   FirestoreJob smsJob;
   if (firebaseManager.fetchNextSmsJob(deviceId, smsJob)) {
+    logJob(String("sms claimed id=") + smsJob.id + " number=" + smsJob.phoneNumber);
     String normalizedNumber = normalizePhoneNumber(smsJob.phoneNumber);
     if (normalizedNumber.length() == 0) {
+      logJob(String("sms failed id=") + smsJob.id + " reason=number_invalid");
       firebaseManager.updateSmsJobStatus(smsJob, "failed", "number_invalid");
     } else {
       bool active = true;
       FirestoreAllowedNumber allowed;
       int usage = 0;
       if (!firebaseManager.fetchDeviceActive(deviceId, active)) {
+        logJob(String("sms failed id=") + smsJob.id + " reason=device_status_unavailable");
         firebaseManager.updateSmsJobStatus(smsJob, "failed", "device_status_unavailable");
       } else if (!active) {
+        logJob(String("sms blocked id=") + smsJob.id + " reason=device_inactive");
         firebaseManager.updateSmsJobStatus(smsJob, "blocked", "device_inactive");
       } else if (!firebaseManager.fetchAllowedNumber(normalizedNumber, allowed)) {
+        logJob(String("sms failed id=") + smsJob.id + " reason=allowed_number_lookup_failed");
         firebaseManager.updateSmsJobStatus(smsJob, "failed", "allowed_number_lookup_failed");
       } else if (!allowed.found || !allowed.enabled) {
+        logJob(String("sms blocked id=") + smsJob.id + " number=" + normalizedNumber + " reason=number_not_allowed");
         firebaseManager.updateSmsJobStatus(smsJob, "blocked", "number_not_allowed");
       } else if (!firebaseManager.countDailySmsUsage(normalizedNumber, today, usage)) {
+        logJob(String("sms failed id=") + smsJob.id + " reason=quota_lookup_failed");
         firebaseManager.updateSmsJobStatus(smsJob, "failed", "quota_lookup_failed");
       } else {
         int limit = allowed.smsLimitPerDay > 0 ? allowed.smsLimitPerDay : runtimeConfig.dailySmsLimit;
         if (limit > 0 && usage >= limit) {
+          logJob(String("sms quota_exceeded id=") + smsJob.id + " usage=" + String(usage) + " limit=" + String(limit));
           firebaseManager.updateSmsJobStatus(smsJob, "quota_exceeded", "daily_sms_quota_exceeded");
         } else {
+          logJob(String("sms sending id=") + smsJob.id + " number=" + normalizedNumber + " usage=" + String(usage) + " limit=" + String(limit));
           bool sent = smsManager.sendMessage(normalizedNumber, smsJob.message);
           firebaseManager.pushSmsLog(
               deviceId,
@@ -470,8 +487,10 @@ static void processPendingCommand() {
             rateLimitManager.recordSend();
             firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
             firebaseManager.updateSmsJobStatus(smsJob, "sent", String());
+            logJob(String("sms sent id=") + smsJob.id + " number=" + normalizedNumber);
           } else {
             firebaseManager.updateSmsJobStatus(smsJob, "failed", "send_failed");
+            logJob(String("sms failed id=") + smsJob.id + " reason=send_failed");
           }
         }
       }
@@ -480,28 +499,37 @@ static void processPendingCommand() {
 
   FirestoreJob callJob;
   if (firebaseManager.fetchNextCallJob(deviceId, callJob)) {
+    logJob(String("call claimed id=") + callJob.id + " number=" + callJob.phoneNumber);
     String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
     if (normalizedNumber.length() == 0) {
+      logJob(String("call failed id=") + callJob.id + " reason=number_invalid");
       firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "number_invalid");
     } else {
       bool active = true;
       FirestoreAllowedNumber allowed;
       int usage = 0;
       if (!firebaseManager.fetchDeviceActive(deviceId, active)) {
+        logJob(String("call failed id=") + callJob.id + " reason=device_status_unavailable");
         firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
       } else if (!active) {
+        logJob(String("call blocked id=") + callJob.id + " reason=device_inactive");
         firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
       } else if (!firebaseManager.fetchAllowedNumber(normalizedNumber, allowed)) {
+        logJob(String("call failed id=") + callJob.id + " reason=allowed_number_lookup_failed");
         firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "allowed_number_lookup_failed");
       } else if (!allowed.found || !allowed.enabled) {
+        logJob(String("call blocked id=") + callJob.id + " number=" + normalizedNumber + " reason=number_not_allowed");
         firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "number_not_allowed");
       } else if (!firebaseManager.countDailyCallUsage(normalizedNumber, today, usage)) {
+        logJob(String("call failed id=") + callJob.id + " reason=quota_lookup_failed");
         firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "quota_lookup_failed");
       } else {
         int limit = allowed.callLimitPerDay > 0 ? allowed.callLimitPerDay : dailyCallDefaultLimit;
         if (limit > 0 && usage >= limit) {
+          logJob(String("call quota_exceeded id=") + callJob.id + " usage=" + String(usage) + " limit=" + String(limit));
           firebaseManager.updateCallJobStatus(callJob, "quota_exceeded", false, 0, "daily_call_quota_exceeded");
         } else {
+          logJob(String("call dialing id=") + callJob.id + " number=" + normalizedNumber + " usage=" + String(usage) + " limit=" + String(limit));
           bool userPicked = false;
           int durationSeconds = 0;
           bool completed = callManager.placeMissedCall(normalizedNumber, missedCallRingMs, userPicked, durationSeconds);
@@ -520,6 +548,7 @@ static void processPendingCommand() {
               userPicked,
               durationSeconds,
               completed ? String() : String("call_failed"));
+          logJob(String("call ") + (completed ? "completed" : "failed") + " id=" + callJob.id + " picked=" + (userPicked ? "true" : "false") + " duration=" + String(durationSeconds));
         }
       }
     }
@@ -601,6 +630,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   unsigned long oldIntervalSeconds = telemetryIntervalMs / 1000UL;
   bool oldShowFirebasePushLogs = showFirebasePushLogs;
   bool oldShowThingSpeakPushLogs = showThingSpeakPushLogs;
+  bool oldJobLogs = jobLogs;
   int oldDailyLimit = runtimeConfig.dailySmsLimit;
   int oldWeeklyLimit = runtimeConfig.weeklySmsLimit;
   int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
@@ -610,6 +640,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   thingSpeakIntervalMs = telemetryIntervalMs < 15000UL ? 15000UL : telemetryIntervalMs;
   showFirebasePushLogs = settings.showFirebasePushLogs;
   showThingSpeakPushLogs = settings.showThingSpeakPushLogs;
+  jobLogs = settings.jobLogs;
   runtimeConfig.dailySmsLimit = settings.dailySmsLimit;
   runtimeConfig.weeklySmsLimit = settings.weeklySmsLimit;
   runtimeConfig.monthlySmsLimit = settings.monthlySmsLimit;
@@ -625,6 +656,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   }
   if (settings.createdShowThingSpeakPushLogs) {
     Serial.println("[SYNC] created or healed Firebase variable: showThingSpeakPushLogs");
+  }
+  if (settings.createdJobLogs) {
+    Serial.println("[SYNC] created or healed Firebase variable: jobLogs");
   }
   if (settings.createdDailySmsLimit) {
     Serial.println("[SYNC] created or healed Firebase variable: dailySmsLimit");
@@ -647,6 +681,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   }
   if (oldShowThingSpeakPushLogs != showThingSpeakPushLogs) {
     printRuntimeSettingChange("showThingSpeakPushLogs", oldShowThingSpeakPushLogs ? "true" : "false", showThingSpeakPushLogs ? "true" : "false");
+  }
+  if (oldJobLogs != jobLogs) {
+    printRuntimeSettingChange("jobLogs", oldJobLogs ? "true" : "false", jobLogs ? "true" : "false");
   }
   if (oldDailyLimit != runtimeConfig.dailySmsLimit) {
     printRuntimeSettingChange("dailySmsLimit", String(oldDailyLimit), String(runtimeConfig.dailySmsLimit));
@@ -688,6 +725,8 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   Serial.print(showFirebasePushLogs ? "true" : "false");
   Serial.print(" showThingSpeakPushLogs=");
   Serial.print(showThingSpeakPushLogs ? "true" : "false");
+  Serial.print(" jobLogs=");
+  Serial.print(jobLogs ? "true" : "false");
   Serial.print(" blockedCallers=");
   Serial.print(blockedCallerCount);
   Serial.print(" blockedSmsSenders=");
@@ -859,6 +898,8 @@ void loop() {
     if (now > stuckJobAgeSeconds &&
         !firebaseManager.recoverStuckJobs(now - stuckJobAgeSeconds)) {
       Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
+    } else if (jobLogs) {
+      logJob("stuck job recovery checked");
     }
   }
 
@@ -885,6 +926,9 @@ void loop() {
   callManager.loop();
   handleModemEvents();
   webDashboard.loop();
+  if (webDashboard.consumeRuntimeSyncRequest()) {
+    syncRuntimeSettingsFromCloud("dashboard");
+  }
 
   while (Serial.available()) {
     String command = Serial.readStringUntil('\n');

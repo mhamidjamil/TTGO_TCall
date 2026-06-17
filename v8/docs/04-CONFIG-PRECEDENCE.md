@@ -4,7 +4,7 @@
 1. Compile-time defaults.
 2. SPIFFS persisted config.
 3. Runtime cloud settings from Firebase (`/ttgo_tcall/settings/runtime`).
-4. Firestore gateway data (`sim_modules`, `allowed_numbers`, `sms_jobs`, `call_jobs`) for control-plane decisions.
+4. Firestore gateway data under `sim_module/settings` for control-plane decisions.
 5. Runtime changes from dashboard or cloud sync.
 6. Persist the last known good configuration.
 
@@ -16,6 +16,7 @@
 ## Runtime Cloud Settings (v8.1)
 - `intervalOfDhtSeconds` controls telemetry push interval.
 - `showFirebasePushLogs` controls periodic success-log visibility.
+- `jobLogs` controls serial logs for queued SMS/call jobs.
 - On startup, firmware reads Firebase values first and keeps them when they already exist.
 - If a key is missing or invalid, firmware creates/heals it with default and logs that event on serial.
 - Runtime settings sync runs at startup, every 10 minutes, and on manual `sync` serial command.

@@ -11,7 +11,7 @@ Firebase Realtime Database remains in v8 only for legacy telemetry snapshots, ru
 - Claim work atomically to avoid duplicate sends.
 - Preserve local fallback behavior when internet is unavailable.
 - Keep device-side configuration isolated from any service-account material.
-- Server posting details live in [10-SERVER-SMS-FLOW.md](10-SERVER-SMS-FLOW.md), but new queue writers should create Firestore `sms_jobs` and `call_jobs`.
+- Server posting details live in [10-SERVER-SMS-FLOW.md](10-SERVER-SMS-FLOW.md). Queue writers should create Firestore jobs under `sim_module/settings/sms_jobs` and `sim_module/settings/call_jobs`.
 
 ## What The ESP32 Actually Uses
 - WiFi STA mode means the ESP32 is acting as a client connecting to your router.
@@ -26,13 +26,13 @@ Firebase Realtime Database remains in v8 only for legacy telemetry snapshots, ru
 - Device status: `/ttgo_tcall/status`
 - Telemetry: `/ttgo_tcall/telemetry`
 - Runtime settings: `/ttgo_tcall/settings/runtime`
-- Firestore devices: `sim_modules`
-- Firestore allowed numbers: `allowed_numbers`
-- Firestore SMS jobs: `sms_jobs`
-- Firestore call jobs: `call_jobs`
-- Firestore SMS logs: `sms_logs`
-- Firestore call logs: `call_logs`
-- Firestore SIM module archive collection: `sim_module`
+- Firestore device/settings document: `sim_module/settings`
+- Firestore allowed numbers: `sim_module/settings/allowed_numbers`
+- Firestore SMS jobs: `sim_module/settings/sms_jobs`
+- Firestore call jobs: `sim_module/settings/call_jobs`
+- Firestore SMS logs: `sim_module/settings/sms_logs`
+- Firestore call logs: `sim_module/settings/call_logs`
+- Firestore SIM module archive paths: `sim_module/sms/by_number` and `sim_module/calls/by_number`
 
 ## Folder-Only Shape
 The root `ttgo_tcall` node is now treated as a container for folders only. Leaf variables should live under their parent folders.
@@ -75,6 +75,7 @@ The root `ttgo_tcall` node is now treated as a container for folders only. Leaf 
 {
 	"intervalOfDhtSeconds": 15,
 	"showFirebasePushLogs": true,
+	"jobLogs": true,
 	"dailySmsLimit": 200,
 	"weeklySmsLimit": 950,
 	"monthlySmsLimit": 4900,
@@ -85,15 +86,16 @@ The root `ttgo_tcall` node is now treated as a container for folders only. Leaf 
 
 ## Firestore Gateway Data Model
 
-### Device ID
-The firmware uses `deviceId` from config, defaulting to `device_001`. Firestore jobs target that ID through `device_id`.
+### Single Module Shape
+This project currently uses one TTGO module. Gateway state lives under the existing `sim_module` collection to avoid multiple competing roots.
 
 ### Device Document
-Path: `sim_modules/{deviceId}`
+Path: `sim_module/settings`
 
 ```json
 {
 	"name": "TTGO Bedroom",
+	"device_id": "device_001",
 	"active": true,
 	"poll_interval_seconds": 3,
 	"missed_call_mode": true,
@@ -110,7 +112,7 @@ Path: `sim_modules/{deviceId}`
 `active = false` blocks pending outgoing jobs.
 
 ### Allowed Numbers
-Path: `allowed_numbers/{safe_phone_number}`
+Path: `sim_module/settings/allowed_numbers/{safe_phone_number}`
 
 ```json
 {
@@ -126,7 +128,7 @@ Path: `allowed_numbers/{safe_phone_number}`
 Document IDs are sanitized the same way as firmware: letters, digits, `+`, `_`, and `-` are preserved; other characters become `_`.
 
 ### SMS Jobs
-Path: `sms_jobs/{auto_id}`
+Path: `sim_module/settings/sms_jobs/{auto_id}`
 
 ```json
 {
@@ -144,7 +146,7 @@ Path: `sms_jobs/{auto_id}`
 Statuses: `pending`, `processing`, `sent`, `failed`, `blocked`, `quota_exceeded`.
 
 ### Call Jobs
-Path: `call_jobs/{auto_id}`
+Path: `sim_module/settings/call_jobs/{auto_id}`
 
 ```json
 {
@@ -163,7 +165,7 @@ Path: `call_jobs/{auto_id}`
 Statuses: `pending`, `processing`, `completed`, `failed`, `blocked`, `quota_exceeded`.
 
 ### SMS Logs
-Path: `sms_logs/{auto_id}`
+Path: `sim_module/settings/sms_logs/{auto_id}`
 
 ```json
 {
@@ -182,7 +184,7 @@ Path: `sms_logs/{auto_id}`
 Directions: `incoming`, `outgoing`.
 
 ### Call Logs
-Path: `call_logs/{auto_id}`
+Path: `sim_module/settings/call_logs/{auto_id}`
 
 ```json
 {
@@ -206,8 +208,8 @@ Every poll cycle:
 
 1. Fetch one pending SMS job for this `device_id`.
 2. Fetch one pending call job for this `device_id`.
-3. Validate `sim_modules/{deviceId}.active`.
-4. Validate `allowed_numbers/{phone_number}` exists and is enabled.
+3. Validate `sim_module/settings.active`.
+4. Validate `sim_module/settings/allowed_numbers/{phone_number}` exists and is enabled.
 5. Count successful outgoing logs for the current `day_key`.
 6. Execute the GSM action.
 7. Write an audit log.
@@ -216,13 +218,13 @@ Every poll cycle:
 The firmware keeps one polling cycle; it does not create separate SMS/call intervals.
 
 ### Stuck Job Recovery
-Once per minute, the device scans `sms_jobs` and `call_jobs`. Any `processing` job with `processing_started_epoch` older than 5 minutes is reset to `pending` and marked with `error = recovered_from_stale_processing`.
+Once per minute, the device scans `sim_module/settings/sms_jobs` and `sim_module/settings/call_jobs`. Any `processing` job with `processing_started_epoch` older than 5 minutes is reset to `pending` and marked with `error = recovered_from_stale_processing`.
 
 ### Quotas
 Daily quota is counted from logs, not a separate counter collection:
 
-- SMS usage: successful outgoing `sms_logs` with `status = sent`.
-- Call usage: successful outgoing `call_logs` with `status = completed`.
+- SMS usage: successful outgoing `sim_module/settings/sms_logs` with `status = sent`.
+- Call usage: successful outgoing `sim_module/settings/call_logs` with `status = completed`.
 - Reset: automatic through `day_key`, based on UTC date from device time.
 
 ## Legacy RTDB Data Model
@@ -247,7 +249,7 @@ Each pending command should look like this:
 3. `sent` - SMS sent successfully.
 4. `errored` - rejected or failed, with `errorReason`.
 
-New implementations should prefer Firestore `sms_jobs`; this RTDB path is retained for older tooling.
+New implementations should prefer Firestore `sim_module/settings/sms_jobs`; this RTDB path is retained for older tooling.
 
 ### Counters
 Store counters as a single snapshot object:
@@ -269,9 +271,14 @@ Runtime settings should contain telemetry interval, log verbosity, SMS limit con
 If runtime keys are missing or invalid, device firmware should create/heal them with safe defaults and print an operator-facing serial log.
 
 ### Firestore SIM Module
-Firestore collection `sim_module` stores one simple settings document and phone-number-based event documents.
+Firestore collection `sim_module` stores one simple settings document, nested gateway collections, and phone-number-based event documents.
 
-- `sim_module/settings` - editable block lists.
+- `sim_module/settings` - device state and editable block lists.
+- `sim_module/settings/allowed_numbers` - outgoing permission and quotas.
+- `sim_module/settings/sms_jobs` - outgoing SMS queue.
+- `sim_module/settings/call_jobs` - outgoing call queue.
+- `sim_module/settings/sms_logs` - SMS audit trail.
+- `sim_module/settings/call_logs` - call audit trail.
 - `sim_module/sms/by_number/{sender_or_number}` - latest SMS details for that sender.
 - `sim_module/calls/by_number/{caller_number}` - latest call details for that caller.
 
@@ -279,10 +286,9 @@ Firestore collection `sim_module` stores one simple settings document and phone-
 
 ```json
 {
+	"active": true,
 	"blockedCallers": ["+923001234567", "100"],
-	"blockedSmsSenders": ["Jazz", "samosa", "100"],
-	"blockedCallersCsv": "",
-	"blockedSmsSendersCsv": ""
+	"blockedSmsSenders": ["Jazz", "samosa", "100"]
 }
 ```
 
@@ -290,7 +296,7 @@ Event documents contain `type`, `number`, `documentId`, `message`, `blocked`, `s
 
 Firestore paths must alternate collection/document. Because of that, `sim_module/sms/{number}` is not a valid document path, so the firmware uses `sim_module/sms/by_number/{number}`.
 
-On startup, firmware creates `sim_module/settings`, `sim_module/sms`, and `sim_module/calls` if missing. It also deletes legacy documents under `entries`, `numbers`, `_meta`, `blocked_calls`, `blocked_sms`, `blocked_callers`, and `blocked_sms_senders`.
+On startup, firmware creates `sim_module/settings`, `sim_module/sms`, and `sim_module/calls` if missing. It also deletes legacy documents under `entries`, `numbers`, `_meta`, blocked buckets, and old top-level gateway collections.
 
 ## Device Auth Direction
 - Realtime Database access should use Firebase Authentication from the device.

@@ -29,6 +29,13 @@ FirebaseConfig fbconfig;
 Firebase_ESP_Client firebase;
 #endif
 
+constexpr const char *kSimSettingsPath = "sim_module/settings";
+constexpr const char *kAllowedNumbersPath = "sim_module/settings/allowed_numbers";
+constexpr const char *kSmsJobsPath = "sim_module/settings/sms_jobs";
+constexpr const char *kCallJobsPath = "sim_module/settings/call_jobs";
+constexpr const char *kSmsLogsPath = "sim_module/settings/sms_logs";
+constexpr const char *kCallLogsPath = "sim_module/settings/call_logs";
+
 void setHttpStatusError(String &error, const char *op, int statusCode, const String &body) {
   error = String(op) + String(" failed code=") + statusCode + String(" body=") + body;
 }
@@ -697,6 +704,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
   outSettings.intervalOfDhtSeconds = defaultIntervalOfDhtSeconds;
   outSettings.showFirebasePushLogs = defaultShowFirebasePushLogs;
   outSettings.showThingSpeakPushLogs = defaultShowThingSpeakPushLogs;
+  outSettings.jobLogs = true;
   outSettings.dailySmsLimit = config.dailySmsLimit;
   outSettings.weeklySmsLimit = config.weeklySmsLimit;
   outSettings.monthlySmsLimit = config.monthlySmsLimit;
@@ -709,13 +717,14 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     return false;
   }
 
-  DynamicJsonDocument writeDoc(640);
+  DynamicJsonDocument writeDoc(768);
   bool shouldWriteBack = false;
 
   if (statusCode == 404 || response == "null") {
     outSettings.createdIntervalOfDht = true;
     outSettings.createdShowFirebasePushLogs = true;
     outSettings.createdShowThingSpeakPushLogs = true;
+    outSettings.createdJobLogs = true;
     outSettings.createdDailySmsLimit = true;
     outSettings.createdWeeklySmsLimit = true;
     outSettings.createdMonthlySmsLimit = true;
@@ -756,6 +765,14 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       shouldWriteBack = true;
     }
 
+    bool jobLogsValue = true;
+    if (parseBoolVariant(root["jobLogs"], jobLogsValue)) {
+      outSettings.jobLogs = jobLogsValue;
+    } else {
+      outSettings.createdJobLogs = true;
+      shouldWriteBack = true;
+    }
+
     int dailyLimitParsed = 0;
     if (parseLimitVariant(root["dailySmsLimit"], dailyLimitParsed)) {
       outSettings.dailySmsLimit = dailyLimitParsed;
@@ -793,6 +810,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     writeDoc["intervalOfDhtSeconds"] = outSettings.intervalOfDhtSeconds;
     writeDoc["showFirebasePushLogs"] = outSettings.showFirebasePushLogs;
     writeDoc["showThingSpeakPushLogs"] = outSettings.showThingSpeakPushLogs;
+    writeDoc["jobLogs"] = outSettings.jobLogs;
     writeDoc["dailySmsLimit"] = outSettings.dailySmsLimit;
     writeDoc["weeklySmsLimit"] = outSettings.weeklySmsLimit;
     writeDoc["monthlySmsLimit"] = outSettings.monthlySmsLimit;
@@ -884,15 +902,11 @@ bool FirebaseManager::bootstrapGatewayCollections(const String &deviceId,
     return false;
   }
 
-  String normalizedDeviceId = safeFirestoreDocumentId(deviceId);
-  if (normalizedDeviceId.length() == 0) {
-    normalizedDeviceId = "device_001";
-  }
-
-  String url = buildFirestoreUrl(String("sim_modules/") + normalizedDeviceId);
+  String url = buildFirestoreUrl(kSimSettingsPath);
   DynamicJsonDocument doc(1536);
   JsonObject fields = doc.createNestedObject("fields");
   setStringField(fields, "name", deviceId);
+  setStringField(fields, "device_id", deviceId);
   setBoolField(fields, "active", true);
   setIntField(fields, "poll_interval_seconds", pollIntervalSeconds);
   setBoolField(fields, "missed_call_mode", missedCallMode);
@@ -907,6 +921,7 @@ bool FirebaseManager::bootstrapGatewayCollections(const String &deviceId,
   int statusCode = 0;
   String patchUrl = url +
                     "?updateMask.fieldPaths=name"
+                    "&updateMask.fieldPaths=device_id"
                     "&updateMask.fieldPaths=active"
                     "&updateMask.fieldPaths=poll_interval_seconds"
                     "&updateMask.fieldPaths=missed_call_mode"
@@ -932,7 +947,7 @@ bool FirebaseManager::fetchNextSmsJob(const String &deviceId, FirestoreJob &outJ
 
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl("sms_jobs"), response, statusCode)) {
+  if (!httpGetBearer(buildFirestoreUrl(kSmsJobsPath), response, statusCode)) {
     return false;
   }
   if (statusCode == 404) {
@@ -972,7 +987,7 @@ bool FirebaseManager::fetchNextSmsJob(const String &deviceId, FirestoreJob &outJ
 
     String claimResponse;
     int claimStatus = 0;
-    String claimUrl = buildFirestoreUrl(String("sms_jobs/") + candidate.id) +
+    String claimUrl = buildFirestoreUrl(String(kSmsJobsPath) + "/" + candidate.id) +
                       "?updateMask.fieldPaths=status"
                       "&updateMask.fieldPaths=processing_started_at"
                       "&updateMask.fieldPaths=processing_started_epoch";
@@ -999,7 +1014,7 @@ bool FirebaseManager::fetchNextCallJob(const String &deviceId, FirestoreJob &out
 
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl("call_jobs"), response, statusCode)) {
+  if (!httpGetBearer(buildFirestoreUrl(kCallJobsPath), response, statusCode)) {
     return false;
   }
   if (statusCode == 404) {
@@ -1039,7 +1054,7 @@ bool FirebaseManager::fetchNextCallJob(const String &deviceId, FirestoreJob &out
 
     String claimResponse;
     int claimStatus = 0;
-    String claimUrl = buildFirestoreUrl(String("call_jobs/") + candidate.id) +
+    String claimUrl = buildFirestoreUrl(String(kCallJobsPath) + "/" + candidate.id) +
                       "?updateMask.fieldPaths=status"
                       "&updateMask.fieldPaths=processing_started_at"
                       "&updateMask.fieldPaths=processing_started_epoch";
@@ -1065,10 +1080,9 @@ bool FirebaseManager::fetchDeviceActive(const String &deviceId, bool &outActive)
   }
 
   outActive = true;
-  String normalizedDeviceId = safeFirestoreDocumentId(deviceId);
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(String("sim_modules/") + normalizedDeviceId), response, statusCode)) {
+  if (!httpGetBearer(buildFirestoreUrl(kSimSettingsPath), response, statusCode)) {
     return false;
   }
 
@@ -1111,7 +1125,7 @@ bool FirebaseManager::updateSmsJobStatus(const FirestoreJob &job, const String &
 
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(String("sms_jobs/") + job.id) +
+  String url = buildFirestoreUrl(String(kSmsJobsPath) + "/" + job.id) +
                "?updateMask.fieldPaths=status"
                "&updateMask.fieldPaths=completed_at"
                "&updateMask.fieldPaths=completed_epoch"
@@ -1152,7 +1166,7 @@ bool FirebaseManager::updateCallJobStatus(const FirestoreJob &job,
 
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(String("call_jobs/") + job.id) +
+  String url = buildFirestoreUrl(String(kCallJobsPath) + "/" + job.id) +
                "?updateMask.fieldPaths=status"
                "&updateMask.fieldPaths=completed_at"
                "&updateMask.fieldPaths=completed_epoch"
@@ -1180,7 +1194,7 @@ bool FirebaseManager::fetchAllowedNumber(const String &phoneNumber, FirestoreAll
   String documentId = safeFirestoreDocumentId(phoneNumber);
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(String("allowed_numbers/") + documentId), response, statusCode)) {
+  if (!httpGetBearer(buildFirestoreUrl(String(kAllowedNumbersPath) + "/" + documentId), response, statusCode)) {
     return false;
   }
 
@@ -1239,7 +1253,7 @@ bool FirebaseManager::pushSmsLog(const String &deviceId,
 
   String response;
   int statusCode = 0;
-  if (!httpPatchBearerJson(buildFirestoreUrl(String("sms_logs/") + documentId), payload, response, statusCode)) {
+  if (!httpPatchBearerJson(buildFirestoreUrl(String(kSmsLogsPath) + "/" + documentId), payload, response, statusCode)) {
     return false;
   }
   if (statusCode < 200 || statusCode >= 300) {
@@ -1283,7 +1297,7 @@ bool FirebaseManager::pushCallLog(const String &deviceId,
 
   String response;
   int statusCode = 0;
-  if (!httpPatchBearerJson(buildFirestoreUrl(String("call_logs/") + documentId), payload, response, statusCode)) {
+  if (!httpPatchBearerJson(buildFirestoreUrl(String(kCallLogsPath) + "/" + documentId), payload, response, statusCode)) {
     return false;
   }
   if (statusCode < 200 || statusCode >= 300) {
@@ -1303,7 +1317,7 @@ bool FirebaseManager::countDailySmsUsage(const String &phoneNumber, const String
   outCount = 0;
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl("sms_logs"), response, statusCode)) {
+  if (!httpGetBearer(buildFirestoreUrl(kSmsLogsPath), response, statusCode)) {
     return false;
   }
   if (statusCode == 404) {
@@ -1344,7 +1358,7 @@ bool FirebaseManager::countDailyCallUsage(const String &phoneNumber, const Strin
   outCount = 0;
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl("call_logs"), response, statusCode)) {
+  if (!httpGetBearer(buildFirestoreUrl(kCallLogsPath), response, statusCode)) {
     return false;
   }
   if (statusCode == 404) {
@@ -1388,10 +1402,10 @@ bool FirebaseManager::pushDeviceHeartbeat(const String &deviceId,
     return false;
   }
 
-  String normalizedDeviceId = safeFirestoreDocumentId(deviceId);
   DynamicJsonDocument doc(1536);
   JsonObject fields = doc.createNestedObject("fields");
   setStringField(fields, "name", deviceId);
+  setStringField(fields, "device_id", deviceId);
   setBoolField(fields, "active", true);
   setTimestampField(fields, "last_seen_at", epochSeconds);
   setIntField(fields, "last_seen_epoch", (int)epochSeconds);
@@ -1407,8 +1421,9 @@ bool FirebaseManager::pushDeviceHeartbeat(const String &deviceId,
 
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(String("sim_modules/") + normalizedDeviceId) +
+  String url = buildFirestoreUrl(kSimSettingsPath) +
                "?updateMask.fieldPaths=name"
+               "&updateMask.fieldPaths=device_id"
                "&updateMask.fieldPaths=active"
                "&updateMask.fieldPaths=last_seen_at"
                "&updateMask.fieldPaths=last_seen_epoch"
@@ -1435,7 +1450,7 @@ bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
     return false;
   }
 
-  const char *collections[] = {"sms_jobs", "call_jobs"};
+  const char *collections[] = {kSmsJobsPath, kCallJobsPath};
   for (size_t i = 0; i < sizeof(collections) / sizeof(collections[0]); ++i) {
     String response;
     int statusCode = 0;
@@ -1559,6 +1574,12 @@ bool FirebaseManager::cleanupLegacySimModulePaths() {
       "sim_module/blocked_sms_senders/numbers",
       "sim_module/blocked_caller/numbers",
       "sim_module/blocked_sms_sender/numbers",
+      "sim_modules",
+      "allowed_numbers",
+      "sms_jobs",
+      "call_jobs",
+      "sms_logs",
+      "call_logs",
   };
 
   for (size_t i = 0; i < sizeof(legacyCollections) / sizeof(legacyCollections[0]); ++i) {
@@ -1759,31 +1780,10 @@ bool FirebaseManager::httpDeleteBearer(const String &url, String &responseBody, 
   return true;
 }
 
-bool FirebaseManager::appendCsvNumbers(const String &csvText, String *numbers, size_t maxNumbers, size_t &numberCount) {
-  int start = 0;
-  while (start < (int)csvText.length() && numberCount < maxNumbers) {
-    int comma = csvText.indexOf(',', start);
-    String number = comma >= 0 ? csvText.substring(start, comma) : csvText.substring(start);
-    number.trim();
-    if (number.startsWith("\"") && number.endsWith("\"") && number.length() >= 2) {
-      number = number.substring(1, number.length() - 1);
-      number.trim();
-    }
-    if (number.length() > 0) {
-      numbers[numberCount++] = number;
-    }
-    if (comma < 0) {
-      break;
-    }
-    start = comma + 1;
-  }
-  return true;
-}
-
 bool FirebaseManager::fetchFirestoreSettingsList(const String &fieldName, String *numbers, size_t maxNumbers, size_t &numberCount) {
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl("sim_module/settings");
+  String url = buildFirestoreUrl(kSimSettingsPath);
   if (!httpGetBearer(url, response, statusCode)) {
     return false;
   }
@@ -1802,18 +1802,12 @@ bool FirebaseManager::fetchFirestoreSettingsList(const String &fieldName, String
   JsonObjectConst fields = doc["fields"].as<JsonObjectConst>();
   appendFirestoreArrayStrings(fields[fieldName.c_str()], numbers, maxNumbers, numberCount);
 
-  String csvFieldName = fieldName + String("Csv");
-  String csvText = firestoreStringField(fields, csvFieldName.c_str());
-  if (csvText.length() > 0) {
-    appendCsvNumbers(csvText, numbers, maxNumbers, numberCount);
-  }
-
   error = String();
   return true;
 }
 
 bool FirebaseManager::ensureSimSettingsDocument() {
-  String url = buildFirestoreUrl("sim_module/settings");
+  String url = buildFirestoreUrl(kSimSettingsPath);
   String response;
   int statusCode = 0;
   if (!httpGetBearer(url, response, statusCode)) {
@@ -1829,7 +1823,7 @@ bool FirebaseManager::ensureSimSettingsDocument() {
     return false;
   }
 
-  Serial.println("[FIRESTORE] sim_module/settings not found; creating simple block-list arrays");
+  Serial.println("[FIRESTORE] sim_module/settings not found; creating gateway settings");
 
   DynamicJsonDocument doc(1024);
   JsonObject fields = doc.createNestedObject("fields");
@@ -1837,8 +1831,8 @@ bool FirebaseManager::ensureSimSettingsDocument() {
   JsonArray smsSenders = fields["blockedSmsSenders"]["arrayValue"].createNestedArray("values");
   (void)callers;
   (void)smsSenders;
-  fields["blockedCallersCsv"]["stringValue"] = "";
-  fields["blockedSmsSendersCsv"]["stringValue"] = "";
+  fields["active"]["booleanValue"] = true;
+  fields["name"]["stringValue"] = "TTGO T-Call";
   fields["updatedAtPakistan"]["stringValue"] = "";
   fields["source"]["stringValue"] = "ttgo_tcall_v8";
 

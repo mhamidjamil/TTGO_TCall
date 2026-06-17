@@ -47,6 +47,7 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
     String payload = String("{\"projectId\":\"") + config->firebaseProjectId +
                      String("\",\"apiKey\":\"") + config->firebaseApiKey +
                      String("\",\"authDomain\":\"") + authDomain +
+                     String("\",\"databaseURL\":\"") + config->firebaseDatabaseUrl +
                      String("\",\"deviceId\":\"") + config->deviceId +
                      String("\",\"useAnonymous\":") + (config->firebaseUseAnonymous ? "true" : "false") +
                      String("}");
@@ -61,6 +62,11 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
                      String(",\"message\":\"") + message +
                      String("\"}");
     server->send(ok ? 200 : 500, "application/json", payload);
+  });
+
+  server->on("/api/sync-runtime", HTTP_POST, [this]() {
+    runtimeSyncRequested = true;
+    server->send(202, "application/json", "{\"ok\":true,\"message\":\"runtime sync queued\"}");
   });
 
   server->on("/docs", [this]() {
@@ -99,21 +105,53 @@ h1,h2{margin-top:24px}
 
 <h2>Realtime Database path layout</h2>
 <ul>
-<li><code>/ttgo_tcall/commands/pending</code> - incoming commands for the ESP32</li>
-<li><code>/ttgo_tcall/commands/history</code> - processed command archive</li>
+<li><code>/ttgo_tcall/settings/runtime</code> - runtime flags such as <code>jobLogs</code>, push logs, DHT interval, and SMS limits</li>
 <li><code>/ttgo_tcall/counters</code> - daily/weekly/monthly SMS counters</li>
 <li><code>/ttgo_tcall/status</code> - device status snapshot</li>
 <li><code>/ttgo_tcall/telemetry</code> - temperature/humidity and counters with timestamp</li>
 </ul>
 
-<h2>Pending SMS format for the server team</h2>
+<h2>Firestore gateway path layout</h2>
+<ul>
+<li><code>sim_module/settings</code> - single-device gateway settings and heartbeat fields</li>
+<li><code>sim_module/settings/allowed_numbers</code> - outgoing permission and per-number quotas</li>
+<li><code>sim_module/settings/sms_jobs</code> - pending, processing, sent, failed, blocked, or quota_exceeded SMS work</li>
+<li><code>sim_module/settings/call_jobs</code> - pending, processing, completed, failed, blocked, quota_exceeded, or user_picked call work</li>
+<li><code>sim_module/settings/sms_logs</code> and <code>sim_module/settings/call_logs</code> - audit trail</li>
+</ul>
+
+<h2>SMS job format for Rails or another server</h2>
 <pre>{
-  "type": "sms",
-  "number": "+923001234567",
+  "device_id": "device_001",
+  "phone_number": "+923001234567",
   "message": "hello",
   "status": "pending",
-  "createdAtMs": 1712345678000
+  "created_at": "server timestamp",
+  "processing_started_at": null,
+  "completed_at": null,
+  "error": null
 }</pre>
+
+<h2>Call job format for Rails or another server</h2>
+<pre>{
+  "device_id": "device_001",
+  "phone_number": "+923001234567",
+  "status": "pending",
+  "created_at": "server timestamp",
+  "processing_started_at": null,
+  "completed_at": null,
+  "user_picked": false,
+  "duration_seconds": 0,
+  "error": null
+}</pre>
+
+<h2>Outgoing policy</h2>
+<ul>
+<li>Before queueing a job, add the target number under <code>sim_module/settings/allowed_numbers/{safePhoneNumber}</code> with <code>enabled = true</code>.</li>
+<li>If a job ends with <code>blocked</code> and <code>number_not_allowed</code>, allow the number and retry the job.</li>
+<li>Daily SMS and call quotas are counted from Firestore logs for the current UTC day.</li>
+<li>Set <code>ttgo_tcall/settings/runtime/jobLogs</code> to <code>true</code> to print serial <code>[JOB]</code> lines for claims, validation, quota checks, send/dial attempts, and final status.</li>
+</ul>
 
 <h2>Recommended dev rules</h2>
 <pre>{
@@ -126,7 +164,8 @@ h1,h2{margin-top:24px}
 <h2>On boot</h2>
 <ul>
 <li>The device first restores counters from Firebase.</li>
-<li>It waits 60 seconds before polling pending SMS.</li>
+<li>The dashboard can request a runtime settings sync with the Sync Device Settings button.</li>
+<li>The main loop uses one polling cycle for SMS and call queues.</li>
 <li>Telemetry includes temperature, humidity, counts, and timestamp.</li>
 </ul>
 </body></html>
@@ -142,6 +181,14 @@ void WebDashboard::loop() {
   if (server != nullptr) {
     server->handleClient();
   }
+}
+
+bool WebDashboard::consumeRuntimeSyncRequest() {
+  if (!runtimeSyncRequested) {
+    return false;
+  }
+  runtimeSyncRequested = false;
+  return true;
 }
 
 String WebDashboard::docsUrl() const {

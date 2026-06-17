@@ -13,16 +13,21 @@
       <p id="connectionState">Connecting</p>
       <p id="buildMeta" class="meta-line">SPIFFS version loading</p>
     </div>
-    <button id="refreshBtn" type="button">Refresh</button>
+    <div class="top-actions">
+      <button id="syncRuntimeBtn" type="button">Sync Device Settings</button>
+      <button id="refreshBtn" type="button">Refresh</button>
+    </div>
   </header>
 
   <nav class="tabs" aria-label="Dashboard sections">
     <button class="tab active" data-view="devices" type="button">Device</button>
     <button class="tab" data-view="numbers" type="button">Numbers</button>
+    <button class="tab" data-view="blocks" type="button">Blocks</button>
     <button class="tab" data-view="sms" type="button">SMS</button>
     <button class="tab" data-view="calls" type="button">Calls</button>
     <button class="tab" data-view="logs" type="button">Logs</button>
     <button class="tab" data-view="testing" type="button">Notification testing</button>
+    <button class="tab" data-view="guide" type="button">Guide</button>
     <button class="tab" data-view="about" type="button">About</button>
   </nav>
 
@@ -30,8 +35,21 @@
     <section id="devices" class="view active">
       <div class="panel">
         <div class="panel-head">
-          <h2>Device Health</h2>
+          <h2>Device</h2>
         </div>
+        <form id="deviceForm" class="form-grid compact">
+          <label class="check"><input name="active" type="checkbox" checked> Active</label>
+          <input name="name" placeholder="TTGO T-Call">
+          <button type="submit">Save Device</button>
+        </form>
+        <form id="runtimeForm" class="form-grid runtime-grid">
+          <label class="check"><input name="jobLogs" type="checkbox" checked> Job logs</label>
+          <label class="check"><input name="showFirebasePushLogs" type="checkbox"> Firebase logs</label>
+          <label class="check"><input name="showThingSpeakPushLogs" type="checkbox"> ThingSpeak logs</label>
+          <input name="intervalOfDhtSeconds" type="number" min="3" max="3600" placeholder="DHT seconds">
+          <input name="dailySmsLimit" type="number" min="0" placeholder="Daily SMS">
+          <button type="submit">Save Runtime</button>
+        </form>
         <div id="deviceList" class="grid"></div>
       </div>
     </section>
@@ -50,6 +68,25 @@
           <button type="submit">Save Number</button>
         </form>
         <div id="numbersList" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <section id="blocks" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Blocked Numbers</h2>
+        </div>
+        <form id="blockForm" class="two-column-form">
+          <label>
+            Blocked callers
+            <textarea name="blockedCallers" placeholder="+923001111111"></textarea>
+          </label>
+          <label>
+            Blocked SMS senders
+            <textarea name="blockedSmsSenders" placeholder="+923001111111"></textarea>
+          </label>
+          <button type="submit">Save Blocks</button>
+        </form>
       </div>
     </section>
 
@@ -126,6 +163,32 @@
             <h3>Flow</h3>
             <p class="help-text">SMS and call jobs are created in Firestore. The device polls every few seconds, claims pending work, enforces allowed numbers and quotas, and then writes logs back.</p>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="guide" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Gateway Guide</h2>
+        </div>
+        <div class="guide">
+          <h3>Rails writes jobs here</h3>
+          <pre>sim_module/settings/sms_jobs/{autoId}
+sim_module/settings/call_jobs/{autoId}</pre>
+          <h3>Rails manages policy here</h3>
+          <pre>sim_module/settings
+sim_module/settings/allowed_numbers/{safePhoneNumber}</pre>
+          <h3>Device writes results here</h3>
+          <pre>sim_module/settings/sms_logs/{autoId}
+sim_module/settings/call_logs/{autoId}</pre>
+          <h3>Test flow</h3>
+          <ol>
+            <li>Add the target number in Numbers and keep it enabled.</li>
+            <li>Queue an SMS or call job with status pending.</li>
+            <li>Watch Serial for JOB lines if jobLogs is enabled.</li>
+            <li>Read final queue status and the matching log entry.</li>
+          </ol>
         </div>
       </div>
     </section>

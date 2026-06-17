@@ -14,6 +14,9 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 - `showFirebasePushLogs` (boolean)
   - Meaning: controls periodic serial info logs for telemetry and landing snapshot push success.
   - Default: `true`
+- `jobLogs` (boolean)
+  - Meaning: controls serial logs for Firestore SMS/call job claiming, validation, quota checks, and final status.
+  - Default: `true`
 - `dailySmsLimit` (number)
   - Meaning: daily SMS cap used by the rate limiter.
   - Default: `200`
@@ -30,7 +33,6 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 ## Firestore Block Lists
 - Blocked callers: `sim_module/settings` field `blockedCallers`.
 - Blocked SMS senders: `sim_module/settings` field `blockedSmsSenders`.
-- Optional comma-separated fields are also read: `blockedCallersCsv` and `blockedSmsSendersCsv`.
 - Startup, periodic, and manual `sync` refresh these lists.
 
 ## Sync Strategy
