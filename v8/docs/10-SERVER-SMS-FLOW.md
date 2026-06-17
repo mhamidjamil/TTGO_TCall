@@ -1,69 +1,109 @@
-# Server SMS Flow
+# Server Job Flow
 
-Use this file if you are posting pending SMS jobs from a server or dashboard into Firebase Realtime Database for the TTGO T-Call v8 firmware.
+Use this when a Rails app or another backend queues outgoing SMS/call work for the TTGO T-Call v8 firmware.
 
-## What the server writes
-Write pending jobs under `ttgo_tcall/commands/pending`.
+## Firestore Paths
+- Device and policy document: `sim_module/config`
+- Allowed numbers: `sim_module/allowed_numbers/items/{safePhoneNumber}`
+- SMS jobs: `sim_module/sms_jobs/items/{autoId}`
+- Call jobs: `sim_module/call_jobs/items/{autoId}`
+- SMS logs: `sim_module/sms_logs/items/{autoId}`
+- Call logs: `sim_module/call_logs/items/{autoId}`
 
-A pending SMS job should look like this:
+Do not write new gateway jobs to top-level `sms_jobs`, `call_jobs`, `allowed_numbers`, or `sim_modules`. Those were removed from the active flow.
+
+## Required Policy Before Sending
+Every outgoing target must exist in `sim_module/allowed_numbers/items`:
+
 ```json
 {
-  "type": "sms",
-  "number": "+923001234567",
-  "message": "hello from server",
+  "phone_number": "+923354888420",
+  "enabled": true,
+  "sms_limit_per_day": 5,
+  "call_limit_per_day": 5,
+  "notes": "Owner"
+}
+```
+
+If a job finishes as `blocked` with `error = number_not_allowed`, the number was missing from this collection or `enabled` was false. Add the number and retry the job.
+
+## Queue SMS
+Create a document in `sim_module/sms_jobs/items`:
+
+```json
+{
+  "phone_number": "+923354888420",
+  "message": "hello from Rails",
   "status": "pending",
-  "createdAt": 1712345678,
-  "createdAtMs": 1712345678000,
-  "source": "server"
+  "created_at": "timestamp",
+  "processing_started_at": null,
+  "completed_at": null,
+  "error": null
 }
 ```
 
-## Required fields
-- `type`: use `sms`.
-- `number`: the target phone number.
-- `message`: the text to send.
-- `status`: set to `pending`.
-- `createdAtMs`: epoch milliseconds.
+Required fields:
+- `phone_number`
+- `message`
+- `status = pending`
 
-## Suggested lifecycle
-1. Server creates the job with `status: pending`.
-2. ESP32 boots, restores counters from `ttgo_tcall/counters`, then waits 60 seconds before polling.
-3. ESP32 claims one job by changing it to `processing`.
-4. ESP32 updates the job to `sent` or `errored`.
-5. Server reads `ttgo_tcall/commands/history` for completed jobs.
-
-## Counter sync
-If the server also maintains counts, keep the snapshot under `ttgo_tcall/counters`.
+## Queue Call
+Create a document in `sim_module/call_jobs/items`:
 
 ```json
 {
-  "daily": 12,
-  "weekly": 48,
-  "monthly": 101,
-  "updatedAtMs": 1712345678000
+  "phone_number": "+923354888420",
+  "status": "pending",
+  "created_at": "timestamp",
+  "processing_started_at": null,
+  "completed_at": null,
+  "user_picked": false,
+  "duration_seconds": 0,
+  "error": null
 }
 ```
 
-The device reads this snapshot at boot before it starts polling pending SMS.
+## Status Flow
+- `pending`: queued by Rails or dashboard.
+- `processing`: claimed by the ESP32.
+- `sent`: SMS sent.
+- `completed`: call attempt completed.
+- `failed`: modem, lookup, or execution failure.
+- `blocked`: device inactive or number not allowed.
+- `quota_exceeded`: daily per-number limit reached.
 
-## Status nodes
-Useful status locations:
-- `ttgo_tcall/status`
-- `ttgo_tcall/telemetry`
-- `ttgo_tcall/commands/history`
+## Logs
+Successful and failed execution attempts are written to:
 
-## Minimal RTDB rules for development
-```json
-{
-  "rules": {
-    ".read": "auth != null",
-    ".write": "auth != null"
-  }
-}
+```text
+sim_module/sms_logs/items
+sim_module/call_logs/items
 ```
 
-## Do not do this
-- Do not place service-account JSON on the ESP32.
-- Do not post jobs with missing phone number or message.
-- Do not skip the `pending` status if you want the firmware to claim the job.
-- Do not write commands at the RTDB root.
+Daily quota checks count successful outgoing logs for the current `day_key`.
+
+## Runtime Settings
+Runtime settings stay in Realtime Database:
+
+```text
+ttgo_tcall/settings/runtime
+```
+
+Supported keys include `intervalOfDhtSeconds`, `showFirebasePushLogs`, `showThingSpeakPushLogs`, `dailySmsLimit`, `weeklySmsLimit`, `monthlySmsLimit`, `ntfyUrl`, and `jobLogs`.
+
+`jobLogs = true` makes the ESP32 print serial lines such as job claim, validation result, quota result, send/dial attempt, and final status. Set it false to quiet those job logs.
+
+## Test Checklist
+1. Add the target number under `sim_module/allowed_numbers/items`.
+2. Confirm `sim_module/config.active` is true.
+3. Set `ttgo_tcall/settings/runtime/jobLogs` to true.
+4. Create one SMS or call job with `status = pending`.
+5. Watch Serial for `[JOB]` lines.
+6. Confirm the job leaves `pending`.
+7. Confirm a matching log appears under `sms_logs` or `call_logs`.
+
+## Rails Implementation Notes
+- Use server timestamps for `created_at`.
+- Keep phone numbers normalized to E.164 where possible.
+- Use the same safe document ID rule for allowed numbers: keep letters, digits, `+`, `_`, `-`; replace other characters with `_`.
+- Never place Firebase service-account JSON on the ESP32.

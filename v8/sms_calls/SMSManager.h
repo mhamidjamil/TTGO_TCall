@@ -7,6 +7,10 @@ class SMSManager {
 public:
   bool begin();
   bool sendMessage(const String &number, const String &message);
+  String listMessages();
+  String readMessage(int index);
+  bool deleteMessage(int index);
+  bool deleteAllMessages();
 };
 
 #endif

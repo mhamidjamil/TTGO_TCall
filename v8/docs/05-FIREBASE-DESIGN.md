@@ -1,12 +1,9 @@
 # v8 Firebase Design
 
 ## Scope
-Firebase Realtime Database is the cloud direction for v8.
+Firestore is the primary data plane for the GSM gateway. It stores device health, allowed numbers, outgoing job queues, audit logs, quotas by log count, and SIM module archives.
 
-## Why Realtime Database For v8
-- The device workflow is polling-based and updates small JSON documents frequently.
-- Realtime Database is a better fit for command queues, counters, and telemetry snapshots.
-- Firestore can still be used for a future dashboard or archival layer, but it is not the first-class device path for this firmware.
+Firebase Realtime Database remains in v8 only for legacy telemetry snapshots, runtime settings, and counter compatibility.
 
 ## Initial Design Intent
 - Use a polling-based command model.
@@ -14,7 +11,7 @@ Firebase Realtime Database is the cloud direction for v8.
 - Claim work atomically to avoid duplicate sends.
 - Preserve local fallback behavior when internet is unavailable.
 - Keep device-side configuration isolated from any service-account material.
-- Server posting details live in [10-SERVER-SMS-FLOW.md](10-SERVER-SMS-FLOW.md).
+- Server posting details live in [10-SERVER-SMS-FLOW.md](10-SERVER-SMS-FLOW.md). Queue writers should create Firestore jobs under `sim_module/sms_jobs/items` and `sim_module/call_jobs/items`.
 
 ## What The ESP32 Actually Uses
 - WiFi STA mode means the ESP32 is acting as a client connecting to your router.
@@ -23,12 +20,19 @@ Firebase Realtime Database is the cloud direction for v8.
 - The service-account JSON belongs only on a backend or local admin tool, never on the ESP32.
 
 ## Proposed Paths
-- Commands: `/ttgo_tcall/commands/pending`
-- Command history: `/ttgo_tcall/commands/history`
+- Legacy RTDB commands: `/ttgo_tcall/commands/pending`
+- Legacy RTDB command history: `/ttgo_tcall/commands/history`
 - Counters: `/ttgo_tcall/counters`
 - Device status: `/ttgo_tcall/status`
 - Telemetry: `/ttgo_tcall/telemetry`
 - Runtime settings: `/ttgo_tcall/settings/runtime`
+- Firestore device/settings document: `sim_module/config`
+- Firestore allowed numbers: `sim_module/allowed_numbers/items`
+- Firestore SMS jobs: `sim_module/sms_jobs/items`
+- Firestore call jobs: `sim_module/call_jobs/items`
+- Firestore SMS logs: `sim_module/sms_logs/items`
+- Firestore call logs: `sim_module/call_logs/items`
+- Firestore SIM module archive paths: `sim_module/sms/by_number` and `sim_module/calls/by_number`
 
 ## Folder-Only Shape
 The root `ttgo_tcall` node is now treated as a container for folders only. Leaf variables should live under their parent folders.
@@ -71,14 +75,174 @@ The root `ttgo_tcall` node is now treated as a container for folders only. Leaf 
 {
 	"intervalOfDhtSeconds": 15,
 	"showFirebasePushLogs": true,
+	"jobLogs": true,
 	"dailySmsLimit": 200,
 	"weeklySmsLimit": 950,
 	"monthlySmsLimit": 4900,
+	"ntfyUrl": "https://ntfy.innovorix.com/oracle_ntfy",
+	"wifiSsid1": "",
+	"wifiPass1": "",
+	"wifiSsid2": "",
+	"wifiPass2": "",
 	"updatedAtMs": 1712345678000
 }
 ```
 
-## Data Model
+WiFi pairs are optional and managed from the dashboard WiFi tab. The device reads them on sync and persists them to SPIFFS; they apply on the next reboot. Empty values are ignored.
+
+## Firestore Gateway Data Model
+
+### Single Module Shape
+This project currently uses one TTGO module. Gateway state lives under the existing `sim_module` collection to avoid multiple competing roots.
+
+### Config Document
+Path: `sim_module/config` — gateway policy and editable lists.
+
+```json
+{
+	"name": "TTGO Bedroom",
+	"active": true,
+	"poll_interval_seconds": 3,
+	"missed_call_mode": true,
+	"daily_sms_default_limit": 5,
+	"daily_call_default_limit": 5,
+	"blockedCallers": ["JAZZ"],
+	"blockedSmsSenders": ["JAZZ"]
+}
+```
+
+`active = false` blocks pending outgoing jobs. There is no per-device identity — this is a single-device gateway, so any pending job is processed.
+
+### Device Document
+Path: `sim_module/device` — heartbeat / health, written by the firmware.
+
+```json
+{
+	"name": "TTGO Bedroom",
+	"active": true,
+	"last_seen_at": "timestamp",
+	"last_seen_epoch": 1780000000,
+	"signal_strength": 22,
+	"battery_percent": 84,
+	"network_operator": "Jazz",
+	"poll_interval_seconds": 3,
+	"missed_call_mode": true
+}
+```
+
+### Allowed Numbers
+Path: `sim_module/allowed_numbers/items/{safe_phone_number}`
+
+```json
+{
+	"phone_number": "+923001111111",
+	"enabled": true,
+	"sms_limit_per_day": 5,
+	"call_limit_per_day": 5,
+	"notes": "Owner",
+	"updated_at": "timestamp"
+}
+```
+
+Document IDs are sanitized the same way as firmware: letters, digits, `+`, `_`, and `-` are preserved; other characters become `_`.
+
+### SMS Jobs
+Path: `sim_module/sms_jobs/items/{auto_id}`
+
+```json
+{
+	"phone_number": "+923001111111",
+	"message": "Hello",
+	"status": "pending",
+	"created_at": "timestamp",
+	"processing_started_at": null,
+	"completed_at": null,
+	"error": null
+}
+```
+
+Statuses: `pending`, `processing`, `sent`, `failed`, `blocked`, `quota_exceeded`.
+
+### Call Jobs
+Path: `sim_module/call_jobs/items/{auto_id}`
+
+```json
+{
+	"phone_number": "+923001111111",
+	"status": "pending",
+	"created_at": "timestamp",
+	"processing_started_at": null,
+	"completed_at": null,
+	"user_picked": false,
+	"duration_seconds": 0,
+	"error": null
+}
+```
+
+Statuses: `pending`, `processing`, `completed`, `failed`, `blocked`, `quota_exceeded`.
+
+### SMS Logs
+Path: `sim_module/sms_logs/items/{auto_id}`
+
+```json
+{
+	"direction": "outgoing",
+	"phone_number": "+923001111111",
+	"message": "Hello",
+	"status": "sent",
+	"error": "",
+	"timestamp": "timestamp",
+	"timestamp_epoch": 1780000000,
+	"day_key": "2026-06-16"
+}
+```
+
+Directions: `incoming`, `outgoing`.
+
+### Call Logs
+Path: `sim_module/call_logs/items/{auto_id}`
+
+```json
+{
+	"direction": "outgoing",
+	"phone_number": "+923001111111",
+	"duration_seconds": 8,
+	"answered": false,
+	"status": "completed",
+	"error": "",
+	"timestamp": "timestamp",
+	"timestamp_epoch": 1780000000,
+	"day_key": "2026-06-16"
+}
+```
+
+Directions: `incoming`, `outgoing`.
+
+## Queue Processing
+Every poll cycle:
+
+1. Fetch one pending SMS job.
+2. Fetch one pending call job.
+3. Validate `sim_module/config.active`.
+4. Validate `sim_module/allowed_numbers/items/{phone_number}` exists and is enabled.
+5. Count successful outgoing logs for the current `day_key`.
+6. Execute the GSM action.
+7. Write an audit log.
+8. Update final job status.
+
+The firmware keeps one polling cycle; it does not create separate SMS/call intervals.
+
+### Stuck Job Recovery
+Once per minute, the device scans `sim_module/sms_jobs/items` and `sim_module/call_jobs/items`. Any `processing` job with `processing_started_epoch` older than 5 minutes is reset to `pending` and marked with `error = recovered_from_stale_processing`.
+
+### Quotas
+Daily quota is counted from logs, not a separate counter collection:
+
+- SMS usage: successful outgoing `sim_module/sms_logs/items` with `status = sent`.
+- Call usage: successful outgoing `sim_module/call_logs/items` with `status = completed`.
+- Reset: automatic through `day_key`, based on UTC date from device time.
+
+## Legacy RTDB Data Model
 
 ### Pending Commands
 Each pending command should look like this:
@@ -100,6 +264,8 @@ Each pending command should look like this:
 3. `sent` - SMS sent successfully.
 4. `errored` - rejected or failed, with `errorReason`.
 
+New implementations should prefer Firestore `sim_module/sms_jobs/items`; this RTDB path is retained for older tooling.
+
 ### Counters
 Store counters as a single snapshot object:
 ```json
@@ -115,9 +281,37 @@ Store counters as a single snapshot object:
 Telemetry should contain sensor values and a timestamp.
 
 ### Runtime Settings
-Runtime settings should contain telemetry interval, log verbosity, and SMS limit controls.
+Runtime settings should contain telemetry interval, log verbosity, SMS limit controls, and `ntfyUrl`.
 
 If runtime keys are missing or invalid, device firmware should create/heal them with safe defaults and print an operator-facing serial log.
+
+### Firestore SIM Module
+Firestore collection `sim_module` stores one simple settings document, nested gateway collections, and phone-number-based event documents.
+
+- `sim_module/config` - device state and editable block lists.
+- `sim_module/allowed_numbers/items` - outgoing permission and quotas.
+- `sim_module/sms_jobs/items` - outgoing SMS queue.
+- `sim_module/call_jobs/items` - outgoing call queue.
+- `sim_module/sms_logs/items` - SMS audit trail.
+- `sim_module/call_logs/items` - call audit trail.
+- `sim_module/sms/by_number/{sender_or_number}` - latest SMS details for that sender.
+- `sim_module/calls/by_number/{caller_number}` - latest call details for that caller.
+
+`sim_module/config` should contain:
+
+```json
+{
+	"active": true,
+	"blockedCallers": ["+923001234567", "100"],
+	"blockedSmsSenders": ["Jazz", "samosa", "100"]
+}
+```
+
+Event documents contain `type`, `number`, `documentId`, `message`, `blocked`, `source`, `pakistanTime`, `receivedAtPakistan`, `updatedAtPakistan`, and `uptimeSeconds`. SMS documents also include `simIndex` when the message came from SIM memory.
+
+Firestore paths must alternate collection/document. Because of that, `sim_module/sms/{number}` is not a valid document path, so the firmware uses `sim_module/sms/by_number/{number}`.
+
+On startup, firmware creates `sim_module/config`, `sim_module/sms`, and `sim_module/calls` if missing. It also deletes legacy documents under `entries`, `numbers`, `_meta`, blocked buckets, and old top-level gateway collections.
 
 ## Device Auth Direction
 - Realtime Database access should use Firebase Authentication from the device.
@@ -147,10 +341,10 @@ If runtime keys are missing or invalid, device firmware should create/heal them 
 }
 ```
 
-### Firestore (reference only, not the v8 device path)
+### Firestore
 ```text
-Firestore rules are not used by the current ESP32 firmware path.
-If Firestore is chosen later, the data model and code paths must be rewritten.
+Allow authenticated device users to read/write the sim_module collection during development.
+Tighten this rule for production device accounts.
 ```
 
 ## What `auth failed code=400` Usually Means

@@ -1,17 +1,21 @@
 #include "WebDashboard.h"
 
+#include <FS.h>
+#include <SPIFFS.h>
 #include <WebServer.h>
 #include "FirebaseManager.h"
+#include "NtfyManager.h"
 #include "WiFiManager.h"
 
 namespace {
 WebServer *server = nullptr;
 }
 
-bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager) {
+bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager, NtfyManager &incomingNtfyManager) {
   config = &incomingConfig;
   wifiManager = &incomingWiFiManager;
   firebaseManager = &incomingFirebaseManager;
+  ntfyManager = &incomingNtfyManager;
 
   if (server != nullptr) {
     delete server;
@@ -21,8 +25,14 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
   server = new WebServer(config->webServerPort);
 
   server->on("/", [this]() {
-    server->send(200, "text/plain", "TTGO T-Call v8 running");
+    server->sendHeader("Location", "/dashboard.html");
+    server->send(302, "text/plain", "dashboard");
   });
+
+  server->serveStatic("/dashboard.html", SPIFFS, "/dashboard.html");
+  server->serveStatic("/dashboard.css", SPIFFS, "/dashboard.css");
+  server->serveStatic("/dashboard.js", SPIFFS, "/dashboard.js");
+  server->serveStatic("/version.txt", SPIFFS, "/version.txt");
 
   server->on("/api/status", [this]() {
     String payload = String("{\"mode\":\"") + wifiManager->modeName() +
@@ -30,6 +40,40 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
                      String("\",\"firebase\":") + (firebaseManager->isReady() ? "true" : "false") +
                      String("}");
     server->send(200, "application/json", payload);
+  });
+
+  server->on("/api/firebase-web-config", [this]() {
+    String authDomain = String(config->firebaseProjectId) + ".firebaseapp.com";
+    String payload = String("{\"projectId\":\"") + config->firebaseProjectId +
+                     String("\",\"apiKey\":\"") + config->firebaseApiKey +
+                     String("\",\"authDomain\":\"") + authDomain +
+                     String("\",\"databaseURL\":\"") + config->firebaseDatabaseUrl +
+                     String("\",\"deviceId\":\"") + config->deviceId +
+                     String("\",\"defaultCountryCode\":\"") + config->defaultCountryCode +
+                     String("\",\"useAnonymous\":") + (config->firebaseUseAnonymous ? "true" : "false") +
+                     String("}");
+    server->send(200, "application/json", payload);
+  });
+
+  server->on("/api/notify-test", HTTP_POST, [this]() {
+    bool ok = ntfyManager != nullptr && ntfyManager->test();
+    String message = ok ? String("notification sent") : (ntfyManager != nullptr ? ntfyManager->lastError() : String("ntfy manager missing"));
+    message.replace("\"", "\\\"");
+    String payload = String("{\"ok\":") + (ok ? "true" : "false") +
+                     String(",\"message\":\"") + message +
+                     String("\"}");
+    server->send(ok ? 200 : 500, "application/json", payload);
+  });
+
+  server->on("/api/sync-runtime", HTTP_POST, [this]() {
+    runtimeSyncRequested = true;
+    server->send(202, "application/json", "{\"ok\":true,\"message\":\"runtime sync queued\"}");
+  });
+
+  server->on("/api/reboot", HTTP_POST, [this]() {
+    server->send(202, "application/json", "{\"ok\":true,\"message\":\"rebooting\"}");
+    delay(250);
+    ESP.restart();
   });
 
   server->on("/docs", [this]() {
@@ -68,21 +112,52 @@ h1,h2{margin-top:24px}
 
 <h2>Realtime Database path layout</h2>
 <ul>
-<li><code>/ttgo_tcall/commands/pending</code> - incoming commands for the ESP32</li>
-<li><code>/ttgo_tcall/commands/history</code> - processed command archive</li>
+<li><code>/ttgo_tcall/settings/runtime</code> - runtime flags such as <code>jobLogs</code>, push logs, DHT interval, and SMS limits</li>
 <li><code>/ttgo_tcall/counters</code> - daily/weekly/monthly SMS counters</li>
 <li><code>/ttgo_tcall/status</code> - device status snapshot</li>
 <li><code>/ttgo_tcall/telemetry</code> - temperature/humidity and counters with timestamp</li>
 </ul>
 
-<h2>Pending SMS format for the server team</h2>
+<h2>Firestore gateway path layout</h2>
+<ul>
+<li><code>sim_module/config</code> - gateway flags, limits, block lists, active switch, device name</li>
+<li><code>sim_module/device</code> - heartbeat / health (battery, signal, operator, last seen)</li>
+<li><code>sim_module/allowed_numbers/items/{+E164}</code> - outgoing permission and per-number quotas</li>
+<li><code>sim_module/sms_jobs/items</code> - pending, processing, sent, failed, blocked, or quota_exceeded SMS work</li>
+<li><code>sim_module/call_jobs/items</code> - pending, processing, completed, failed, blocked, quota_exceeded, or user_picked call work</li>
+<li><code>sim_module/sms_logs/items</code> and <code>sim_module/call_logs/items</code> - audit trail</li>
+</ul>
+
+<h2>SMS job format for Rails or another server</h2>
 <pre>{
-  "type": "sms",
-  "number": "+923001234567",
+  "phone_number": "+923001234567",
   "message": "hello",
   "status": "pending",
-  "createdAtMs": 1712345678000
+  "created_at": "server timestamp",
+  "processing_started_at": null,
+  "completed_at": null,
+  "error": null
 }</pre>
+
+<h2>Call job format for Rails or another server</h2>
+<pre>{
+  "phone_number": "+923001234567",
+  "status": "pending",
+  "created_at": "server timestamp",
+  "processing_started_at": null,
+  "completed_at": null,
+  "user_picked": false,
+  "duration_seconds": 0,
+  "error": null
+}</pre>
+
+<h2>Outgoing policy</h2>
+<ul>
+<li>Before queueing a job, add the target number under <code>sim_module/allowed_numbers/items/{+E164}</code> with <code>enabled = true</code>.</li>
+<li>If a job ends with <code>blocked</code> and <code>number_not_allowed</code>, allow the number and retry the job.</li>
+<li>Daily SMS and call quotas are counted from Firestore logs for the current UTC day.</li>
+<li>Set <code>ttgo_tcall/settings/runtime/jobLogs</code> to <code>true</code> to print serial <code>[JOB]</code> lines for claims, validation, quota checks, send/dial attempts, and final status.</li>
+</ul>
 
 <h2>Recommended dev rules</h2>
 <pre>{
@@ -95,7 +170,8 @@ h1,h2{margin-top:24px}
 <h2>On boot</h2>
 <ul>
 <li>The device first restores counters from Firebase.</li>
-<li>It waits 60 seconds before polling pending SMS.</li>
+<li>The dashboard can request a runtime settings sync with the Sync Device Settings button.</li>
+<li>The main loop uses one polling cycle for SMS and call queues.</li>
 <li>Telemetry includes temperature, humidity, counts, and timestamp.</li>
 </ul>
 </body></html>
@@ -111,6 +187,14 @@ void WebDashboard::loop() {
   if (server != nullptr) {
     server->handleClient();
   }
+}
+
+bool WebDashboard::consumeRuntimeSyncRequest() {
+  if (!runtimeSyncRequested) {
+    return false;
+  }
+  runtimeSyncRequested = false;
+  return true;
 }
 
 String WebDashboard::docsUrl() const {

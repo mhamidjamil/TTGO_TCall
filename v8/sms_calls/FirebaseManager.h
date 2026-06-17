@@ -13,19 +13,47 @@ struct FirebaseCommand {
   String errorReason;
 };
 
+struct FirestoreJob {
+  String id;
+  String phoneNumber;
+  String message;
+  String status;
+  String error;
+  bool userPicked = false;
+  int durationSeconds = 0;
+};
+
+struct FirestoreAllowedNumber {
+  bool found = false;
+  bool enabled = false;
+  int smsLimitPerDay = 0;
+  int callLimitPerDay = 0;
+  String notes;
+};
+
 struct FirebaseRuntimeSettings {
   uint32_t intervalOfDhtSeconds = 15;
   bool showFirebasePushLogs = true;
   bool showThingSpeakPushLogs = true;
+  bool jobLogs = true;
   int dailySmsLimit = 200;
   int weeklySmsLimit = 950;
   int monthlySmsLimit = 4900;
+  String ntfyUrl;
+  // Desired WiFi pairs, managed from the dashboard via the RTDB runtime node.
+  // The device persists them to SPIFFS on sync; they apply on next reboot.
+  String wifiSsid1;
+  String wifiPass1;
+  String wifiSsid2;
+  String wifiPass2;
   bool createdIntervalOfDht = false;
   bool createdShowFirebasePushLogs = false;
   bool createdShowThingSpeakPushLogs = false;
+  bool createdJobLogs = false;
   bool createdDailySmsLimit = false;
   bool createdWeeklySmsLimit = false;
   bool createdMonthlySmsLimit = false;
+  bool createdNtfyUrl = false;
 };
 
 class FirebaseManager {
@@ -50,10 +78,63 @@ public:
                            bool telemetryPushOk,
                            const String &telemetryMessage,
                            unsigned long epochSeconds);
-bool fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
-                             uint32_t defaultIntervalOfDhtSeconds,
-                             bool defaultShowFirebasePushLogs,
-                             bool defaultShowThingSpeakPushLogs = true);
+  bool fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
+                            uint32_t defaultIntervalOfDhtSeconds,
+                            bool defaultShowFirebasePushLogs,
+                            bool defaultShowThingSpeakPushLogs = true,
+                            const String &defaultNtfyUrl = String());
+  bool pushSimModuleEvent(const String &type,
+                          const String &number,
+                          const String &message,
+                          bool blocked,
+                          const String &pakistanTimestamp,
+                          int simIndex = -1);
+  bool bootstrapGateway(const String &deviceName,
+                        int pollIntervalSeconds,
+                        int dailySmsDefaultLimit,
+                        int dailyCallDefaultLimit,
+                        bool missedCallMode);
+  bool fetchNextSmsJob(FirestoreJob &outJob);
+  bool fetchNextCallJob(FirestoreJob &outJob);
+  bool fetchGatewayActive(bool &outActive);
+  bool updateSmsJobStatus(const FirestoreJob &job, const String &status, const String &errorReason = String());
+  bool updateCallJobStatus(const FirestoreJob &job,
+                           const String &status,
+                           bool userPicked,
+                           int durationSeconds,
+                           const String &errorReason = String());
+  bool fetchAllowedNumber(const String &phoneNumber, FirestoreAllowedNumber &outAllowedNumber);
+  bool pushSmsLog(const String &direction,
+                  const String &phoneNumber,
+                  const String &message,
+                  unsigned long epochSeconds,
+                  const String &status = String("received"),
+                  const String &errorReason = String());
+  bool pushCallLog(const String &direction,
+                   const String &phoneNumber,
+                   int durationSeconds,
+                   bool answered,
+                   unsigned long epochSeconds,
+                   const String &status = String("received"),
+                   const String &errorReason = String());
+  bool countDailySmsUsage(const String &phoneNumber, const String &dayKey, int &outCount);
+  bool countDailyCallUsage(const String &phoneNumber, const String &dayKey, int &outCount);
+  bool pushDeviceHeartbeat(const String &deviceName,
+                           int batteryPercent,
+                           int signalStrength,
+                           const String &networkOperator,
+                           unsigned long epochSeconds,
+                           int pollIntervalSeconds,
+                           bool missedCallMode);
+  bool recoverStuckJobs(unsigned long cutoffEpochSeconds);
+  bool fetchSimBlockLists(String *blockedCallers,
+                          size_t maxBlockedCallers,
+                          size_t &blockedCallerCount,
+                          String *blockedSmsSenders,
+                          size_t maxBlockedSmsSenders,
+                          size_t &blockedSmsSenderCount);
+  bool bootstrapSimModulePaths();
+  bool cleanupLegacySimModulePaths();
   String lastError() const;
 
 private:
@@ -64,8 +145,18 @@ private:
   bool tryUpdateDatabaseUrlFromBody(const String &responseBody);
   String rebuildUrlWithCurrentBase(const String &originalUrl) const;
   String buildPathUrl(const String &path) const;
+  String buildFirestoreUrl(const String &path) const;
   bool httpGetJson(const String &url, String &responseBody, int &statusCode);
   bool httpPatchJson(const String &url, const String &payload, String &responseBody, int &statusCode);
+  bool httpGetBearer(const String &url, String &responseBody, int &statusCode);
+  bool httpPostBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
+  bool httpPatchBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
+  bool httpDeleteBearer(const String &url, String &responseBody, int &statusCode);
+  bool fetchFirestoreSettingsList(const String &fieldName, String *numbers, size_t maxNumbers, size_t &numberCount);
+  bool ensureConfigDocument();
+  bool deleteFirestoreCollectionDocuments(const String &collectionPath);
+  bool deleteFirestoreDocument(const String &documentPath);
+  bool ensureFirestoreDocument(const String &documentPath);
 
   V8Config config{};
   bool ready = false;

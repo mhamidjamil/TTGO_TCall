@@ -12,6 +12,14 @@ struct V8Config {
   char wifiPass[64];
   char wifiSsidBackup[64];
   char wifiPassBackup[64];
+  // User-editable WiFi pairs saved in SPIFFS from the dashboard. Empty by
+  // default. Tried BEFORE the secrets.h networks above so a new workplace can be
+  // configured without reflashing; if both fail the device falls back to the
+  // secrets networks and then AP mode.
+  char userWifiSsid1[64];
+  char userWifiPass1[64];
+  char userWifiSsid2[64];
+  char userWifiPass2[64];
   char apSsid[32];
   char apPass[32];
   int webServerPort;
@@ -20,6 +28,7 @@ struct V8Config {
   int weeklySmsLimit;
   int monthlySmsLimit;
   char dashboardPassword[64];
+  char deviceId[48];
   char deviceName[64];
   char ownerName[64];
   char myNumber[24];
@@ -37,6 +46,7 @@ struct V8Config {
   char firebaseCounterPath[96];
   char firebaseStatusPath[96];
   char firebaseTelemetryPath[96];
+  char ntfyUrl[160];
   unsigned long thingSpeakChannelId;
   char thingSpeakWriteApiKey[64];
 };
@@ -46,6 +56,9 @@ public:
   void begin();
   bool save();
   const V8Config &get() const;
+  // Persist the dashboard-entered WiFi pairs to SPIFFS. Applied on next reboot.
+  bool updateUserWifi(const String &ssid1, const String &pass1,
+                      const String &ssid2, const String &pass2);
 
 private:
   void loadDefaults();

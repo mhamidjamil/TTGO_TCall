@@ -16,6 +16,7 @@
 #define DASHBOARD_PASSWORD_DEFAULT "YOUR_DASHBOARD_PASSWORD"
 
 // Device identity defaults
+#define DEVICE_ID_DEFAULT "device_001"
 #define DEVICE_NAME_DEFAULT "TTGO T-Call v8"
 #define OWNER_NAME_DEFAULT "Device Owner"
 #define MY_NUMBER_DEFAULT "+92XXXXXXXXXX"
@@ -51,12 +52,15 @@
 #define FIREBASE_STATUS_PATH_DEFAULT "/ttgo_tcall/status"
 #define FIREBASE_TELEMETRY_PATH_DEFAULT "/ttgo_tcall/telemetry"
 
+// ntfy defaults
+#define NTFY_URL_DEFAULT "https://ntfy.innovorix.com/oracle_ntfy"
+
 // ThingSpeak defaults
 #define THINGSPEAK_CHANNEL_ID_DEFAULT 0UL
 #define THINGSPEAK_WRITE_API_KEY_DEFAULT "YOUR_THINGSPEAK_WRITE_API_KEY"
 
 // Polling and limits
-#define POLLING_INTERVAL_SECONDS_DEFAULT 5
+#define POLLING_INTERVAL_SECONDS_DEFAULT 3
 #define DAILY_SMS_LIMIT_DEFAULT 200
 #define WEEKLY_SMS_LIMIT_DEFAULT 950
 #define MONTHLY_SMS_LIMIT_DEFAULT 4900
