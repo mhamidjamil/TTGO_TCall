@@ -29,12 +29,16 @@ FirebaseConfig fbconfig;
 Firebase_ESP_Client firebase;
 #endif
 
-constexpr const char *kSimSettingsPath = "sim_module/settings";
-constexpr const char *kAllowedNumbersPath = "sim_module/settings/allowed_numbers";
-constexpr const char *kSmsJobsPath = "sim_module/settings/sms_jobs";
-constexpr const char *kCallJobsPath = "sim_module/settings/call_jobs";
-constexpr const char *kSmsLogsPath = "sim_module/settings/sms_logs";
-constexpr const char *kCallLogsPath = "sim_module/settings/call_logs";
+// Flat, namespaced Firestore layout. Firestore paths must alternate
+// collection/document, so each entity is a document under sim_module with an
+// "items" subcollection holding its records.
+constexpr const char *kConfigPath = "sim_module/config";          // doc: flags, limits, block lists, active, name
+constexpr const char *kDevicePath = "sim_module/device";          // doc: heartbeat / health
+constexpr const char *kAllowedNumbersPath = "sim_module/allowed_numbers/items";
+constexpr const char *kSmsJobsPath = "sim_module/sms_jobs/items";
+constexpr const char *kCallJobsPath = "sim_module/call_jobs/items";
+constexpr const char *kSmsLogsPath = "sim_module/sms_logs/items";
+constexpr const char *kCallLogsPath = "sim_module/call_logs/items";
 
 void setHttpStatusError(String &error, const char *op, int statusCode, const String &body) {
   error = String(op) + String(" failed code=") + statusCode + String(" body=") + body;
@@ -260,7 +264,6 @@ void parseFirestoreJob(const JsonObjectConst &document, FirestoreJob &outJob) {
   outJob = FirestoreJob();
   outJob.id = firestoreDocumentId(document["name"] | "");
   JsonObjectConst fields = document["fields"].as<JsonObjectConst>();
-  outJob.deviceId = firestoreStringField(fields, "device_id");
   outJob.phoneNumber = firestoreStringField(fields, "phone_number");
   outJob.message = firestoreStringField(fields, "message");
   outJob.status = firestoreStringField(fields, "status");
@@ -893,20 +896,24 @@ bool FirebaseManager::pushSimModuleEvent(const String &type,
   return true;
 }
 
-bool FirebaseManager::bootstrapGatewayCollections(const String &deviceId,
-                                                  int pollIntervalSeconds,
-                                                  int dailySmsDefaultLimit,
-                                                  int dailyCallDefaultLimit,
-                                                  bool missedCallMode) {
+bool FirebaseManager::bootstrapGateway(const String &deviceName,
+                                       int pollIntervalSeconds,
+                                       int dailySmsDefaultLimit,
+                                       int dailyCallDefaultLimit,
+                                       bool missedCallMode) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  String url = buildFirestoreUrl(kSimSettingsPath);
+  // Make sure the config document and its block-list arrays exist first.
+  if (!ensureConfigDocument()) {
+    return false;
+  }
+
+  String url = buildFirestoreUrl(kConfigPath);
   DynamicJsonDocument doc(1536);
   JsonObject fields = doc.createNestedObject("fields");
-  setStringField(fields, "name", deviceId);
-  setStringField(fields, "device_id", deviceId);
+  setStringField(fields, "name", deviceName);
   setBoolField(fields, "active", true);
   setIntField(fields, "poll_interval_seconds", pollIntervalSeconds);
   setBoolField(fields, "missed_call_mode", missedCallMode);
@@ -921,7 +928,6 @@ bool FirebaseManager::bootstrapGatewayCollections(const String &deviceId,
   int statusCode = 0;
   String patchUrl = url +
                     "?updateMask.fieldPaths=name"
-                    "&updateMask.fieldPaths=device_id"
                     "&updateMask.fieldPaths=active"
                     "&updateMask.fieldPaths=poll_interval_seconds"
                     "&updateMask.fieldPaths=missed_call_mode"
@@ -940,7 +946,7 @@ bool FirebaseManager::bootstrapGatewayCollections(const String &deviceId,
   return true;
 }
 
-bool FirebaseManager::fetchNextSmsJob(const String &deviceId, FirestoreJob &outJob) {
+bool FirebaseManager::fetchNextSmsJob(FirestoreJob &outJob) {
   if (!ensureAuthenticated()) {
     return false;
   }
@@ -970,9 +976,6 @@ bool FirebaseManager::fetchNextSmsJob(const String &deviceId, FirestoreJob &outJ
     FirestoreJob candidate;
     parseFirestoreJob(item.as<JsonObjectConst>(), candidate);
     if (candidate.status != "pending") {
-      continue;
-    }
-    if (candidate.deviceId.length() > 0 && candidate.deviceId != deviceId) {
       continue;
     }
 
@@ -1007,7 +1010,7 @@ bool FirebaseManager::fetchNextSmsJob(const String &deviceId, FirestoreJob &outJ
   return false;
 }
 
-bool FirebaseManager::fetchNextCallJob(const String &deviceId, FirestoreJob &outJob) {
+bool FirebaseManager::fetchNextCallJob(FirestoreJob &outJob) {
   if (!ensureAuthenticated()) {
     return false;
   }
@@ -1037,9 +1040,6 @@ bool FirebaseManager::fetchNextCallJob(const String &deviceId, FirestoreJob &out
     FirestoreJob candidate;
     parseFirestoreJob(item.as<JsonObjectConst>(), candidate);
     if (candidate.status != "pending") {
-      continue;
-    }
-    if (candidate.deviceId.length() > 0 && candidate.deviceId != deviceId) {
       continue;
     }
 
@@ -1074,7 +1074,7 @@ bool FirebaseManager::fetchNextCallJob(const String &deviceId, FirestoreJob &out
   return false;
 }
 
-bool FirebaseManager::fetchDeviceActive(const String &deviceId, bool &outActive) {
+bool FirebaseManager::fetchGatewayActive(bool &outActive) {
   if (!ensureAuthenticated()) {
     return false;
   }
@@ -1082,7 +1082,7 @@ bool FirebaseManager::fetchDeviceActive(const String &deviceId, bool &outActive)
   outActive = true;
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(kSimSettingsPath), response, statusCode)) {
+  if (!httpGetBearer(buildFirestoreUrl(kConfigPath), response, statusCode)) {
     return false;
   }
 
@@ -1223,8 +1223,7 @@ bool FirebaseManager::fetchAllowedNumber(const String &phoneNumber, FirestoreAll
   return true;
 }
 
-bool FirebaseManager::pushSmsLog(const String &deviceId,
-                                 const String &direction,
+bool FirebaseManager::pushSmsLog(const String &direction,
                                  const String &phoneNumber,
                                  const String &message,
                                  unsigned long epochSeconds,
@@ -1237,7 +1236,6 @@ bool FirebaseManager::pushSmsLog(const String &deviceId,
   String documentId = safeFirestoreDocumentId(String("sms_") + String(millis()) + "_" + phoneNumber);
   DynamicJsonDocument doc(1536);
   JsonObject fields = doc.createNestedObject("fields");
-  setStringField(fields, "device_id", deviceId);
   setStringField(fields, "direction", direction);
   setStringField(fields, "phone_number", phoneNumber);
   setStringField(fields, "message", message);
@@ -1265,8 +1263,7 @@ bool FirebaseManager::pushSmsLog(const String &deviceId,
   return true;
 }
 
-bool FirebaseManager::pushCallLog(const String &deviceId,
-                                  const String &direction,
+bool FirebaseManager::pushCallLog(const String &direction,
                                   const String &phoneNumber,
                                   int durationSeconds,
                                   bool answered,
@@ -1280,7 +1277,6 @@ bool FirebaseManager::pushCallLog(const String &deviceId,
   String documentId = safeFirestoreDocumentId(String("call_") + String(millis()) + "_" + phoneNumber);
   DynamicJsonDocument doc(1536);
   JsonObject fields = doc.createNestedObject("fields");
-  setStringField(fields, "device_id", deviceId);
   setStringField(fields, "direction", direction);
   setStringField(fields, "phone_number", phoneNumber);
   setIntField(fields, "duration_seconds", durationSeconds);
@@ -1391,7 +1387,7 @@ bool FirebaseManager::countDailyCallUsage(const String &phoneNumber, const Strin
   return true;
 }
 
-bool FirebaseManager::pushDeviceHeartbeat(const String &deviceId,
+bool FirebaseManager::pushDeviceHeartbeat(const String &deviceName,
                                           int batteryPercent,
                                           int signalStrength,
                                           const String &networkOperator,
@@ -1404,8 +1400,7 @@ bool FirebaseManager::pushDeviceHeartbeat(const String &deviceId,
 
   DynamicJsonDocument doc(1536);
   JsonObject fields = doc.createNestedObject("fields");
-  setStringField(fields, "name", deviceId);
-  setStringField(fields, "device_id", deviceId);
+  setStringField(fields, "name", deviceName);
   setBoolField(fields, "active", true);
   setTimestampField(fields, "last_seen_at", epochSeconds);
   setIntField(fields, "last_seen_epoch", (int)epochSeconds);
@@ -1421,9 +1416,8 @@ bool FirebaseManager::pushDeviceHeartbeat(const String &deviceId,
 
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(kSimSettingsPath) +
+  String url = buildFirestoreUrl(kDevicePath) +
                "?updateMask.fieldPaths=name"
-               "&updateMask.fieldPaths=device_id"
                "&updateMask.fieldPaths=active"
                "&updateMask.fieldPaths=last_seen_at"
                "&updateMask.fieldPaths=last_seen_epoch"
@@ -1520,7 +1514,7 @@ bool FirebaseManager::fetchSimBlockLists(String *blockedCallers,
   blockedCallerCount = 0;
   blockedSmsSenderCount = 0;
 
-  if (!ensureSimSettingsDocument()) {
+  if (!ensureConfigDocument()) {
     return false;
   }
 
@@ -1541,9 +1535,17 @@ bool FirebaseManager::bootstrapSimModulePaths() {
     return false;
   }
 
+  // Parent documents for the incoming archives and for each entity's "items"
+  // subcollection, so the collections show up cleanly in the console.
   const char *paths[] = {
       "sim_module/sms",
       "sim_module/calls",
+      "sim_module/allowed_numbers",
+      "sim_module/sms_jobs",
+      "sim_module/call_jobs",
+      "sim_module/sms_logs",
+      "sim_module/call_logs",
+      "sim_module/device",
   };
 
   for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
@@ -1552,7 +1554,7 @@ bool FirebaseManager::bootstrapSimModulePaths() {
     }
   }
 
-  if (!ensureSimSettingsDocument()) {
+  if (!ensureConfigDocument()) {
     return false;
   }
 
@@ -1574,6 +1576,13 @@ bool FirebaseManager::cleanupLegacySimModulePaths() {
       "sim_module/blocked_sms_senders/numbers",
       "sim_module/blocked_caller/numbers",
       "sim_module/blocked_sms_sender/numbers",
+      // Old flat-under-settings schema (pre v8.3) now superseded by the
+      // sim_module/<entity>/items layout.
+      "sim_module/settings/allowed_numbers",
+      "sim_module/settings/sms_jobs",
+      "sim_module/settings/call_jobs",
+      "sim_module/settings/sms_logs",
+      "sim_module/settings/call_logs",
       "sim_modules",
       "allowed_numbers",
       "sms_jobs",
@@ -1595,6 +1604,7 @@ bool FirebaseManager::cleanupLegacySimModulePaths() {
       "sim_module/blocked_sms_senders",
       "sim_module/blocked_caller",
       "sim_module/blocked_sms_sender",
+      "sim_module/settings",
   };
 
   for (size_t i = 0; i < sizeof(legacyDocuments) / sizeof(legacyDocuments[0]); ++i) {
@@ -1783,7 +1793,7 @@ bool FirebaseManager::httpDeleteBearer(const String &url, String &responseBody, 
 bool FirebaseManager::fetchFirestoreSettingsList(const String &fieldName, String *numbers, size_t maxNumbers, size_t &numberCount) {
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(kSimSettingsPath);
+  String url = buildFirestoreUrl(kConfigPath);
   if (!httpGetBearer(url, response, statusCode)) {
     return false;
   }
@@ -1806,8 +1816,8 @@ bool FirebaseManager::fetchFirestoreSettingsList(const String &fieldName, String
   return true;
 }
 
-bool FirebaseManager::ensureSimSettingsDocument() {
-  String url = buildFirestoreUrl(kSimSettingsPath);
+bool FirebaseManager::ensureConfigDocument() {
+  String url = buildFirestoreUrl(kConfigPath);
   String response;
   int statusCode = 0;
   if (!httpGetBearer(url, response, statusCode)) {
@@ -1819,11 +1829,11 @@ bool FirebaseManager::ensureSimSettingsDocument() {
   }
 
   if (statusCode != 404) {
-    setHttpStatusError(error, "firestore settings check", statusCode, response);
+    setHttpStatusError(error, "firestore config check", statusCode, response);
     return false;
   }
 
-  Serial.println("[FIRESTORE] sim_module/settings not found; creating gateway settings");
+  Serial.println("[FIRESTORE] sim_module/config not found; creating gateway config");
 
   DynamicJsonDocument doc(1024);
   JsonObject fields = doc.createNestedObject("fields");
@@ -1846,11 +1856,11 @@ bool FirebaseManager::ensureSimSettingsDocument() {
   }
 
   if (writeStatusCode < 200 || writeStatusCode >= 300) {
-    setHttpStatusError(error, "firestore settings create", writeStatusCode, writeResponse);
+    setHttpStatusError(error, "firestore config create", writeStatusCode, writeResponse);
     return false;
   }
 
-  Serial.println("[FIRESTORE] sim_module/settings created");
+  Serial.println("[FIRESTORE] sim_module/config created");
   return true;
 }
 

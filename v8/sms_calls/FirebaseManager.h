@@ -15,7 +15,6 @@ struct FirebaseCommand {
 
 struct FirestoreJob {
   String id;
-  String deviceId;
   String phoneNumber;
   String message;
   String status;
@@ -84,14 +83,14 @@ public:
                           bool blocked,
                           const String &pakistanTimestamp,
                           int simIndex = -1);
-  bool bootstrapGatewayCollections(const String &deviceId,
-                                   int pollIntervalSeconds,
-                                   int dailySmsDefaultLimit,
-                                   int dailyCallDefaultLimit,
-                                   bool missedCallMode);
-  bool fetchNextSmsJob(const String &deviceId, FirestoreJob &outJob);
-  bool fetchNextCallJob(const String &deviceId, FirestoreJob &outJob);
-  bool fetchDeviceActive(const String &deviceId, bool &outActive);
+  bool bootstrapGateway(const String &deviceName,
+                        int pollIntervalSeconds,
+                        int dailySmsDefaultLimit,
+                        int dailyCallDefaultLimit,
+                        bool missedCallMode);
+  bool fetchNextSmsJob(FirestoreJob &outJob);
+  bool fetchNextCallJob(FirestoreJob &outJob);
+  bool fetchGatewayActive(bool &outActive);
   bool updateSmsJobStatus(const FirestoreJob &job, const String &status, const String &errorReason = String());
   bool updateCallJobStatus(const FirestoreJob &job,
                            const String &status,
@@ -99,15 +98,13 @@ public:
                            int durationSeconds,
                            const String &errorReason = String());
   bool fetchAllowedNumber(const String &phoneNumber, FirestoreAllowedNumber &outAllowedNumber);
-  bool pushSmsLog(const String &deviceId,
-                  const String &direction,
+  bool pushSmsLog(const String &direction,
                   const String &phoneNumber,
                   const String &message,
                   unsigned long epochSeconds,
                   const String &status = String("received"),
                   const String &errorReason = String());
-  bool pushCallLog(const String &deviceId,
-                   const String &direction,
+  bool pushCallLog(const String &direction,
                    const String &phoneNumber,
                    int durationSeconds,
                    bool answered,
@@ -116,7 +113,7 @@ public:
                    const String &errorReason = String());
   bool countDailySmsUsage(const String &phoneNumber, const String &dayKey, int &outCount);
   bool countDailyCallUsage(const String &phoneNumber, const String &dayKey, int &outCount);
-  bool pushDeviceHeartbeat(const String &deviceId,
+  bool pushDeviceHeartbeat(const String &deviceName,
                            int batteryPercent,
                            int signalStrength,
                            const String &networkOperator,
@@ -150,7 +147,7 @@ private:
   bool httpPatchBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
   bool httpDeleteBearer(const String &url, String &responseBody, int &statusCode);
   bool fetchFirestoreSettingsList(const String &fieldName, String *numbers, size_t maxNumbers, size_t &numberCount);
-  bool ensureSimSettingsDocument();
+  bool ensureConfigDocument();
   bool deleteFirestoreCollectionDocuments(const String &collectionPath);
   bool deleteFirestoreDocument(const String &documentPath);
   bool ensureFirestoreDocument(const String &documentPath);

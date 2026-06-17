@@ -126,8 +126,17 @@ static String displayPhoneNumber(const String &raw) {
 static bool numbersMatch(const String &left, const String &right) {
   String leftDigits = digitsOnly(left);
   String rightDigits = digitsOnly(right);
+  // Alphanumeric sender IDs (e.g. "JAZZ", "Telenor") carry no digits, so the
+  // numeric comparison below can never match them. Compare them as case-
+  // insensitive text instead, otherwise such senders can never be blocked.
   if (leftDigits.length() == 0 || rightDigits.length() == 0) {
-    return false;
+    String leftText = left;
+    String rightText = right;
+    leftText.trim();
+    rightText.trim();
+    leftText.toLowerCase();
+    rightText.toLowerCase();
+    return leftText.length() > 0 && leftText == rightText;
   }
   if (leftDigits == rightDigits) {
     return true;
@@ -297,7 +306,7 @@ static void processIncomingCall(const String &rawNumber) {
   bool blocked = isBlockedNumber(number, blockedCallers, blockedCallerCount);
   bool firebaseOk = pushSimEvent("call", number, String(), blocked, pakistanTimestamp);
   if (firebaseManager.isReady()) {
-    firebaseManager.pushCallLog(runtimeConfig.deviceId, "incoming", number, 0, false, epochSeconds);
+    firebaseManager.pushCallLog("incoming", number, 0, false, epochSeconds);
   }
 
   Serial.print("[CALL] incoming number=");
@@ -330,7 +339,7 @@ static void processIncomingSms(const String &rawNumber, const String &message, i
   bool blocked = isBlockedNumber(number, blockedSmsSenders, blockedSmsSenderCount);
   bool firebaseOk = pushSimEvent("sms", number, message, blocked, pakistanTimestamp, smsIndex);
   if (firebaseManager.isReady()) {
-    firebaseManager.pushSmsLog(runtimeConfig.deviceId, "incoming", number, message, epochSeconds);
+    firebaseManager.pushSmsLog("incoming", number, message, epochSeconds);
   }
 
   Serial.print("[SMS] incoming index=");
@@ -436,13 +445,14 @@ static void handleModemEvents() {
   }
 }
 
-static void processPendingCommand() {
-  const String deviceId = runtimeConfig.deviceId;
+static bool processPendingCommand() {
   unsigned long now = currentEpochSeconds();
   String today = dayKeyFromEpoch(now);
+  bool claimedAny = false;
 
   FirestoreJob smsJob;
-  if (firebaseManager.fetchNextSmsJob(deviceId, smsJob)) {
+  if (firebaseManager.fetchNextSmsJob(smsJob)) {
+    claimedAny = true;
     logJob(String("sms claimed id=") + smsJob.id + " number=" + smsJob.phoneNumber);
     String normalizedNumber = normalizePhoneNumber(smsJob.phoneNumber);
     if (normalizedNumber.length() == 0) {
@@ -452,7 +462,7 @@ static void processPendingCommand() {
       bool active = true;
       FirestoreAllowedNumber allowed;
       int usage = 0;
-      if (!firebaseManager.fetchDeviceActive(deviceId, active)) {
+      if (!firebaseManager.fetchGatewayActive(active)) {
         logJob(String("sms failed id=") + smsJob.id + " reason=device_status_unavailable");
         firebaseManager.updateSmsJobStatus(smsJob, "failed", "device_status_unavailable");
       } else if (!active) {
@@ -476,7 +486,6 @@ static void processPendingCommand() {
           logJob(String("sms sending id=") + smsJob.id + " number=" + normalizedNumber + " usage=" + String(usage) + " limit=" + String(limit));
           bool sent = smsManager.sendMessage(normalizedNumber, smsJob.message);
           firebaseManager.pushSmsLog(
-              deviceId,
               "outgoing",
               normalizedNumber,
               smsJob.message,
@@ -498,7 +507,8 @@ static void processPendingCommand() {
   }
 
   FirestoreJob callJob;
-  if (firebaseManager.fetchNextCallJob(deviceId, callJob)) {
+  if (firebaseManager.fetchNextCallJob(callJob)) {
+    claimedAny = true;
     logJob(String("call claimed id=") + callJob.id + " number=" + callJob.phoneNumber);
     String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
     if (normalizedNumber.length() == 0) {
@@ -508,7 +518,7 @@ static void processPendingCommand() {
       bool active = true;
       FirestoreAllowedNumber allowed;
       int usage = 0;
-      if (!firebaseManager.fetchDeviceActive(deviceId, active)) {
+      if (!firebaseManager.fetchGatewayActive(active)) {
         logJob(String("call failed id=") + callJob.id + " reason=device_status_unavailable");
         firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
       } else if (!active) {
@@ -534,7 +544,6 @@ static void processPendingCommand() {
           int durationSeconds = 0;
           bool completed = callManager.placeMissedCall(normalizedNumber, missedCallRingMs, userPicked, durationSeconds);
           firebaseManager.pushCallLog(
-              deviceId,
               "outgoing",
               normalizedNumber,
               durationSeconds,
@@ -553,6 +562,18 @@ static void processPendingCommand() {
       }
     }
   }
+
+  // Surface liveness on serial: when nothing was claimed, print an idle line
+  // at most once per idle window so the operator can see polling is running
+  // without flooding the terminal on every 3s poll.
+  static unsigned long lastIdlePollLogMs = 0;
+  const unsigned long idlePollLogIntervalMs = 30000UL;
+  if (!claimedAny && millis() - lastIdlePollLogMs >= idlePollLogIntervalMs) {
+    lastIdlePollLogMs = millis();
+    logJob("poll idle: no pending sms/call jobs");
+  }
+
+  return claimedAny;
 }
 
 static void syncCountersFromCloud() {
@@ -839,8 +860,8 @@ void setup() {
   firebaseManager.begin(runtimeConfig);
   if (firebaseManager.isReady()) {
     Logger::info("FIREBASE", "Firebase manager ready");
-    if (firebaseManager.bootstrapGatewayCollections(
-            runtimeConfig.deviceId,
+    if (firebaseManager.bootstrapGateway(
+            runtimeConfig.deviceName,
             runtimeConfig.pollingIntervalSeconds,
             runtimeConfig.dailySmsLimit,
             dailyCallDefaultLimit,
@@ -861,7 +882,7 @@ void setup() {
   callManager.begin();
   displayManager.begin();
   dhtManager.begin();
-  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager, ntfyManager);
+  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager, ntfyManager, configManager);
 
   startupIp = wifiManager.localIp().toString();
   Logger::info("BOOT", startupIp.c_str());
@@ -875,7 +896,7 @@ void setup() {
       Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
     }
     firebaseManager.pushDeviceHeartbeat(
-        runtimeConfig.deviceId,
+        runtimeConfig.deviceName,
         queryBatteryPercent(),
         querySignalStrength(),
         queryNetworkOperator(),
@@ -906,7 +927,7 @@ void loop() {
   if (firebaseManager.isReady() && millis() - lastHeartbeatPush >= heartbeatIntervalMs) {
     lastHeartbeatPush = millis();
     if (!firebaseManager.pushDeviceHeartbeat(
-            runtimeConfig.deviceId,
+            runtimeConfig.deviceName,
             queryBatteryPercent(),
             querySignalStrength(),
             queryNetworkOperator(),
@@ -920,7 +941,12 @@ void loop() {
   if (firebaseManager.isReady() && millis() >= pendingPollStartMs &&
       millis() - lastCloudPoll >= (unsigned long)runtimeConfig.pollingIntervalSeconds * 1000UL) {
     lastCloudPoll = millis();
-    processPendingCommand();
+    // If we just drained a job there may be more queued behind it. Re-arm the
+    // poll timer so the next loop iteration polls again immediately and the
+    // queue empties quickly, instead of waiting a full interval per job.
+    if (processPendingCommand()) {
+      lastCloudPoll = 0;
+    }
   }
 
   callManager.loop();
