@@ -1,10 +1,8 @@
 #include "WebDashboard.h"
 
-#include <ArduinoJson.h>
 #include <FS.h>
 #include <SPIFFS.h>
 #include <WebServer.h>
-#include "ConfigManager.h"
 #include "FirebaseManager.h"
 #include "NtfyManager.h"
 #include "WiFiManager.h"
@@ -13,12 +11,11 @@ namespace {
 WebServer *server = nullptr;
 }
 
-bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager, NtfyManager &incomingNtfyManager, ConfigManager &incomingConfigManager) {
+bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager, NtfyManager &incomingNtfyManager) {
   config = &incomingConfig;
   wifiManager = &incomingWiFiManager;
   firebaseManager = &incomingFirebaseManager;
   ntfyManager = &incomingNtfyManager;
-  configManager = &incomingConfigManager;
 
   if (server != nullptr) {
     delete server;
@@ -71,39 +68,6 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
   server->on("/api/sync-runtime", HTTP_POST, [this]() {
     runtimeSyncRequested = true;
     server->send(202, "application/json", "{\"ok\":true,\"message\":\"runtime sync queued\"}");
-  });
-
-  // Returns the saved WiFi SSIDs (never the passwords) plus a flag for whether a
-  // password is stored, so the dashboard can show what is configured.
-  server->on("/api/wifi-config", HTTP_GET, [this]() {
-    const V8Config &live = configManager->get();
-    auto boolText = [](const char *value) { return strlen(value) > 0 ? "true" : "false"; };
-    String payload = String("{\"ssid1\":\"") + live.userWifiSsid1 +
-                     String("\",\"pass1Set\":") + boolText(live.userWifiPass1) +
-                     String(",\"ssid2\":\"") + live.userWifiSsid2 +
-                     String("\",\"pass2Set\":") + boolText(live.userWifiPass2) +
-                     String("}");
-    server->send(200, "application/json", payload);
-  });
-
-  // Saves up to two WiFi pairs to SPIFFS. Applied on the next reboot. A blank
-  // password is kept as-is when the field is omitted and one is already stored,
-  // so the operator can change only the SSID without re-typing the password.
-  server->on("/api/wifi-config", HTTP_POST, [this]() {
-    DynamicJsonDocument doc(1024);
-    if (deserializeJson(doc, server->arg("plain"))) {
-      server->send(400, "application/json", "{\"ok\":false,\"message\":\"invalid json\"}");
-      return;
-    }
-    const V8Config &live = configManager->get();
-    String ssid1 = doc["ssid1"] | live.userWifiSsid1;
-    String ssid2 = doc["ssid2"] | live.userWifiSsid2;
-    String pass1 = doc.containsKey("pass1") ? String(doc["pass1"].as<const char *>()) : String(live.userWifiPass1);
-    String pass2 = doc.containsKey("pass2") ? String(doc["pass2"].as<const char *>()) : String(live.userWifiPass2);
-    bool ok = configManager->updateUserWifi(ssid1, pass1, ssid2, pass2);
-    server->send(ok ? 200 : 500, "application/json",
-                 ok ? "{\"ok\":true,\"message\":\"saved to SPIFFS; reboot to apply\"}"
-                    : "{\"ok\":false,\"message\":\"save failed\"}");
   });
 
   server->on("/api/reboot", HTTP_POST, [this]() {

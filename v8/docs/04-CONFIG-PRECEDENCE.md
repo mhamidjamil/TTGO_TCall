@@ -8,10 +8,11 @@
 5. Runtime changes from dashboard or cloud sync.
 6. Persist the last known good configuration.
 
-## WiFi Credentials (v8.2.1)
-- The dashboard WiFi tab stores up to two SSID/password pairs in SPIFFS (`userWifiSsid1/userWifiPass1`, `userWifiSsid2/userWifiPass2`). Empty by default; only set from the dashboard.
-- Boot connect order: saved pair 1, then saved pair 2, then the `secrets.h` networks (`wifiSsid`/`wifiSsidBackup`), then AP fallback. The `secrets.h` networks are kept as a pristine final fallback and are never overwritten from the dashboard.
-- Changes apply on the next reboot (dashboard Reboot Device button or power-cycle). Serial prints which network the device connected through.
+## WiFi Credentials (v8.3.1)
+- Managed from the dashboard WiFi tab like any other runtime setting: the four fields `wifiSsid1`/`wifiPass1`/`wifiSsid2`/`wifiPass2` are written to RTDB `/ttgo_tcall/settings/runtime`. There is no device-side WiFi API.
+- On sync the device reads them and, when they differ from what is stored, persists them to SPIFFS (`userWifiSsid1/2`, `userWifiPass1/2`). Empty cloud values are ignored so they never wipe locally stored networks.
+- Boot connect order: saved pair 1, then saved pair 2, then the `secrets.h` networks (`wifiSsid`/`wifiSsidBackup`), then AP fallback. The `secrets.h` networks are a pristine final fallback and are never overwritten.
+- Set the new network while the device is still online, then reboot (dashboard Reboot Device button or power-cycle) to connect. Serial prints which network it connected through.
 
 ## ThingSpeak Credentials
 - ThingSpeak upload credentials are treated as device configuration, not runtime cloud state.

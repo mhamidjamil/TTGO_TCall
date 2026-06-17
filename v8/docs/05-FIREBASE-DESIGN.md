@@ -80,9 +80,15 @@ The root `ttgo_tcall` node is now treated as a container for folders only. Leaf 
 	"weeklySmsLimit": 950,
 	"monthlySmsLimit": 4900,
 	"ntfyUrl": "https://ntfy.innovorix.com/oracle_ntfy",
+	"wifiSsid1": "",
+	"wifiPass1": "",
+	"wifiSsid2": "",
+	"wifiPass2": "",
 	"updatedAtMs": 1712345678000
 }
 ```
+
+WiFi pairs are optional and managed from the dashboard WiFi tab. The device reads them on sync and persists them to SPIFFS; they apply on the next reboot. Empty values are ignored.
 
 ## Firestore Gateway Data Model
 

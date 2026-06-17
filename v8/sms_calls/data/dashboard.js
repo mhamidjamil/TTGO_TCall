@@ -210,17 +210,13 @@ async function renderDevices() {
 
 async function renderWifi() {
   try {
-    const response = await fetch('/api/wifi-config', { cache: 'no-store' });
-    if (!response.ok) throw new Error('wifi config unavailable');
-    const cfg = await response.json();
+    const runtime = await fetchRuntime();
     const form = $('#wifiForm');
-    form.ssid1.value = text(cfg.ssid1);
-    form.ssid2.value = text(cfg.ssid2);
-    form.pass1.value = '';
-    form.pass2.value = '';
-    form.pass1.placeholder = cfg.pass1Set ? 'Password 1 (saved — blank = unchanged)' : 'Password 1';
-    form.pass2.placeholder = cfg.pass2Set ? 'Password 2 (saved — blank = unchanged)' : 'Password 2';
-    $('#wifiState').textContent = 'Loaded saved WiFi settings';
+    form.ssid1.value = text(runtime.wifiSsid1);
+    form.pass1.value = text(runtime.wifiPass1);
+    form.ssid2.value = text(runtime.wifiSsid2);
+    form.pass2.value = text(runtime.wifiPass2);
+    $('#wifiState').textContent = 'Loaded WiFi settings from Firebase';
   } catch (error) {
     $('#wifiState').textContent = `Failed to load: ${error.message}`;
   }
@@ -512,20 +508,19 @@ function bindForms() {
   $('#wifiForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const body = { ssid1: form.get('ssid1').trim(), ssid2: form.get('ssid2').trim() };
-    // Only send a password when the operator typed one, so a blank field keeps
-    // the password already stored on the device.
-    if (form.get('pass1')) body.pass1 = form.get('pass1');
-    if (form.get('pass2')) body.pass2 = form.get('pass2');
     $('#wifiState').textContent = 'Saving...';
     try {
-      const response = await fetch('/api/wifi-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+      // WiFi is just another runtime setting: write it to the same RTDB node the
+      // device syncs, then ask the device to re-read. It applies on next reboot.
+      await update(ref(state.rtdb, paths.runtime), {
+        wifiSsid1: form.get('ssid1').trim(),
+        wifiPass1: form.get('pass1'),
+        wifiSsid2: form.get('ssid2').trim(),
+        wifiPass2: form.get('pass2'),
+        updatedAtMs: Date.now()
       });
-      const result = await response.json();
-      $('#wifiState').textContent = result.ok ? `Saved: ${result.message}` : `Failed: ${result.message}`;
+      await fetch('/api/sync-runtime', { method: 'POST' });
+      $('#wifiState').textContent = 'Saved to Firebase. Reboot the device to connect with the new network.';
     } catch (error) {
       $('#wifiState').textContent = `Failed: ${error.message}`;
     }

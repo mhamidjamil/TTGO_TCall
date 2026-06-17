@@ -738,6 +738,27 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
     Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
   }
 
+  // Apply dashboard-managed WiFi pairs. Treat the cloud values as the desired
+  // state; persist to SPIFFS only when something actually changed and at least
+  // one SSID is set, so the empty default never wipes locally stored networks.
+  bool anyWifiProvided = settings.wifiSsid1.length() > 0 || settings.wifiSsid2.length() > 0;
+  bool wifiChanged =
+      settings.wifiSsid1 != String(runtimeConfig.userWifiSsid1) ||
+      settings.wifiPass1 != String(runtimeConfig.userWifiPass1) ||
+      settings.wifiSsid2 != String(runtimeConfig.userWifiSsid2) ||
+      settings.wifiPass2 != String(runtimeConfig.userWifiPass2);
+  if (anyWifiProvided && wifiChanged) {
+    if (configManager.updateUserWifi(settings.wifiSsid1, settings.wifiPass1, settings.wifiSsid2, settings.wifiPass2)) {
+      strlcpy(runtimeConfig.userWifiSsid1, settings.wifiSsid1.c_str(), sizeof(runtimeConfig.userWifiSsid1));
+      strlcpy(runtimeConfig.userWifiPass1, settings.wifiPass1.c_str(), sizeof(runtimeConfig.userWifiPass1));
+      strlcpy(runtimeConfig.userWifiSsid2, settings.wifiSsid2.c_str(), sizeof(runtimeConfig.userWifiSsid2));
+      strlcpy(runtimeConfig.userWifiPass2, settings.wifiPass2.c_str(), sizeof(runtimeConfig.userWifiPass2));
+      Serial.println("[SYNC] WiFi credentials updated from cloud; reboot to connect with the new network");
+    } else {
+      Serial.println("[SYNC] WiFi credentials update failed to save to SPIFFS");
+    }
+  }
+
   Serial.print("[SYNC] source=");
   Serial.print(source);
   Serial.print(" intervalOfDhtSeconds=");
@@ -882,7 +903,7 @@ void setup() {
   callManager.begin();
   displayManager.begin();
   dhtManager.begin();
-  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager, ntfyManager, configManager);
+  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager, ntfyManager);
 
   startupIp = wifiManager.localIp().toString();
   Logger::info("BOOT", startupIp.c_str());

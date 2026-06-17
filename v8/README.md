@@ -72,7 +72,7 @@ Both lists are read by the device on startup, every 10 minutes, and whenever you
 Phone numbers are stored in one canonical form (`+<countrycode><number>`, e.g. `+923001234567`). The dashboard normalizes what you type to the same form the device uses, so allow-list lookups always match regardless of whether you enter `0300…`, `92300…`, or `+92300…`.
 
 ## Editable WiFi (no reflash to change networks)
-The **WiFi tab** stores up to two SSID/password pairs on the device (SPIFFS). On boot the device tries, in order: saved pair 1 → saved pair 2 → the `secrets.h` networks → its own AP. Set new networks before moving the device to a new location, then use the **Reboot Device** button to reconnect. Leave a password field blank to keep the one already stored. Serial prints which network it connects through.
+The **WiFi tab** lets you set up to two SSID/password pairs. They are saved to Firebase (the runtime settings node) like the other dashboard settings; the device reads them on sync and stores them in SPIFFS. On boot the device tries, in order: saved pair 1 → saved pair 2 → the `secrets.h` networks → its own AP. Set the new network while the device is still online, then use the **Reboot Device** button to reconnect. Serial prints which network it connects through.
 
 ## Dashboard
 Upload `v8/sms_calls/data` to SPIFFS with the sketch. The local web UI is served from:

@@ -737,7 +737,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     setHttpStatusError(error, "runtime settings fetch", statusCode, response);
     return false;
   } else {
-    DynamicJsonDocument readDoc(1024);
+    DynamicJsonDocument readDoc(1536);
     if (deserializeJson(readDoc, response)) {
       error = String("runtime settings parse failed body=") + response;
       return false;
@@ -807,6 +807,15 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       outSettings.createdNtfyUrl = true;
       shouldWriteBack = true;
     }
+
+    // WiFi pairs are optional and managed from the dashboard. Read them when
+    // present; absence just means "no dashboard override set" (we do not heal
+    // these keys so the runtime node stays clean until the operator sets them).
+    String parsedWifi;
+    if (parseStringVariant(root["wifiSsid1"], parsedWifi)) outSettings.wifiSsid1 = parsedWifi;
+    if (parseStringVariant(root["wifiPass1"], parsedWifi)) outSettings.wifiPass1 = parsedWifi;
+    if (parseStringVariant(root["wifiSsid2"], parsedWifi)) outSettings.wifiSsid2 = parsedWifi;
+    if (parseStringVariant(root["wifiPass2"], parsedWifi)) outSettings.wifiPass2 = parsedWifi;
   }
 
   if (shouldWriteBack) {
@@ -1864,28 +1873,26 @@ bool FirebaseManager::ensureConfigDocument() {
   return true;
 }
 
+// Best-effort legacy cleanup. This is a one-time migration nicety, so any
+// failure (list or delete) is logged briefly and skipped rather than treated
+// as fatal. It must never abort bootstrap or disable the gateway. Anything it
+// cannot remove can be deleted by hand in the Firebase console.
 bool FirebaseManager::deleteFirestoreCollectionDocuments(const String &collectionPath) {
   String response;
   int statusCode = 0;
   String url = buildFirestoreUrl(collectionPath);
   if (!httpGetBearer(url, response, statusCode)) {
-    return false;
-  }
-
-  if (statusCode == 404) {
-    error = String();
     return true;
   }
 
   if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "legacy collection list", statusCode, response);
-    return false;
+    // 404 (no such collection) or any other status: nothing to clean here.
+    return true;
   }
 
   DynamicJsonDocument doc(8192);
   if (deserializeJson(doc, response)) {
-    error = String("legacy collection parse failed body=") + response;
-    return false;
+    return true;
   }
 
   JsonArray documents = doc["documents"].as<JsonArray>();
@@ -1898,18 +1905,18 @@ bool FirebaseManager::deleteFirestoreCollectionDocuments(const String &collectio
     String deleteResponse;
     int deleteStatusCode = 0;
     String deleteUrl = String("https://firestore.googleapis.com/v1/") + name;
-    if (!httpDeleteBearer(deleteUrl, deleteResponse, deleteStatusCode)) {
-      return false;
-    }
-    if (deleteStatusCode != 404 && (deleteStatusCode < 200 || deleteStatusCode >= 300)) {
-      setHttpStatusError(error, "legacy collection delete", deleteStatusCode, deleteResponse);
-      return false;
+    if (!httpDeleteBearer(deleteUrl, deleteResponse, deleteStatusCode) ||
+        (deleteStatusCode != 404 && (deleteStatusCode < 200 || deleteStatusCode >= 300))) {
+      Serial.print("[FIRESTORE] skipped legacy doc (delete code=");
+      Serial.print(deleteStatusCode);
+      Serial.print(") ");
+      Serial.println(name);
+      continue;
     }
     Serial.print("[FIRESTORE] deleted legacy document ");
     Serial.println(name);
   }
 
-  error = String();
   return true;
 }
 
@@ -1917,16 +1924,15 @@ bool FirebaseManager::deleteFirestoreDocument(const String &documentPath) {
   String response;
   int statusCode = 0;
   if (!httpDeleteBearer(buildFirestoreUrl(documentPath), response, statusCode)) {
-    return false;
-  }
-
-  if (statusCode == 404 || (statusCode >= 200 && statusCode < 300)) {
-    error = String();
     return true;
   }
-
-  setHttpStatusError(error, "legacy document delete", statusCode, response);
-  return false;
+  if (statusCode != 404 && (statusCode < 200 || statusCode >= 300)) {
+    Serial.print("[FIRESTORE] skipped legacy doc (delete code=");
+    Serial.print(statusCode);
+    Serial.print(") ");
+    Serial.println(documentPath);
+  }
+  return true;
 }
 
 bool FirebaseManager::ensureFirestoreDocument(const String &documentPath) {

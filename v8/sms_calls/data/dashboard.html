@@ -60,12 +60,12 @@
         <div class="panel-head">
           <h2>WiFi Networks</h2>
         </div>
-        <p class="help-text">Saved to the device (SPIFFS). On reboot the device tries pair 1, then pair 2, then the networks in <code>secrets.h</code>, then falls back to its own AP. Leave a password blank to keep the one already stored.</p>
+        <p class="help-text">Saved to Firebase; the device reads them on sync and stores them locally. On reboot it tries pair 1, then pair 2, then the networks in <code>secrets.h</code>, then its own AP. Set these while the device is online, then reboot to connect to the new network.</p>
         <form id="wifiForm" class="form-grid">
           <input name="ssid1" placeholder="WiFi name 1" autocomplete="off">
-          <input name="pass1" type="password" placeholder="Password 1 (blank = unchanged)" autocomplete="off">
+          <input name="pass1" type="password" placeholder="Password 1" autocomplete="off">
           <input name="ssid2" placeholder="WiFi name 2" autocomplete="off">
-          <input name="pass2" type="password" placeholder="Password 2 (blank = unchanged)" autocomplete="off">
+          <input name="pass2" type="password" placeholder="Password 2" autocomplete="off">
           <button type="submit">Save WiFi</button>
         </form>
         <div id="wifiState" class="status-box">Idle</div>
