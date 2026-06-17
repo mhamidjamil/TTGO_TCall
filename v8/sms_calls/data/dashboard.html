@@ -21,6 +21,7 @@
 
   <nav class="tabs" aria-label="Dashboard sections">
     <button class="tab active" data-view="devices" type="button">Device</button>
+    <button class="tab" data-view="wifi" type="button">WiFi</button>
     <button class="tab" data-view="numbers" type="button">Numbers</button>
     <button class="tab" data-view="blocks" type="button">Blocks</button>
     <button class="tab" data-view="sms" type="button">SMS</button>
@@ -51,6 +52,27 @@
           <button type="submit">Save Runtime</button>
         </form>
         <div id="deviceList" class="grid"></div>
+      </div>
+    </section>
+
+    <section id="wifi" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>WiFi Networks</h2>
+        </div>
+        <p class="help-text">Saved to the device (SPIFFS). On reboot the device tries pair 1, then pair 2, then the networks in <code>secrets.h</code>, then falls back to its own AP. Leave a password blank to keep the one already stored.</p>
+        <form id="wifiForm" class="form-grid">
+          <input name="ssid1" placeholder="WiFi name 1" autocomplete="off">
+          <input name="pass1" type="password" placeholder="Password 1 (blank = unchanged)" autocomplete="off">
+          <input name="ssid2" placeholder="WiFi name 2" autocomplete="off">
+          <input name="pass2" type="password" placeholder="Password 2 (blank = unchanged)" autocomplete="off">
+          <button type="submit">Save WiFi</button>
+        </form>
+        <div id="wifiState" class="status-box">Idle</div>
+        <div class="stack">
+          <p class="help-text">Reboot the device to connect with the newly saved network.</p>
+          <button id="rebootBtn" type="button">Reboot Device</button>
+        </div>
       </div>
     </section>
 
@@ -174,14 +196,14 @@
         </div>
         <div class="guide">
           <h3>Rails writes jobs here</h3>
-          <pre>sim_module/settings/sms_jobs/{autoId}
-sim_module/settings/call_jobs/{autoId}</pre>
+          <pre>sim_module/sms_jobs/items/{autoId}
+sim_module/call_jobs/items/{autoId}</pre>
           <h3>Rails manages policy here</h3>
-          <pre>sim_module/settings
-sim_module/settings/allowed_numbers/{safePhoneNumber}</pre>
+          <pre>sim_module/config
+sim_module/allowed_numbers/items/{+E164}</pre>
           <h3>Device writes results here</h3>
-          <pre>sim_module/settings/sms_logs/{autoId}
-sim_module/settings/call_logs/{autoId}</pre>
+          <pre>sim_module/sms_logs/items/{autoId}
+sim_module/call_logs/items/{autoId}</pre>
           <h3>Test flow</h3>
           <ol>
             <li>Add the target number in Numbers and keep it enabled.</li>

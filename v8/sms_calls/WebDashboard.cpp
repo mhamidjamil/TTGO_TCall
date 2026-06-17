@@ -1,8 +1,10 @@
 #include "WebDashboard.h"
 
+#include <ArduinoJson.h>
 #include <FS.h>
 #include <SPIFFS.h>
 #include <WebServer.h>
+#include "ConfigManager.h"
 #include "FirebaseManager.h"
 #include "NtfyManager.h"
 #include "WiFiManager.h"
@@ -11,11 +13,12 @@ namespace {
 WebServer *server = nullptr;
 }
 
-bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager, NtfyManager &incomingNtfyManager) {
+bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager, NtfyManager &incomingNtfyManager, ConfigManager &incomingConfigManager) {
   config = &incomingConfig;
   wifiManager = &incomingWiFiManager;
   firebaseManager = &incomingFirebaseManager;
   ntfyManager = &incomingNtfyManager;
+  configManager = &incomingConfigManager;
 
   if (server != nullptr) {
     delete server;
@@ -49,6 +52,7 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
                      String("\",\"authDomain\":\"") + authDomain +
                      String("\",\"databaseURL\":\"") + config->firebaseDatabaseUrl +
                      String("\",\"deviceId\":\"") + config->deviceId +
+                     String("\",\"defaultCountryCode\":\"") + config->defaultCountryCode +
                      String("\",\"useAnonymous\":") + (config->firebaseUseAnonymous ? "true" : "false") +
                      String("}");
     server->send(200, "application/json", payload);
@@ -67,6 +71,45 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
   server->on("/api/sync-runtime", HTTP_POST, [this]() {
     runtimeSyncRequested = true;
     server->send(202, "application/json", "{\"ok\":true,\"message\":\"runtime sync queued\"}");
+  });
+
+  // Returns the saved WiFi SSIDs (never the passwords) plus a flag for whether a
+  // password is stored, so the dashboard can show what is configured.
+  server->on("/api/wifi-config", HTTP_GET, [this]() {
+    const V8Config &live = configManager->get();
+    auto boolText = [](const char *value) { return strlen(value) > 0 ? "true" : "false"; };
+    String payload = String("{\"ssid1\":\"") + live.userWifiSsid1 +
+                     String("\",\"pass1Set\":") + boolText(live.userWifiPass1) +
+                     String(",\"ssid2\":\"") + live.userWifiSsid2 +
+                     String("\",\"pass2Set\":") + boolText(live.userWifiPass2) +
+                     String("}");
+    server->send(200, "application/json", payload);
+  });
+
+  // Saves up to two WiFi pairs to SPIFFS. Applied on the next reboot. A blank
+  // password is kept as-is when the field is omitted and one is already stored,
+  // so the operator can change only the SSID without re-typing the password.
+  server->on("/api/wifi-config", HTTP_POST, [this]() {
+    DynamicJsonDocument doc(1024);
+    if (deserializeJson(doc, server->arg("plain"))) {
+      server->send(400, "application/json", "{\"ok\":false,\"message\":\"invalid json\"}");
+      return;
+    }
+    const V8Config &live = configManager->get();
+    String ssid1 = doc["ssid1"] | live.userWifiSsid1;
+    String ssid2 = doc["ssid2"] | live.userWifiSsid2;
+    String pass1 = doc.containsKey("pass1") ? String(doc["pass1"].as<const char *>()) : String(live.userWifiPass1);
+    String pass2 = doc.containsKey("pass2") ? String(doc["pass2"].as<const char *>()) : String(live.userWifiPass2);
+    bool ok = configManager->updateUserWifi(ssid1, pass1, ssid2, pass2);
+    server->send(ok ? 200 : 500, "application/json",
+                 ok ? "{\"ok\":true,\"message\":\"saved to SPIFFS; reboot to apply\"}"
+                    : "{\"ok\":false,\"message\":\"save failed\"}");
+  });
+
+  server->on("/api/reboot", HTTP_POST, [this]() {
+    server->send(202, "application/json", "{\"ok\":true,\"message\":\"rebooting\"}");
+    delay(250);
+    ESP.restart();
   });
 
   server->on("/docs", [this]() {
@@ -113,16 +156,16 @@ h1,h2{margin-top:24px}
 
 <h2>Firestore gateway path layout</h2>
 <ul>
-<li><code>sim_module/settings</code> - single-device gateway settings and heartbeat fields</li>
-<li><code>sim_module/settings/allowed_numbers</code> - outgoing permission and per-number quotas</li>
-<li><code>sim_module/settings/sms_jobs</code> - pending, processing, sent, failed, blocked, or quota_exceeded SMS work</li>
-<li><code>sim_module/settings/call_jobs</code> - pending, processing, completed, failed, blocked, quota_exceeded, or user_picked call work</li>
-<li><code>sim_module/settings/sms_logs</code> and <code>sim_module/settings/call_logs</code> - audit trail</li>
+<li><code>sim_module/config</code> - gateway flags, limits, block lists, active switch, device name</li>
+<li><code>sim_module/device</code> - heartbeat / health (battery, signal, operator, last seen)</li>
+<li><code>sim_module/allowed_numbers/items/{+E164}</code> - outgoing permission and per-number quotas</li>
+<li><code>sim_module/sms_jobs/items</code> - pending, processing, sent, failed, blocked, or quota_exceeded SMS work</li>
+<li><code>sim_module/call_jobs/items</code> - pending, processing, completed, failed, blocked, quota_exceeded, or user_picked call work</li>
+<li><code>sim_module/sms_logs/items</code> and <code>sim_module/call_logs/items</code> - audit trail</li>
 </ul>
 
 <h2>SMS job format for Rails or another server</h2>
 <pre>{
-  "device_id": "device_001",
   "phone_number": "+923001234567",
   "message": "hello",
   "status": "pending",
@@ -134,7 +177,6 @@ h1,h2{margin-top:24px}
 
 <h2>Call job format for Rails or another server</h2>
 <pre>{
-  "device_id": "device_001",
   "phone_number": "+923001234567",
   "status": "pending",
   "created_at": "server timestamp",
@@ -147,7 +189,7 @@ h1,h2{margin-top:24px}
 
 <h2>Outgoing policy</h2>
 <ul>
-<li>Before queueing a job, add the target number under <code>sim_module/settings/allowed_numbers/{safePhoneNumber}</code> with <code>enabled = true</code>.</li>
+<li>Before queueing a job, add the target number under <code>sim_module/allowed_numbers/items/{+E164}</code> with <code>enabled = true</code>.</li>
 <li>If a job ends with <code>blocked</code> and <code>number_not_allowed</code>, allow the number and retry the job.</li>
 <li>Daily SMS and call quotas are counted from Firestore logs for the current UTC day.</li>
 <li>Set <code>ttgo_tcall/settings/runtime/jobLogs</code> to <code>true</code> to print serial <code>[JOB]</code> lines for claims, validation, quota checks, send/dial attempts, and final status.</li>

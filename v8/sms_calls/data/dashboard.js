@@ -21,12 +21,13 @@ import {
 } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js';
 
 const paths = {
-  settingsDoc: 'sim_module/settings',
-  allowedNumbers: 'sim_module/settings/allowed_numbers',
-  smsJobs: 'sim_module/settings/sms_jobs',
-  callJobs: 'sim_module/settings/call_jobs',
-  smsLogs: 'sim_module/settings/sms_logs',
-  callLogs: 'sim_module/settings/call_logs',
+  configDoc: 'sim_module/config',
+  deviceDoc: 'sim_module/device',
+  allowedNumbers: 'sim_module/allowed_numbers/items',
+  smsJobs: 'sim_module/sms_jobs/items',
+  callJobs: 'sim_module/call_jobs/items',
+  smsLogs: 'sim_module/sms_logs/items',
+  callLogs: 'sim_module/call_logs/items',
   runtime: 'ttgo_tcall/settings/runtime'
 };
 
@@ -34,14 +35,38 @@ const state = {
   db: null,
   rtdb: null,
   deviceId: 'device_001',
+  countryCode: '92',
   activeView: 'devices',
   buildVersion: 'unknown',
   buildDate: 'unknown',
-  settings: {},
+  config: {},
+  device: {},
   runtime: {}
 };
 
 const $ = (selector) => document.querySelector(selector);
+
+// Must stay in lockstep with normalizePhoneNumber() in sms_calls.ino. The device
+// looks up allowed_numbers under safeId(normalizePhone(number)); if the dashboard
+// stored a number in a different format the lookup misses and the job is wrongly
+// rejected as "number_not_allowed". Defaults to Pakistan (92); the device's
+// defaultCountryCode is surfaced via /api/firebase-web-config when available.
+function normalizePhone(raw) {
+  let digits = String(raw || '').replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  const cc = state.countryCode || '92';
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  if (digits.startsWith('0') && digits.length === 11) digits = cc + digits.slice(1);
+  if (digits.length === 10) digits = cc + digits;
+  if (digits.length < 12) return '';
+  return '+' + digits;
+}
+
+// Canonical form used for both the stored value and the Firestore document id.
+// Falls back to the raw text for alphanumeric sender ids that cannot normalize.
+function canonicalNumber(raw) {
+  return normalizePhone(raw) || String(raw || '').trim();
+}
 
 function safeId(value) {
   const id = String(value || '').replace(/[^A-Za-z0-9+_-]/g, '_').trim();
@@ -115,6 +140,7 @@ async function loadFirebase() {
   if (!response.ok) throw new Error('Firebase config unavailable');
   const config = await response.json();
   state.deviceId = config.deviceId || state.deviceId;
+  state.countryCode = config.defaultCountryCode || state.countryCode;
   const app = initializeApp({
     apiKey: config.apiKey,
     authDomain: config.authDomain,
@@ -130,10 +156,16 @@ async function loadFirebase() {
   await signInAnonymously(auth);
 }
 
-async function fetchSettings() {
-  const snap = await getDoc(doc(state.db, paths.settingsDoc));
-  state.settings = snap.exists() ? snap.data() : {};
-  return state.settings;
+async function fetchConfig() {
+  const snap = await getDoc(doc(state.db, paths.configDoc));
+  state.config = snap.exists() ? snap.data() : {};
+  return state.config;
+}
+
+async function fetchDevice() {
+  const snap = await getDoc(doc(state.db, paths.deviceDoc));
+  state.device = snap.exists() ? snap.data() : {};
+  return state.device;
 }
 
 async function fetchRuntime() {
@@ -143,14 +175,15 @@ async function fetchRuntime() {
 }
 
 async function renderDevices() {
-  const settings = await fetchSettings();
+  const config = await fetchConfig();
+  const device = await fetchDevice();
   const runtime = await fetchRuntime();
   const now = Math.floor(Date.now() / 1000);
-  const lastSeen = settings.last_seen_epoch || epochFromTimestamp(settings.last_seen_at);
+  const lastSeen = device.last_seen_epoch || epochFromTimestamp(device.last_seen_at);
   const online = lastSeen && now - lastSeen < 120;
 
-  $('#deviceForm').active.checked = settings.active !== false;
-  $('#deviceForm').name.value = text(settings.name, 'TTGO T-Call');
+  $('#deviceForm').active.checked = config.active !== false;
+  $('#deviceForm').name.value = text(config.name, 'TTGO T-Call');
   $('#runtimeForm').jobLogs.checked = runtime.jobLogs !== false;
   $('#runtimeForm').showFirebasePushLogs.checked = runtime.showFirebasePushLogs === true;
   $('#runtimeForm').showThingSpeakPushLogs.checked = runtime.showThingSpeakPushLogs === true;
@@ -160,19 +193,37 @@ async function renderDevices() {
   $('#deviceList').innerHTML = `
     <article class="device-card">
       <div class="card-head">
-        <strong>${text(settings.name, state.deviceId)}</strong>
+        <strong>${text(config.name, device.name || state.deviceId)}</strong>
         <span class="pill ${online ? 'online' : 'offline'}">${online ? 'online' : 'offline'}</span>
       </div>
       <dl>
-        <dt>Active</dt><dd>${settings.active !== false ? 'yes' : 'no'}</dd>
-        <dt>Battery</dt><dd>${text(settings.battery_percent, 'n/a')}%</dd>
-        <dt>Signal</dt><dd>${text(settings.signal_strength, 'n/a')}</dd>
-        <dt>Operator</dt><dd>${text(settings.network_operator, 'n/a')}</dd>
+        <dt>Active</dt><dd>${config.active !== false ? 'yes' : 'no'}</dd>
+        <dt>Battery</dt><dd>${text(device.battery_percent, 'n/a')}%</dd>
+        <dt>Signal</dt><dd>${text(device.signal_strength, 'n/a')}</dd>
+        <dt>Operator</dt><dd>${text(device.network_operator, 'n/a')}</dd>
         <dt>Last seen</dt><dd>${lastSeen ? new Date(lastSeen * 1000).toLocaleString() : 'n/a'}</dd>
         <dt>Job logs</dt><dd>${runtime.jobLogs !== false ? 'enabled' : 'disabled'}</dd>
       </dl>
     </article>
   `;
+}
+
+async function renderWifi() {
+  try {
+    const response = await fetch('/api/wifi-config', { cache: 'no-store' });
+    if (!response.ok) throw new Error('wifi config unavailable');
+    const cfg = await response.json();
+    const form = $('#wifiForm');
+    form.ssid1.value = text(cfg.ssid1);
+    form.ssid2.value = text(cfg.ssid2);
+    form.pass1.value = '';
+    form.pass2.value = '';
+    form.pass1.placeholder = cfg.pass1Set ? 'Password 1 (saved — blank = unchanged)' : 'Password 1';
+    form.pass2.placeholder = cfg.pass2Set ? 'Password 2 (saved — blank = unchanged)' : 'Password 2';
+    $('#wifiState').textContent = 'Loaded saved WiFi settings';
+  } catch (error) {
+    $('#wifiState').textContent = `Failed to load: ${error.message}`;
+  }
 }
 
 async function renderNumbers() {
@@ -193,9 +244,9 @@ async function renderNumbers() {
 }
 
 async function renderBlocks() {
-  const settings = await fetchSettings();
-  $('#blockForm').blockedCallers.value = arrayToLines(settings.blockedCallers);
-  $('#blockForm').blockedSmsSenders.value = arrayToLines(settings.blockedSmsSenders);
+  const config = await fetchConfig();
+  $('#blockForm').blockedCallers.value = arrayToLines(config.blockedCallers);
+  $('#blockForm').blockedSmsSenders.value = arrayToLines(config.blockedSmsSenders);
 }
 
 function jobActions(kind, itemId, data) {
@@ -302,6 +353,7 @@ function renderAbout() {
 async function refresh() {
   if (!state.db) return;
   if (state.activeView === 'devices') await renderDevices();
+  if (state.activeView === 'wifi') await renderWifi();
   if (state.activeView === 'numbers') await renderNumbers();
   if (state.activeView === 'blocks') await renderBlocks();
   if (state.activeView === 'sms') await renderSmsJobs();
@@ -312,14 +364,68 @@ async function refresh() {
 }
 
 async function saveAllowedNumber(phone, options = {}) {
-  await setDoc(doc(state.db, paths.allowedNumbers, safeId(phone)), {
-    phone_number: phone,
+  const normalized = canonicalNumber(phone);
+  await setDoc(doc(state.db, paths.allowedNumbers, safeId(normalized)), {
+    phone_number: normalized,
     enabled: options.enabled ?? true,
     sms_limit_per_day: options.smsLimit ?? 5,
     call_limit_per_day: options.callLimit ?? 5,
     notes: options.notes ?? '',
     updated_at: serverTimestamp()
   }, { merge: true });
+}
+
+async function saveDeviceSettings(form) {
+  await setDoc(doc(state.db, paths.configDoc), {
+    active: form.get('active') === 'on',
+    name: form.get('name').trim() || 'TTGO T-Call',
+    updated_at: serverTimestamp()
+  }, { merge: true });
+}
+
+async function saveRuntimeSettings(form) {
+  await update(ref(state.rtdb, paths.runtime), {
+    jobLogs: form.get('jobLogs') === 'on',
+    showFirebasePushLogs: form.get('showFirebasePushLogs') === 'on',
+    showThingSpeakPushLogs: form.get('showThingSpeakPushLogs') === 'on',
+    intervalOfDhtSeconds: Number(form.get('intervalOfDhtSeconds')) || 30,
+    dailySmsLimit: Number(form.get('dailySmsLimit')) || 200,
+    updatedAtMs: Date.now()
+  });
+}
+
+async function saveBlocks(form) {
+  await setDoc(doc(state.db, paths.configDoc), {
+    blockedCallers: linesToArray(form.get('blockedCallers')),
+    blockedSmsSenders: linesToArray(form.get('blockedSmsSenders')),
+    updated_at: serverTimestamp()
+  }, { merge: true });
+}
+
+// Two-way sync: push edits from the active settings view to Firebase, ask the
+// device to re-read runtime settings + blocklists now, then pull the latest
+// values back into the UI. Pushing only the active view avoids overwriting a
+// tab the user never opened (whose form fields would still be empty).
+async function fullSync() {
+  const btn = $('#syncRuntimeBtn');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Syncing…';
+  try {
+    if (state.activeView === 'devices') {
+      await saveDeviceSettings(new FormData($('#deviceForm')));
+      await saveRuntimeSettings(new FormData($('#runtimeForm')));
+    } else if (state.activeView === 'blocks') {
+      await saveBlocks(new FormData($('#blockForm')));
+    }
+    await fetch('/api/sync-runtime', { method: 'POST' });
+    await refresh();
+    btn.textContent = 'Synced ✓';
+  } catch (error) {
+    btn.textContent = 'Sync failed';
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 1500);
+  }
 }
 
 async function retrySms(id) {
@@ -356,26 +462,13 @@ function bindTabs() {
 function bindForms() {
   $('#deviceForm').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await setDoc(doc(state.db, paths.settingsDoc), {
-      active: form.get('active') === 'on',
-      name: form.get('name').trim() || 'TTGO T-Call',
-      updated_at: serverTimestamp()
-    }, { merge: true });
+    await saveDeviceSettings(new FormData(event.currentTarget));
     await renderDevices();
   });
 
   $('#runtimeForm').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await update(ref(state.rtdb, paths.runtime), {
-      jobLogs: form.get('jobLogs') === 'on',
-      showFirebasePushLogs: form.get('showFirebasePushLogs') === 'on',
-      showThingSpeakPushLogs: form.get('showThingSpeakPushLogs') === 'on',
-      intervalOfDhtSeconds: Number(form.get('intervalOfDhtSeconds')) || 30,
-      dailySmsLimit: Number(form.get('dailySmsLimit')) || 200,
-      updatedAtMs: Date.now()
-    });
+    await saveRuntimeSettings(new FormData(event.currentTarget));
     await fetch('/api/sync-runtime', { method: 'POST' });
     await renderDevices();
   });
@@ -396,12 +489,7 @@ function bindForms() {
 
   $('#blockForm').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await setDoc(doc(state.db, paths.settingsDoc), {
-      blockedCallers: linesToArray(form.get('blockedCallers')),
-      blockedSmsSenders: linesToArray(form.get('blockedSmsSenders')),
-      updated_at: serverTimestamp()
-    }, { merge: true });
+    await saveBlocks(new FormData(event.currentTarget));
     await renderBlocks();
   });
 
@@ -409,8 +497,7 @@ function bindForms() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     await addDoc(collection(state.db, paths.smsJobs), {
-      device_id: state.deviceId,
-      phone_number: form.get('phone_number').trim(),
+      phone_number: canonicalNumber(form.get('phone_number')),
       message: form.get('message').trim(),
       status: 'pending',
       created_at: serverTimestamp(),
@@ -422,12 +509,33 @@ function bindForms() {
     await renderSmsJobs();
   });
 
+  $('#wifiForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const body = { ssid1: form.get('ssid1').trim(), ssid2: form.get('ssid2').trim() };
+    // Only send a password when the operator typed one, so a blank field keeps
+    // the password already stored on the device.
+    if (form.get('pass1')) body.pass1 = form.get('pass1');
+    if (form.get('pass2')) body.pass2 = form.get('pass2');
+    $('#wifiState').textContent = 'Saving...';
+    try {
+      const response = await fetch('/api/wifi-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const result = await response.json();
+      $('#wifiState').textContent = result.ok ? `Saved: ${result.message}` : `Failed: ${result.message}`;
+    } catch (error) {
+      $('#wifiState').textContent = `Failed: ${error.message}`;
+    }
+  });
+
   $('#callForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     await addDoc(collection(state.db, paths.callJobs), {
-      device_id: state.deviceId,
-      phone_number: form.get('phone_number').trim(),
+      phone_number: canonicalNumber(form.get('phone_number')),
       status: 'pending',
       created_at: serverTimestamp(),
       processing_started_at: null,
@@ -477,9 +585,16 @@ async function boot() {
   bindForms();
   bindActions();
   $('#refreshBtn').addEventListener('click', refresh);
-  $('#syncRuntimeBtn').addEventListener('click', async () => {
-    await fetch('/api/sync-runtime', { method: 'POST' });
-    await refresh();
+  $('#syncRuntimeBtn').addEventListener('click', fullSync);
+  $('#rebootBtn').addEventListener('click', async () => {
+    if (!window.confirm('Reboot the device now? It will be offline for a few seconds.')) return;
+    $('#wifiState').textContent = 'Rebooting...';
+    try {
+      await fetch('/api/reboot', { method: 'POST' });
+      $('#wifiState').textContent = 'Reboot requested. Reconnect once the device is back online.';
+    } catch (error) {
+      $('#wifiState').textContent = `Reboot request failed: ${error.message}`;
+    }
   });
   $('#logType').addEventListener('change', renderLogs);
   $('#notifyTestBtn').addEventListener('click', async () => {
