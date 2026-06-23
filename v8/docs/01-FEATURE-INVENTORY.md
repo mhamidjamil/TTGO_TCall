@@ -12,7 +12,7 @@
 | Web dashboard | Implemented | Local UI, notification testing, and About/version display. |
 | API docs endpoint | Implemented | Startup-visible docs URL is available. |
 | Number normalization | Implemented | Preserve v5-compatible behavior. |
-| Rate limiting | Implemented | Daily/weekly/monthly enforcement plus per-number daily quota. |
+| Rate limiting | Implemented | Global daily/weekly/monthly SMS enforcement (RTDB runtime). No per-number quota. |
 | Structured logging | Implemented | Clean, concise, professional logs. |
 | Runtime settings from Firebase | Implemented | Reads telemetry/log/limit settings and `ntfyUrl` from RTDB, with defaults if missing. |
 | Manual runtime sync command | Implemented | `sync` command forces immediate cloud settings and Firestore block-list refresh. |

@@ -8,7 +8,7 @@ v8 is the Firebase-backed evolution of the TTGO T-Call project.
 - Keep SMS and calling workflows.
 - Hang up incoming calls, notify through ntfy, and archive SIM events.
 - Process outgoing SMS and missed-call jobs from Firestore.
-- Enforce allowed-number and daily per-number quota rules before dialing or sending.
+- Enforce outgoing block lists and the global SMS rate limit before dialing or sending.
 - Push device heartbeat, signal, battery, operator, and queue health fields to Firestore.
 - Keep SPIFFS-backed dynamic configuration as the local fallback source of truth.
 - Remove MQTT from v8.
@@ -35,41 +35,34 @@ v8 is the Firebase-backed evolution of the TTGO T-Call project.
 - Serial test commands: `ntfy test` or `test ntfy`.
 
 ## Firestore `sim_module`
-The ESP32 uses Firebase Auth and Firestore REST with the same Firebase project ID/API key.
+The ESP32 uses Firebase Auth and Firestore REST with the same Firebase project ID/API key. `sim_module` has exactly three children:
 
-- Device/settings document: `sim_module/config`.
-- Allowed numbers: `sim_module/allowed_numbers/items/{phone_number_safe_id}`.
-- SMS queue: `sim_module/sms_jobs/items/{auto_id}`.
-- Call queue: `sim_module/call_jobs/items/{auto_id}`.
-- SMS audit: `sim_module/sms_logs/items/{auto_id}`.
-- Call audit: `sim_module/call_logs/items/{auto_id}`.
-- Block lists: `sim_module/config` with `blockedCallers` and `blockedSmsSenders` string arrays.
-- SMS documents: `sim_module/sms/by_number/{sender_or_number}`.
-- Call documents: `sim_module/calls/by_number/{caller_number}`.
-- Timestamps: human-readable Pakistan time, for example `2026-06-16 14:30:22 PKT`.
+- `sim_module/device` — config, health, the four block-list arrays, and lifetime counters.
+- `sim_module/sms/sms_jobs/{number}` (outgoing queue) and `sim_module/sms/sms_received/{number}` (incoming archive).
+- `sim_module/calls/call_jobs/{number}` (outgoing queue) and `sim_module/calls/call_received/{number}` (incoming archive).
 
-Firestore paths must alternate collection/document, so the smallest valid phone-number document path is `sim_module/sms/by_number/{number}` rather than `sim_module/sms/{number}`.
+Job/received documents are keyed by phone number (the doc id *is* the number). Timestamps are human-readable Pakistan time, e.g. `2026-06-16 14:30:22 PKT`. The full field list + app enqueue contract is in [docs/10-SERVER-SMS-FLOW.md](docs/10-SERVER-SMS-FLOW.md).
 
-On startup the firmware creates `sim_module/config`, `sim_module/sms`, and `sim_module/calls` if missing, then removes legacy `entries`, `numbers`, `_meta`, blocked buckets, and the old top-level gateway collections.
+On startup the firmware creates `sim_module/device`, `sim_module/sms`, and `sim_module/calls` if missing and seeds each empty block-list array with `["JAZZ","000"]`.
 
 ## Two-Way GSM Gateway
 - Poll interval: one cloud cycle every 3 seconds or the configured value if higher.
-- The cycle claims at most one `sim_module/sms_jobs/items` document and one `sim_module/call_jobs/items` document with `status = pending`.
-- Status flow: `pending -> processing -> sent/completed/failed/blocked/quota_exceeded`.
-- Jobs stuck in `processing` for more than 5 minutes are reset to `pending`.
-- Outgoing SMS and calls are allowed only when the target number exists in `sim_module/allowed_numbers/items` and `enabled = true`.
-- Daily quotas are counted from successful outgoing `sim_module/sms_logs/items` and `sim_module/call_logs/items` with the current `day_key`.
+- The cycle claims at most one pending `sms_jobs` doc and one pending `call_jobs` doc.
+- Status flow: `pending -> in_progress -> sent` (SMS) / `called` (call), or `blocked` / `failed`.
+- Jobs stuck in `in_progress` for more than 5 minutes are reset to `pending`.
+- Outgoing is allowed for any number **unless** it is in `device.blockedOutgoingSms` / `device.blockedOutgoingCallers` (then the job is `blocked`). The global SMS rate limit (RTDB runtime) still applies.
 - Missed-call mode rings briefly; if the modem reports an answer, firmware hangs up immediately and records `user_picked = true`.
 
-## Allowed numbers vs blocked numbers (read this first)
-These are two **separate** mechanisms — confusing them is the most common gotcha:
+## Block lists (incoming mute vs outgoing block)
+Four string arrays on `sim_module/device`, editable from the dashboard or Firestore:
 
-- **Allowed numbers** (`allowed_numbers`) is an **allow-list for OUTGOING** SMS/calls. The device will only send or dial a number that exists here with `enabled = true`. If you queue a job to a number that is not on this list, it ends as `status = blocked, error = number_not_allowed`. **This is not a block — it just means you never allowed it.** Add it (Numbers tab, or the "Allow + Retry" button on the job) and retry.
-- **Blocked numbers** (`blockedCallers` / `blockedSmsSenders`) is a **block-list for INCOMING** calls/SMS. A matching incoming event is archived to Firestore but does **not** trigger an ntfy notification. Alphanumeric sender IDs (e.g. `JAZZ`, `Telenor`) are matched case-insensitively as text; numeric senders match by digits.
+- `blockedIncomingCallers` / `blockedIncomingSms` — incoming events are still archived but do **not** trigger an ntfy notification (muted).
+- `blockedOutgoingCallers` / `blockedOutgoingSms` — the device refuses to dial/send; the job is marked `blocked`.
 
-Both lists are read by the device on startup, every 10 minutes, and whenever you press **Sync** (or type `sync` on serial). After editing blocked numbers, press **Sync** so the device picks them up.
+Entries may be numbers or alphanumeric sender ids (e.g. `JAZZ`, matched case-insensitively). The device refreshes the lists about once a minute and instantly when you press **Sync**. Phone numbers are stored canonically (`+<countrycode><number>`); the dashboard normalizes what you type so the device matches regardless of `0300…`, `92300…`, or `+92300…`.
 
-Phone numbers are stored in one canonical form (`+<countrycode><number>`, e.g. `+923001234567`). The dashboard normalizes what you type to the same form the device uses, so allow-list lookups always match regardless of whether you enter `0300…`, `92300…`, or `+92300…`.
+## Incoming SMS normalization
+UCS2/UTF-16BE hex messages are decoded to text before being stored or notified. `sms_received` keeps both `original_message` (raw) and `normalized_message` (decoded, `was_decoded:true`); ntfy gets the normalized text. Example: `00310020…0042` → `1 Paise mai 8GB`.
 
 ## Editable WiFi (no reflash to change networks)
 The **WiFi tab** lets you set up to two SSID/password pairs. They are saved to Firebase (the runtime settings node) like the other dashboard settings; the device reads them on sync and stores them in SPIFFS. On boot the device tries, in order: saved pair 1 → saved pair 2 → the `secrets.h` networks → its own AP. Set the new network while the device is still online, then use the **Reboot Device** button to reconnect. Serial prints which network it connects through.
@@ -83,13 +76,10 @@ http://<device-ip>:<webServerPort>/dashboard.html
 
 The dashboard uses Firebase anonymous auth from the browser and manages:
 
-- `sim_module/config`
-- `sim_module/allowed_numbers/items`
-- `sim_module/sms_jobs/items`
-- `sim_module/call_jobs/items`
-- `sim_module/sms_logs/items`
-- `sim_module/call_logs/items`
-- RTDB `/ttgo_tcall/settings/runtime` for runtime flags such as `jobLogs`
+- `sim_module/device` (active/name, block lists, counters)
+- `sim_module/sms/sms_jobs` and `sim_module/sms/sms_received`
+- `sim_module/calls/call_jobs` and `sim_module/calls/call_received`
+- RTDB `/ttgo_tcall/settings/runtime` for runtime flags such as `jobLogs`, SMS limits, and WiFi
 
 If anonymous auth is disabled, use a separate hosted admin dashboard or adapt `dashboard.js` to your preferred sign-in method. Device email/password is intentionally not exposed to the browser.
 
@@ -114,7 +104,7 @@ If you see `Wrong boot mode detected (0x13)`, the board is not in download mode.
 ## Reduced 8-Commit Delivery Plan
 1. `feat(firestore): add gateway schema and device identity`
 2. `feat(device): publish heartbeat and health metrics`
-3. `feat(numbers): manage allowed numbers and per-number quotas`
+3. `feat(numbers): manage incoming/outgoing block lists`
 4. `feat(sms): add outgoing SMS queue processing and logs`
 5. `feat(calls): add missed-call queue processing and logs`
 6. `feat(recovery): reset stale processing jobs`

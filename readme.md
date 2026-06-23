@@ -38,7 +38,7 @@ The web UI assets in `v8/sms_calls/data/` are flashed **separately** as the SPIF
 ## What v8 does
 
 - **Outgoing queue** — polls Firestore `sms_jobs` / `call_jobs`, claims one of each per cycle, drains the queue quickly when work is pending.
-- **Allow-list + quotas** — a number must exist in `allowed_numbers` with `enabled:true`; per-number and global daily limits are enforced from the logs.
+- **Block-list + rate limit** — any number is sent/dialed unless it's in an outgoing block list; a global daily/weekly/monthly SMS limit (RTDB runtime) still applies. No allow-list, no per-number quota.
 - **Block-list** — incoming calls/SMS from blocked senders (numeric **or** alphanumeric IDs like `JAZZ`) are archived without notifying.
 - **Editable WiFi** — set two WiFi networks from the dashboard; saved to SPIFFS and tried before the `secrets.h` networks on next boot, then AP fallback. No reflash needed to change networks.
 - **Runtime settings sync** — `jobLogs`, push-log toggles, DHT interval, SMS limits, and ntfy URL live in RTDB `/ttgo_tcall/settings/runtime`; edit them in the dashboard and the device re-reads on startup, every 10 min, or on demand via the **Sync** button / serial `sync`.

@@ -120,43 +120,36 @@ h1,h2{margin-top:24px}
 
 <h2>Firestore gateway path layout</h2>
 <ul>
-<li><code>sim_module/config</code> - gateway flags, limits, block lists, active switch, device name</li>
-<li><code>sim_module/device</code> - heartbeat / health (battery, signal, operator, last seen)</li>
-<li><code>sim_module/allowed_numbers/items/{+E164}</code> - outgoing permission and per-number quotas</li>
-<li><code>sim_module/sms_jobs/items</code> - pending, processing, sent, failed, blocked, or quota_exceeded SMS work</li>
-<li><code>sim_module/call_jobs/items</code> - pending, processing, completed, failed, blocked, quota_exceeded, or user_picked call work</li>
-<li><code>sim_module/sms_logs/items</code> and <code>sim_module/call_logs/items</code> - audit trail</li>
+<li><code>sim_module/device</code> - config, health, block lists, lifetime counters</li>
+<li><code>sim_module/sms/sms_jobs/{number}</code> - outgoing SMS queue (one doc per number)</li>
+<li><code>sim_module/sms/sms_received/{number}</code> - incoming SMS archive</li>
+<li><code>sim_module/calls/call_jobs/{number}</code> - outgoing missed-call queue</li>
+<li><code>sim_module/calls/call_received/{number}</code> - incoming call archive</li>
 </ul>
 
-<h2>SMS job format for Rails or another server</h2>
+<h2>SMS job format (doc id = phone number)</h2>
 <pre>{
   "phone_number": "+923001234567",
   "message": "hello",
   "status": "pending",
-  "created_at": "server timestamp",
-  "processing_started_at": null,
-  "completed_at": null,
-  "error": null
+  "enque_by": "app:orders",
+  "created_at": "server timestamp"
 }</pre>
 
-<h2>Call job format for Rails or another server</h2>
+<h2>Call job format (doc id = phone number)</h2>
 <pre>{
   "phone_number": "+923001234567",
   "status": "pending",
-  "created_at": "server timestamp",
-  "processing_started_at": null,
-  "completed_at": null,
-  "user_picked": false,
-  "duration_seconds": 0,
-  "error": null
+  "enque_by": "app:otp",
+  "created_at": "server timestamp"
 }</pre>
 
 <h2>Outgoing policy</h2>
 <ul>
-<li>Before queueing a job, add the target number under <code>sim_module/allowed_numbers/items/{+E164}</code> with <code>enabled = true</code>.</li>
-<li>If a job ends with <code>blocked</code> and <code>number_not_allowed</code>, allow the number and retry the job.</li>
-<li>Daily SMS and call quotas are counted from Firestore logs for the current UTC day.</li>
-<li>Set <code>ttgo_tcall/settings/runtime/jobLogs</code> to <code>true</code> to print serial <code>[JOB]</code> lines for claims, validation, quota checks, send/dial attempts, and final status.</li>
+<li>No allow-list: any number is sent/dialed unless it is in <code>device.blockedOutgoingSms</code> / <code>device.blockedOutgoingCallers</code> (then the job ends <code>blocked</code>, <code>error = blocked_outgoing</code>).</li>
+<li>Status flow: <code>pending &rarr; in_progress &rarr; sent</code> (SMS) or <code>called</code> (call), or <code>blocked</code> / <code>failed</code>.</li>
+<li>The global SMS rate limit lives in RTDB <code>ttgo_tcall/settings/runtime</code>.</li>
+<li>Set <code>ttgo_tcall/settings/runtime/jobLogs</code> to <code>true</code> for serial <code>[JOB]</code> lines.</li>
 </ul>
 
 <h2>Recommended dev rules</h2>

@@ -6,11 +6,9 @@
 - Accept modem-extracted numbers in international form when present.
 - Mark invalid numbers as errored instead of silently retrying forever.
 
-## Firestore Allowed Numbers
-- Outgoing SMS and calls are only allowed when the number exists in `sim_module/allowed_numbers/items`.
-- The number document must have `enabled = true`.
-- Daily usage is counted from `sim_module/sms_logs/items` and `sim_module/call_logs/items`.
-- The device falls back to the device-wide default quota only if the number-specific limit is missing or zero.
+## Outgoing Control (block-list model)
+- There is no allow-list. Outgoing SMS/calls are sent to any number **unless** it is in `device.blockedOutgoingSms` / `device.blockedOutgoingCallers`, in which case the job is marked `blocked` (`error = blocked_outgoing`).
+- The global SMS rate limit (`dailySmsLimit` / `weeklySmsLimit` / `monthlySmsLimit` in RTDB runtime settings) still applies; exceeding it fails the job with `error = rate_limited`. There are no per-number quotas.
 
 ## Canonical Form & Doc IDs (v8.2.1)
 - Numbers are normalized to `+<countrycode><digits>` (e.g. `+923001234567`). `normalizePhoneNumber()` in `sms_calls.ino` is the reference.
