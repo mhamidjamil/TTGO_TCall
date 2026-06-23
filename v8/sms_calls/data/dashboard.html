@@ -14,35 +14,36 @@
       <p id="buildMeta" class="meta-line">SPIFFS version loading</p>
     </div>
     <div class="top-actions">
-      <button id="syncRuntimeBtn" type="button">Sync Device Settings</button>
+      <button id="syncRuntimeBtn" type="button">Sync</button>
       <button id="refreshBtn" type="button">Refresh</button>
     </div>
   </header>
 
   <nav class="tabs" aria-label="Dashboard sections">
-    <button class="tab active" data-view="devices" type="button">Device</button>
+    <button class="tab active" data-view="device" type="button">Device</button>
     <button class="tab" data-view="wifi" type="button">WiFi</button>
-    <button class="tab" data-view="numbers" type="button">Numbers</button>
-    <button class="tab" data-view="blocks" type="button">Blocks</button>
     <button class="tab" data-view="sms" type="button">SMS</button>
     <button class="tab" data-view="calls" type="button">Calls</button>
-    <button class="tab" data-view="logs" type="button">Logs</button>
     <button class="tab" data-view="testing" type="button">Notification testing</button>
     <button class="tab" data-view="guide" type="button">Guide</button>
     <button class="tab" data-view="about" type="button">About</button>
   </nav>
 
   <main>
-    <section id="devices" class="view active">
+    <section id="device" class="view active">
       <div class="panel">
-        <div class="panel-head">
-          <h2>Device</h2>
-        </div>
+        <div class="panel-head"><h2>Device</h2></div>
         <form id="deviceForm" class="form-grid compact">
-          <label class="check"><input name="active" type="checkbox" checked> Active</label>
+          <label class="check"><input name="active" type="checkbox" checked> Active (master send switch)</label>
           <input name="name" placeholder="TTGO T-Call">
           <button type="submit">Save Device</button>
         </form>
+        <div id="deviceList" class="grid"></div>
+        <div id="counters" class="counter-grid"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Runtime settings</h2></div>
         <form id="runtimeForm" class="form-grid runtime-grid">
           <label class="check"><input name="jobLogs" type="checkbox" checked> Job logs</label>
           <label class="check"><input name="showFirebasePushLogs" type="checkbox"> Firebase logs</label>
@@ -51,16 +52,25 @@
           <input name="dailySmsLimit" type="number" min="0" placeholder="Daily SMS">
           <button type="submit">Save Runtime</button>
         </form>
-        <div id="deviceList" class="grid"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Block lists</h2></div>
+        <p class="help-text">One number (or sender id like <code>JAZZ</code>) per line. <b>Incoming</b> = still logged but no ntfy notification. <b>Outgoing</b> = the device refuses to send/dial; the job is marked <code>blocked</code>. Changes auto-apply on the device within ~1 minute, or instantly after pressing Sync.</p>
+        <form id="blockForm" class="block-grid">
+          <label>Incoming callers (mute)<textarea name="blockedIncomingCallers" placeholder="JAZZ&#10;000"></textarea></label>
+          <label>Incoming SMS senders (mute)<textarea name="blockedIncomingSms" placeholder="JAZZ&#10;000"></textarea></label>
+          <label>Outgoing callers (never dial)<textarea name="blockedOutgoingCallers" placeholder="JAZZ&#10;000"></textarea></label>
+          <label>Outgoing SMS (never send)<textarea name="blockedOutgoingSms" placeholder="JAZZ&#10;000"></textarea></label>
+          <button type="submit">Save Block Lists</button>
+        </form>
       </div>
     </section>
 
     <section id="wifi" class="view">
       <div class="panel">
-        <div class="panel-head">
-          <h2>WiFi Networks</h2>
-        </div>
-        <p class="help-text">Saved to Firebase; the device reads them on sync and stores them locally. On reboot it tries pair 1, then pair 2, then the networks in <code>secrets.h</code>, then its own AP. Set these while the device is online, then reboot to connect to the new network.</p>
+        <div class="panel-head"><h2>WiFi Networks</h2></div>
+        <p class="help-text">Saved to Firebase; the device reads them on sync and stores them locally. On reboot it tries pair 1, then pair 2, then the networks in <code>secrets.h</code>, then its own AP. Set these while the device is online, then reboot.</p>
         <form id="wifiForm" class="form-grid">
           <input name="ssid1" placeholder="WiFi name 1" autocomplete="off">
           <input name="pass1" type="password" placeholder="Password 1" autocomplete="off">
@@ -76,100 +86,81 @@
       </div>
     </section>
 
-    <section id="numbers" class="view">
-      <div class="panel">
-        <div class="panel-head">
-          <h2>Allowed Numbers</h2>
-        </div>
-        <form id="numberForm" class="form-grid">
-          <input name="phone_number" placeholder="+923001111111" autocomplete="tel" required>
-          <input name="sms_limit_per_day" type="number" min="0" value="5" aria-label="SMS daily limit">
-          <input name="call_limit_per_day" type="number" min="0" value="5" aria-label="Call daily limit">
-          <input name="notes" placeholder="Notes">
-          <label class="check"><input name="enabled" type="checkbox" checked> Enabled</label>
-          <button type="submit">Save Number</button>
-        </form>
-        <div id="numbersList" class="table-wrap"></div>
-      </div>
-    </section>
-
-    <section id="blocks" class="view">
-      <div class="panel">
-        <div class="panel-head">
-          <h2>Blocked Numbers</h2>
-        </div>
-        <form id="blockForm" class="two-column-form">
-          <label>
-            Blocked callers
-            <textarea name="blockedCallers" placeholder="+923001111111"></textarea>
-          </label>
-          <label>
-            Blocked SMS senders
-            <textarea name="blockedSmsSenders" placeholder="+923001111111"></textarea>
-          </label>
-          <button type="submit">Save Blocks</button>
-        </form>
-      </div>
-    </section>
-
     <section id="sms" class="view">
       <div class="panel">
-        <div class="panel-head">
-          <h2>SMS Jobs</h2>
-        </div>
+        <div class="panel-head"><h2>Queue SMS</h2></div>
         <form id="smsForm" class="form-grid">
           <input name="phone_number" placeholder="+923001111111" autocomplete="tel" required>
           <textarea name="message" placeholder="Message" required></textarea>
+          <input name="enque_by" placeholder="enqueued by (app / user id)">
           <button type="submit">Queue SMS</button>
         </form>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>SMS jobs</h2></div>
         <div id="smsJobs" class="table-wrap"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>SMS received</h2></div>
+        <div id="smsReceived" class="table-wrap"></div>
       </div>
     </section>
 
     <section id="calls" class="view">
       <div class="panel">
-        <div class="panel-head">
-          <h2>Call Jobs</h2>
-        </div>
+        <div class="panel-head"><h2>Queue Call</h2></div>
         <form id="callForm" class="form-grid compact">
           <input name="phone_number" placeholder="+923001111111" autocomplete="tel" required>
+          <input name="enque_by" placeholder="enqueued by (app / user id)">
           <button type="submit">Queue Call</button>
         </form>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Call jobs</h2></div>
         <div id="callJobs" class="table-wrap"></div>
       </div>
-    </section>
-
-    <section id="logs" class="view">
       <div class="panel">
-        <div class="panel-head">
-          <h2>Logs</h2>
-          <select id="logType">
-            <option value="sms">SMS</option>
-            <option value="calls">Calls</option>
-          </select>
-        </div>
-        <div id="logsList" class="table-wrap"></div>
+        <div class="panel-head"><h2>Calls received</h2></div>
+        <div id="callReceived" class="table-wrap"></div>
       </div>
     </section>
 
     <section id="testing" class="view">
       <div class="panel">
-        <div class="panel-head">
-          <h2>Notification Testing</h2>
-        </div>
+        <div class="panel-head"><h2>Notification Testing</h2></div>
         <div class="stack">
-          <p class="help-text">This sends a local ntfy test through the device, using the configured topic.</p>
+          <p class="help-text">Sends a local ntfy test through the device, using the configured topic.</p>
           <button id="notifyTestBtn" type="button">Send Test Notification</button>
           <div id="notifyTestState" class="status-box">Idle</div>
         </div>
       </div>
     </section>
 
+    <section id="guide" class="view">
+      <div class="panel">
+        <div class="panel-head"><h2>App developer guide</h2></div>
+        <div class="guide">
+          <h3>Queue an SMS (one document per number)</h3>
+          <pre>setDoc(doc(db, 'sim_module/sms/sms_jobs', '+923001234567'), {
+  message: 'hello', status: 'pending', enque_by: 'app:orders'
+})</pre>
+          <h3>Queue a missed call</h3>
+          <pre>setDoc(doc(db, 'sim_module/calls/call_jobs', '+923001234567'), {
+  status: 'pending', enque_by: 'app:otp'
+})</pre>
+          <h3>The device updates status</h3>
+          <p class="help-text">pending → in_progress → sent / called / blocked / failed. <code>blocked</code> means the number is in the outgoing block list. <code>enque_by</code> is preserved so you can link replies back to the sender.</p>
+          <h3>Read incoming</h3>
+          <pre>sim_module/sms/sms_received/{number}    // normalized_message, notified, blocked
+sim_module/calls/call_received/{number} // notified, blocked</pre>
+          <p class="help-text">See <code>v8/docs/10-SERVER-SMS-FLOW.md</code> for the full schema and field list.</p>
+        </div>
+      </div>
+    </section>
+
     <section id="about" class="view">
       <div class="panel">
-        <div class="panel-head">
-          <h2>About</h2>
-        </div>
+        <div class="panel-head"><h2>About</h2></div>
         <div class="about-grid">
           <div>
             <h3>Build</h3>
@@ -178,39 +169,12 @@
           </div>
           <div>
             <h3>Filesystem</h3>
-            <p class="help-text">Upload the `v8/sms_calls/data` folder to SPIFFS whenever this page changes.</p>
-            <p class="help-text">The firmware reads `/version.txt` so you can confirm the deployed UI matches the source.</p>
+            <p class="help-text">Upload the `v8/sms_calls/data` folder to SPIFFS whenever this page changes, separately from the sketch.</p>
           </div>
           <div>
-            <h3>Flow</h3>
-            <p class="help-text">SMS and call jobs are created in Firestore. The device polls every few seconds, claims pending work, enforces allowed numbers and quotas, and then writes logs back.</p>
+            <h3>Schema</h3>
+            <p class="help-text">sim_module &gt; device (config, block lists, counters), sms (sms_jobs, sms_received), calls (call_jobs, call_received). SMS limits live in RTDB runtime settings.</p>
           </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="guide" class="view">
-      <div class="panel">
-        <div class="panel-head">
-          <h2>Gateway Guide</h2>
-        </div>
-        <div class="guide">
-          <h3>Rails writes jobs here</h3>
-          <pre>sim_module/sms_jobs/items/{autoId}
-sim_module/call_jobs/items/{autoId}</pre>
-          <h3>Rails manages policy here</h3>
-          <pre>sim_module/config
-sim_module/allowed_numbers/items/{+E164}</pre>
-          <h3>Device writes results here</h3>
-          <pre>sim_module/sms_logs/items/{autoId}
-sim_module/call_logs/items/{autoId}</pre>
-          <h3>Test flow</h3>
-          <ol>
-            <li>Add the target number in Numbers and keep it enabled.</li>
-            <li>Queue an SMS or call job with status pending.</li>
-            <li>Watch Serial for JOB lines if jobLogs is enabled.</li>
-            <li>Read final queue status and the matching log entry.</li>
-          </ol>
         </div>
       </div>
     </section>
