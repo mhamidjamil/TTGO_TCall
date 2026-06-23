@@ -13,22 +13,31 @@ struct FirebaseCommand {
   String errorReason;
 };
 
+// A queued outgoing job. The Firestore document id IS the phone number, so
+// id == phoneNumber. enqueBy records which app/user created the job (for future
+// reply linking); the firmware only preserves it.
 struct FirestoreJob {
   String id;
   String phoneNumber;
   String message;
   String status;
   String error;
+  String enqueBy;
   bool userPicked = false;
   int durationSeconds = 0;
 };
 
-struct FirestoreAllowedNumber {
-  bool found = false;
-  bool enabled = false;
-  int smsLimitPerDay = 0;
-  int callLimitPerDay = 0;
-  String notes;
+// The four editable block lists stored on the sim_module/device document.
+struct BlockLists {
+  static const size_t kMax = 32;
+  String incomingCallers[kMax];
+  size_t incomingCallerCount = 0;
+  String incomingSms[kMax];
+  size_t incomingSmsCount = 0;
+  String outgoingCallers[kMax];
+  size_t outgoingCallerCount = 0;
+  String outgoingSms[kMax];
+  size_t outgoingSmsCount = 0;
 };
 
 struct FirebaseRuntimeSettings {
@@ -83,16 +92,10 @@ public:
                             bool defaultShowFirebasePushLogs,
                             bool defaultShowThingSpeakPushLogs = true,
                             const String &defaultNtfyUrl = String());
-  bool pushSimModuleEvent(const String &type,
-                          const String &number,
-                          const String &message,
-                          bool blocked,
-                          const String &pakistanTimestamp,
-                          int simIndex = -1);
+
+  // --- Gateway control plane (sim_module/device, /sms, /calls) ---
   bool bootstrapGateway(const String &deviceName,
                         int pollIntervalSeconds,
-                        int dailySmsDefaultLimit,
-                        int dailyCallDefaultLimit,
                         bool missedCallMode);
   bool fetchNextSmsJob(FirestoreJob &outJob);
   bool fetchNextCallJob(FirestoreJob &outJob);
@@ -103,22 +106,21 @@ public:
                            bool userPicked,
                            int durationSeconds,
                            const String &errorReason = String());
-  bool fetchAllowedNumber(const String &phoneNumber, FirestoreAllowedNumber &outAllowedNumber);
-  bool pushSmsLog(const String &direction,
-                  const String &phoneNumber,
-                  const String &message,
-                  unsigned long epochSeconds,
-                  const String &status = String("received"),
-                  const String &errorReason = String());
-  bool pushCallLog(const String &direction,
-                   const String &phoneNumber,
-                   int durationSeconds,
-                   bool answered,
-                   unsigned long epochSeconds,
-                   const String &status = String("received"),
-                   const String &errorReason = String());
-  bool countDailySmsUsage(const String &phoneNumber, const String &dayKey, int &outCount);
-  bool countDailyCallUsage(const String &phoneNumber, const String &dayKey, int &outCount);
+  // Per-number incoming archives (sim_module/sms/sms_received/{number} etc.).
+  bool pushSmsReceived(const String &number,
+                       const String &originalMessage,
+                       const String &normalizedMessage,
+                       bool wasDecoded,
+                       bool notified,
+                       bool blocked,
+                       const String &pakistanTimestamp,
+                       int simIndex = -1);
+  bool pushCallReceived(const String &number,
+                        bool notified,
+                        bool blocked,
+                        const String &pakistanTimestamp);
+  // Atomically increment a counter integer field on sim_module/device.
+  bool incrementDeviceCounter(const char *field);
   bool pushDeviceHeartbeat(const String &deviceName,
                            int batteryPercent,
                            int signalStrength,
@@ -127,14 +129,7 @@ public:
                            int pollIntervalSeconds,
                            bool missedCallMode);
   bool recoverStuckJobs(unsigned long cutoffEpochSeconds);
-  bool fetchSimBlockLists(String *blockedCallers,
-                          size_t maxBlockedCallers,
-                          size_t &blockedCallerCount,
-                          String *blockedSmsSenders,
-                          size_t maxBlockedSmsSenders,
-                          size_t &blockedSmsSenderCount);
-  bool bootstrapSimModulePaths();
-  bool cleanupLegacySimModulePaths();
+  bool fetchBlockLists(BlockLists &out);
   String lastError() const;
 
 private:
@@ -146,16 +141,13 @@ private:
   String rebuildUrlWithCurrentBase(const String &originalUrl) const;
   String buildPathUrl(const String &path) const;
   String buildFirestoreUrl(const String &path) const;
+  String firestoreDocumentName(const String &path) const;
   bool httpGetJson(const String &url, String &responseBody, int &statusCode);
   bool httpPatchJson(const String &url, const String &payload, String &responseBody, int &statusCode);
   bool httpGetBearer(const String &url, String &responseBody, int &statusCode);
   bool httpPostBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
   bool httpPatchBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
-  bool httpDeleteBearer(const String &url, String &responseBody, int &statusCode);
-  bool fetchFirestoreSettingsList(const String &fieldName, String *numbers, size_t maxNumbers, size_t &numberCount);
-  bool ensureConfigDocument();
-  bool deleteFirestoreCollectionDocuments(const String &collectionPath);
-  bool deleteFirestoreDocument(const String &documentPath);
+  bool ensureDeviceDocument();
   bool ensureFirestoreDocument(const String &documentPath);
 
   V8Config config{};
