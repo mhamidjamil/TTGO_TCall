@@ -4,7 +4,7 @@
 1. Compile-time defaults.
 2. SPIFFS persisted config.
 3. Runtime cloud settings from Firebase (`/ttgo_tcall/settings/runtime`).
-4. Firestore gateway data under `sim_module/config` for control-plane decisions.
+4. Firestore gateway data under `sim_module/device` (active switch + block lists) for control-plane decisions.
 5. Runtime changes from dashboard or cloud sync.
 6. Persist the last known good configuration.
 

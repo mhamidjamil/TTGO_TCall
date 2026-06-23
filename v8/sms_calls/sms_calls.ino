@@ -53,16 +53,13 @@ static const unsigned long heartbeatIntervalMs = 60UL * 1000UL;
 static const unsigned long recoveryIntervalMs = 60UL * 1000UL;
 static const unsigned long stuckJobAgeSeconds = 5UL * 60UL;
 static const unsigned long missedCallRingMs = 8000UL;
-static const int dailyCallDefaultLimit = 5;
 static const bool missedCallMode = true;
-static const size_t maxBlockedNumbers = 32;
 static bool showFirebasePushLogs = true;
 static bool showThingSpeakPushLogs = true;
 static bool jobLogs = true;
-static String blockedCallers[maxBlockedNumbers];
-static String blockedSmsSenders[maxBlockedNumbers];
-static size_t blockedCallerCount = 0;
-static size_t blockedSmsSenderCount = 0;
+static BlockLists blockLists;
+static unsigned long lastBlockListSync = 0;
+static const unsigned long blockListSyncIntervalMs = 60UL * 1000UL;
 static String modemLineBuffer;
 static bool awaitingSmsBody = false;
 static String pendingSmsNumber;
@@ -151,13 +148,95 @@ static bool numbersMatch(const String &left, const String &right) {
          leftDigits.substring(leftDigits.length() - 10) == rightDigits.substring(rightDigits.length() - 10);
 }
 
-static bool isBlockedNumber(const String &number, String *blockedNumbers, size_t blockedCount) {
+static bool isBlockedNumber(const String &number, const String *blockedNumbers, size_t blockedCount) {
   for (size_t i = 0; i < blockedCount; ++i) {
     if (numbersMatch(number, blockedNumbers[i])) {
       return true;
     }
   }
   return false;
+}
+
+// ---- Incoming SMS UCS2/UTF-16BE normalization ----
+static bool isHexString(const String &value) {
+  if (value.length() == 0) {
+    return false;
+  }
+  for (size_t i = 0; i < value.length(); ++i) {
+    char c = value.charAt(i);
+    bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    if (!hex) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static int hexNibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return 0;
+}
+
+// Decode a UTF-16BE hex string to UTF-8. Returns false if it does not decode to
+// mostly-printable text (so non-text hex is left untouched). BMP only.
+static bool decodeUcs2Hex(const String &hex, String &out) {
+  out = "";
+  size_t n = hex.length();
+  if (n == 0 || n % 4 != 0) {
+    return false;
+  }
+  size_t units = n / 4;
+  size_t printable = 0;
+  for (size_t i = 0; i < units; ++i) {
+    int hi = (hexNibble(hex.charAt(i * 4)) << 4) | hexNibble(hex.charAt(i * 4 + 1));
+    int lo = (hexNibble(hex.charAt(i * 4 + 2)) << 4) | hexNibble(hex.charAt(i * 4 + 3));
+    uint16_t cp = (uint16_t)((hi << 8) | lo);
+    if (cp >= 0xD800 && cp <= 0xDFFF) {
+      return false;  // surrogate pair (non-BMP) — not handled
+    }
+    if (cp < 0x80) {
+      out += (char)cp;
+    } else if (cp < 0x800) {
+      out += (char)(0xC0 | (cp >> 6));
+      out += (char)(0x80 | (cp & 0x3F));
+    } else {
+      out += (char)(0xE0 | (cp >> 12));
+      out += (char)(0x80 | ((cp >> 6) & 0x3F));
+      out += (char)(0x80 | (cp & 0x3F));
+    }
+    if (cp == 0x09 || cp == 0x0A || cp == 0x0D || (cp >= 0x20 && cp != 0x7F)) {
+      printable++;
+    }
+  }
+  return (printable * 100) >= (units * 80);
+}
+
+struct SmsNormalization {
+  String text;
+  String original;
+  bool wasDecoded;
+};
+
+// If the body looks like UCS2 (hex, length %4, starts 00xx, decodes to text),
+// return the decoded text; otherwise return the original unchanged.
+static SmsNormalization normalizeSmsBody(const String &raw) {
+  SmsNormalization result;
+  result.original = raw;
+  result.text = raw;
+  result.wasDecoded = false;
+
+  if (raw.length() >= 4 && raw.length() % 4 == 0 && isHexString(raw) && raw.startsWith("00")) {
+    String decoded;
+    if (decodeUcs2Hex(raw, decoded)) {
+      result.text = decoded;
+      result.wasDecoded = true;
+    } else {
+      Serial.println("[SMS] UCS2 decode failed or not printable; keeping original message");
+    }
+  }
+  return result;
 }
 
 static void logJob(const String &message) {
@@ -279,18 +358,6 @@ static String quotedField(const String &line, int fieldIndex) {
   return String();
 }
 
-static bool pushSimEvent(const String &type, const String &number, const String &message, bool blocked, const String &pakistanTimestamp, int simIndex = -1) {
-  if (!firebaseManager.isReady()) {
-    Logger::warn("FIREBASE", "SIM event skipped: firebase not ready");
-    return false;
-  }
-  if (!firebaseManager.pushSimModuleEvent(type, number, message, blocked, pakistanTimestamp, simIndex)) {
-    Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
-    return false;
-  }
-  return true;
-}
-
 static void processIncomingCall(const String &rawNumber) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
@@ -303,10 +370,17 @@ static void processIncomingCall(const String &rawNumber) {
   lastCallNumber = number;
   lastCallHandledMs = millis();
 
-  bool blocked = isBlockedNumber(number, blockedCallers, blockedCallerCount);
-  bool firebaseOk = pushSimEvent("call", number, String(), blocked, pakistanTimestamp);
+  bool blocked = isBlockedNumber(number, blockLists.incomingCallers, blockLists.incomingCallerCount);
+  bool firebaseOk = false;
   if (firebaseManager.isReady()) {
-    firebaseManager.pushCallLog("incoming", number, 0, false, epochSeconds);
+    firebaseOk = firebaseManager.pushCallReceived(number, !blocked, blocked, pakistanTimestamp);
+    if (!firebaseOk) {
+      Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
+    }
+    firebaseManager.incrementDeviceCounter("totalCallsReceived");
+    if (blocked) {
+      firebaseManager.incrementDeviceCounter("totalCallsMutedIncoming");
+    }
   }
 
   Serial.print("[CALL] incoming number=");
@@ -332,14 +406,25 @@ static void processIncomingCall(const String &rawNumber) {
   }
 }
 
-static void processIncomingSms(const String &rawNumber, const String &message, int smsIndex) {
+static void processIncomingSms(const String &rawNumber, const String &rawMessage, int smsIndex) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
   String pakistanTimestamp = formatEventTime(epochSeconds);
-  bool blocked = isBlockedNumber(number, blockedSmsSenders, blockedSmsSenderCount);
-  bool firebaseOk = pushSimEvent("sms", number, message, blocked, pakistanTimestamp, smsIndex);
+
+  // Normalize UCS2/UTF-16BE payloads before storing or notifying.
+  SmsNormalization norm = normalizeSmsBody(rawMessage);
+  bool blocked = isBlockedNumber(number, blockLists.incomingSms, blockLists.incomingSmsCount);
+
+  bool firebaseOk = false;
   if (firebaseManager.isReady()) {
-    firebaseManager.pushSmsLog("incoming", number, message, epochSeconds);
+    firebaseOk = firebaseManager.pushSmsReceived(number, norm.original, norm.text, norm.wasDecoded, !blocked, blocked, pakistanTimestamp, smsIndex);
+    if (!firebaseOk) {
+      Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
+    }
+    firebaseManager.incrementDeviceCounter("totalSmsReceived");
+    if (blocked) {
+      firebaseManager.incrementDeviceCounter("totalSmsMutedIncoming");
+    }
   }
 
   Serial.print("[SMS] incoming index=");
@@ -348,21 +433,23 @@ static void processIncomingSms(const String &rawNumber, const String &message, i
   Serial.print(number);
   Serial.print(" blocked=");
   Serial.print(blocked ? "yes" : "no");
+  Serial.print(" decoded=");
+  Serial.print(norm.wasDecoded ? "yes" : "no");
   Serial.print(" time=");
   Serial.print(pakistanTimestamp);
   Serial.print(" firestore=");
   Serial.print(firebaseOk ? "ok" : "failed");
   Serial.print(" message=");
-  Serial.println(message);
+  Serial.println(norm.text);
 
   if (blocked) {
     Logger::info("SMS", "Blocked SMS sender logged without ntfy");
   } else {
-    if (ntfyManager.notify(String("sms from ") + number, message)) {
+    if (ntfyManager.notify(String("sms from ") + number, norm.text)) {
       Serial.print("[NTFY] sms notification sent number=");
       Serial.print(number);
       Serial.print(" message=");
-      Serial.println(message);
+      Serial.println(norm.text);
     } else {
       Logger::warn("NTFY", ntfyManager.lastError().c_str());
     }
@@ -446,62 +533,43 @@ static void handleModemEvents() {
 }
 
 static bool processPendingCommand() {
-  unsigned long now = currentEpochSeconds();
-  String today = dayKeyFromEpoch(now);
   bool claimedAny = false;
 
   FirestoreJob smsJob;
   if (firebaseManager.fetchNextSmsJob(smsJob)) {
     claimedAny = true;
-    logJob(String("sms claimed id=") + smsJob.id + " number=" + smsJob.phoneNumber);
+    logJob(String("sms claimed id=") + smsJob.id + " enque_by=" + smsJob.enqueBy);
     String normalizedNumber = normalizePhoneNumber(smsJob.phoneNumber);
+    bool active = true;
+    String limitReason;
     if (normalizedNumber.length() == 0) {
       logJob(String("sms failed id=") + smsJob.id + " reason=number_invalid");
       firebaseManager.updateSmsJobStatus(smsJob, "failed", "number_invalid");
+    } else if (!firebaseManager.fetchGatewayActive(active)) {
+      logJob(String("sms failed id=") + smsJob.id + " reason=device_status_unavailable");
+      firebaseManager.updateSmsJobStatus(smsJob, "failed", "device_status_unavailable");
+    } else if (!active) {
+      logJob(String("sms blocked id=") + smsJob.id + " reason=device_inactive");
+      firebaseManager.updateSmsJobStatus(smsJob, "blocked", "device_inactive");
+    } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingSms, blockLists.outgoingSmsCount)) {
+      logJob(String("sms blocked id=") + smsJob.id + " number=" + normalizedNumber + " reason=blocked_outgoing");
+      firebaseManager.updateSmsJobStatus(smsJob, "blocked", "blocked_outgoing");
+      firebaseManager.incrementDeviceCounter("totalSmsBlockedOutgoing");
+    } else if (!rateLimitManager.canSend(limitReason)) {
+      logJob(String("sms failed id=") + smsJob.id + " reason=" + limitReason);
+      firebaseManager.updateSmsJobStatus(smsJob, "failed", limitReason);
     } else {
-      bool active = true;
-      FirestoreAllowedNumber allowed;
-      int usage = 0;
-      if (!firebaseManager.fetchGatewayActive(active)) {
-        logJob(String("sms failed id=") + smsJob.id + " reason=device_status_unavailable");
-        firebaseManager.updateSmsJobStatus(smsJob, "failed", "device_status_unavailable");
-      } else if (!active) {
-        logJob(String("sms blocked id=") + smsJob.id + " reason=device_inactive");
-        firebaseManager.updateSmsJobStatus(smsJob, "blocked", "device_inactive");
-      } else if (!firebaseManager.fetchAllowedNumber(normalizedNumber, allowed)) {
-        logJob(String("sms failed id=") + smsJob.id + " reason=allowed_number_lookup_failed");
-        firebaseManager.updateSmsJobStatus(smsJob, "failed", "allowed_number_lookup_failed");
-      } else if (!allowed.found || !allowed.enabled) {
-        logJob(String("sms blocked id=") + smsJob.id + " number=" + normalizedNumber + " reason=number_not_allowed");
-        firebaseManager.updateSmsJobStatus(smsJob, "blocked", "number_not_allowed");
-      } else if (!firebaseManager.countDailySmsUsage(normalizedNumber, today, usage)) {
-        logJob(String("sms failed id=") + smsJob.id + " reason=quota_lookup_failed");
-        firebaseManager.updateSmsJobStatus(smsJob, "failed", "quota_lookup_failed");
+      logJob(String("sms sending id=") + smsJob.id + " number=" + normalizedNumber);
+      bool sent = smsManager.sendMessage(normalizedNumber, smsJob.message);
+      if (sent) {
+        rateLimitManager.recordSend();
+        firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+        firebaseManager.updateSmsJobStatus(smsJob, "sent", String());
+        firebaseManager.incrementDeviceCounter("totalSmsSent");
+        logJob(String("sms sent id=") + smsJob.id + " number=" + normalizedNumber);
       } else {
-        int limit = allowed.smsLimitPerDay > 0 ? allowed.smsLimitPerDay : runtimeConfig.dailySmsLimit;
-        if (limit > 0 && usage >= limit) {
-          logJob(String("sms quota_exceeded id=") + smsJob.id + " usage=" + String(usage) + " limit=" + String(limit));
-          firebaseManager.updateSmsJobStatus(smsJob, "quota_exceeded", "daily_sms_quota_exceeded");
-        } else {
-          logJob(String("sms sending id=") + smsJob.id + " number=" + normalizedNumber + " usage=" + String(usage) + " limit=" + String(limit));
-          bool sent = smsManager.sendMessage(normalizedNumber, smsJob.message);
-          firebaseManager.pushSmsLog(
-              "outgoing",
-              normalizedNumber,
-              smsJob.message,
-              currentEpochSeconds(),
-              sent ? "sent" : "failed",
-              sent ? String() : String("send_failed"));
-          if (sent) {
-            rateLimitManager.recordSend();
-            firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
-            firebaseManager.updateSmsJobStatus(smsJob, "sent", String());
-            logJob(String("sms sent id=") + smsJob.id + " number=" + normalizedNumber);
-          } else {
-            firebaseManager.updateSmsJobStatus(smsJob, "failed", "send_failed");
-            logJob(String("sms failed id=") + smsJob.id + " reason=send_failed");
-          }
-        }
+        firebaseManager.updateSmsJobStatus(smsJob, "failed", "send_failed");
+        logJob(String("sms failed id=") + smsJob.id + " reason=send_failed");
       }
     }
   }
@@ -509,57 +577,37 @@ static bool processPendingCommand() {
   FirestoreJob callJob;
   if (firebaseManager.fetchNextCallJob(callJob)) {
     claimedAny = true;
-    logJob(String("call claimed id=") + callJob.id + " number=" + callJob.phoneNumber);
+    logJob(String("call claimed id=") + callJob.id + " enque_by=" + callJob.enqueBy);
     String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
+    bool active = true;
     if (normalizedNumber.length() == 0) {
       logJob(String("call failed id=") + callJob.id + " reason=number_invalid");
       firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "number_invalid");
+    } else if (!firebaseManager.fetchGatewayActive(active)) {
+      logJob(String("call failed id=") + callJob.id + " reason=device_status_unavailable");
+      firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
+    } else if (!active) {
+      logJob(String("call blocked id=") + callJob.id + " reason=device_inactive");
+      firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
+    } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingCallers, blockLists.outgoingCallerCount)) {
+      logJob(String("call blocked id=") + callJob.id + " number=" + normalizedNumber + " reason=blocked_outgoing");
+      firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "blocked_outgoing");
+      firebaseManager.incrementDeviceCounter("totalCallsBlockedOutgoing");
     } else {
-      bool active = true;
-      FirestoreAllowedNumber allowed;
-      int usage = 0;
-      if (!firebaseManager.fetchGatewayActive(active)) {
-        logJob(String("call failed id=") + callJob.id + " reason=device_status_unavailable");
-        firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
-      } else if (!active) {
-        logJob(String("call blocked id=") + callJob.id + " reason=device_inactive");
-        firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
-      } else if (!firebaseManager.fetchAllowedNumber(normalizedNumber, allowed)) {
-        logJob(String("call failed id=") + callJob.id + " reason=allowed_number_lookup_failed");
-        firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "allowed_number_lookup_failed");
-      } else if (!allowed.found || !allowed.enabled) {
-        logJob(String("call blocked id=") + callJob.id + " number=" + normalizedNumber + " reason=number_not_allowed");
-        firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "number_not_allowed");
-      } else if (!firebaseManager.countDailyCallUsage(normalizedNumber, today, usage)) {
-        logJob(String("call failed id=") + callJob.id + " reason=quota_lookup_failed");
-        firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "quota_lookup_failed");
-      } else {
-        int limit = allowed.callLimitPerDay > 0 ? allowed.callLimitPerDay : dailyCallDefaultLimit;
-        if (limit > 0 && usage >= limit) {
-          logJob(String("call quota_exceeded id=") + callJob.id + " usage=" + String(usage) + " limit=" + String(limit));
-          firebaseManager.updateCallJobStatus(callJob, "quota_exceeded", false, 0, "daily_call_quota_exceeded");
-        } else {
-          logJob(String("call dialing id=") + callJob.id + " number=" + normalizedNumber + " usage=" + String(usage) + " limit=" + String(limit));
-          bool userPicked = false;
-          int durationSeconds = 0;
-          bool completed = callManager.placeMissedCall(normalizedNumber, missedCallRingMs, userPicked, durationSeconds);
-          firebaseManager.pushCallLog(
-              "outgoing",
-              normalizedNumber,
-              durationSeconds,
-              userPicked,
-              currentEpochSeconds(),
-              completed ? "completed" : "failed",
-              completed ? String() : String("call_failed"));
-          firebaseManager.updateCallJobStatus(
-              callJob,
-              completed ? "completed" : "failed",
-              userPicked,
-              durationSeconds,
-              completed ? String() : String("call_failed"));
-          logJob(String("call ") + (completed ? "completed" : "failed") + " id=" + callJob.id + " picked=" + (userPicked ? "true" : "false") + " duration=" + String(durationSeconds));
-        }
+      logJob(String("call dialing id=") + callJob.id + " number=" + normalizedNumber);
+      bool userPicked = false;
+      int durationSeconds = 0;
+      bool completed = callManager.placeMissedCall(normalizedNumber, missedCallRingMs, userPicked, durationSeconds);
+      firebaseManager.updateCallJobStatus(
+          callJob,
+          completed ? "called" : "failed",
+          userPicked,
+          durationSeconds,
+          completed ? String() : String("call_failed"));
+      if (completed) {
+        firebaseManager.incrementDeviceCounter("totalCallsMade");
       }
+      logJob(String("call ") + (completed ? "called" : "failed") + " id=" + callJob.id + " picked=" + (userPicked ? "true" : "false") + " duration=" + String(durationSeconds));
     }
   }
 
@@ -630,6 +678,34 @@ static void printRuntimeSettingChange(const char *name, const String &oldValue, 
   Serial.println(newValue);
   Serial.println("============================");
   Serial.println();
+}
+
+// Pull the four block-list arrays from sim_module/device into RAM. Called on a
+// short timer and on every settings sync so blocking a number in Firestore
+// takes effect on the device within ~1 minute (and instantly via Sync).
+static void refreshBlockLists() {
+  if (!firebaseManager.isReady()) {
+    return;
+  }
+  size_t oldIn = blockLists.incomingCallerCount + blockLists.incomingSmsCount;
+  size_t oldOut = blockLists.outgoingCallerCount + blockLists.outgoingSmsCount;
+  if (firebaseManager.fetchBlockLists(blockLists)) {
+    size_t newIn = blockLists.incomingCallerCount + blockLists.incomingSmsCount;
+    size_t newOut = blockLists.outgoingCallerCount + blockLists.outgoingSmsCount;
+    if (oldIn != newIn || oldOut != newOut) {
+      Serial.print("[BLOCK] lists updated incomingCallers=");
+      Serial.print(blockLists.incomingCallerCount);
+      Serial.print(" incomingSms=");
+      Serial.print(blockLists.incomingSmsCount);
+      Serial.print(" outgoingCallers=");
+      Serial.print(blockLists.outgoingCallerCount);
+      Serial.print(" outgoingSms=");
+      Serial.println(blockLists.outgoingSmsCount);
+    }
+  } else {
+    Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
+  }
+  lastBlockListSync = millis();
 }
 
 static bool syncRuntimeSettingsFromCloud(const char *source) {
@@ -719,24 +795,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
     printRuntimeSettingChange("ntfyUrl", oldNtfyUrl, String(runtimeConfig.ntfyUrl));
   }
 
-  size_t oldBlockedCallerCount = blockedCallerCount;
-  size_t oldBlockedSmsSenderCount = blockedSmsSenderCount;
-  if (firebaseManager.fetchSimBlockLists(
-          blockedCallers,
-          maxBlockedNumbers,
-          blockedCallerCount,
-          blockedSmsSenders,
-          maxBlockedNumbers,
-          blockedSmsSenderCount)) {
-    if (oldBlockedCallerCount != blockedCallerCount) {
-      printRuntimeSettingChange("blocked_callers_count", String(oldBlockedCallerCount), String(blockedCallerCount));
-    }
-    if (oldBlockedSmsSenderCount != blockedSmsSenderCount) {
-      printRuntimeSettingChange("blocked_sms_senders_count", String(oldBlockedSmsSenderCount), String(blockedSmsSenderCount));
-    }
-  } else {
-    Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
-  }
+  refreshBlockLists();
 
   // Apply dashboard-managed WiFi pairs. Treat the cloud values as the desired
   // state; persist to SPIFFS only when something actually changed and at least
@@ -768,11 +827,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   Serial.print(" showThingSpeakPushLogs=");
   Serial.print(showThingSpeakPushLogs ? "true" : "false");
   Serial.print(" jobLogs=");
-  Serial.print(jobLogs ? "true" : "false");
-  Serial.print(" blockedCallers=");
-  Serial.print(blockedCallerCount);
-  Serial.print(" blockedSmsSenders=");
-  Serial.println(blockedSmsSenderCount);
+  Serial.println(jobLogs ? "true" : "false");
 
   lastRuntimeSettingsSync = millis();
   return true;
@@ -884,8 +939,6 @@ void setup() {
     if (firebaseManager.bootstrapGateway(
             runtimeConfig.deviceName,
             runtimeConfig.pollingIntervalSeconds,
-            runtimeConfig.dailySmsLimit,
-            dailyCallDefaultLimit,
             missedCallMode)) {
       Logger::info("FIRESTORE", "Gateway collections bootstrapped");
     } else {
@@ -932,6 +985,12 @@ void loop() {
 
   if (firebaseManager.isReady() && millis() - lastRuntimeSettingsSync >= runtimeSettingsSyncIntervalMs) {
     syncRuntimeSettingsFromCloud("periodic");
+  }
+
+  // Keep the block lists fresh so changes made in Firestore apply without a
+  // reboot or a full settings sync.
+  if (firebaseManager.isReady() && millis() - lastBlockListSync >= blockListSyncIntervalMs) {
+    refreshBlockLists();
   }
 
   if (firebaseManager.isReady() && millis() - lastRecoveryRun >= recoveryIntervalMs) {

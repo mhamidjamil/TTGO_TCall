@@ -70,12 +70,12 @@ Configured via env vars: `DEVICE_HOST`, `DEVICE_PORT`, `DASHBOARD_PASSWORD`, `US
 1. Compile-time defaults (`secrets.h` / `secrets.example.h`)
 2. SPIFFS persisted config
 3. RTDB runtime settings (`/ttgo_tcall/settings/runtime`)
-4. Firestore `sim_module/settings` for control-plane decisions
+4. Firestore `sim_module/device` (active switch + block lists) for control-plane decisions
 5. Live changes from dashboard / cloud sync (persisted back as last-known-good)
 
 ### Cloud layout
-- **Firestore `sim_module/`** — the GSM gateway control plane: `settings`, `settings/allowed_numbers/{id}`, `settings/sms_jobs/{id}`, `settings/call_jobs/{id}`, `settings/sms_logs`, `settings/call_logs`, plus `sms/by_number/{n}` and `calls/by_number/{n}` archives. Firestore paths must alternate collection/document. Job status flow: `pending → processing → sent/completed/failed/blocked/quota_exceeded`; jobs stuck in `processing` > 5 min reset to `pending`.
-- **RTDB `/ttgo_tcall/`** — legacy counters, telemetry snapshots, and `settings/runtime` (e.g. `intervalOfDhtSeconds`, `showFirebasePushLogs`, `jobLogs`, SMS limits).
+- **Firestore `sim_module/`** — exactly three children. `device` (doc: config, health, the four block-list arrays `blocked{Incoming,Outgoing}{Callers,Sms}`, and lifetime counters); `sms` (container doc) with subcollections `sms_jobs/{number}` + `sms_received/{number}`; `calls` with `call_jobs/{number}` + `call_received/{number}`. Jobs are keyed by phone number (doc id = number), one active job per number. Status flow: `pending → in_progress → sent`/`called` | `blocked` | `failed`; jobs stuck in `in_progress` > 5 min reset to `pending`. Outgoing control is block-list only (no allow-list, no per-number quota). Incoming UCS2/UTF-16BE SMS are decoded before store/notify (`normalized_message`/`original_message`/`was_decoded`). See `v8/docs/10-SERVER-SMS-FLOW.md` for the app enqueue contract.
+- **RTDB `/ttgo_tcall/`** — counters (rolling rate-limit windows), telemetry snapshots, and `settings/runtime` (`intervalOfDhtSeconds`, `showFirebasePushLogs`, `jobLogs`, the SMS limits — only here, not duplicated in Firestore — `ntfyUrl`, and WiFi pairs).
 
 ## Working Rules (from .github/copilot-instructions.md & READMEs — follow these)
 

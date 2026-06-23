@@ -29,16 +29,16 @@ FirebaseConfig fbconfig;
 Firebase_ESP_Client firebase;
 #endif
 
-// Flat, namespaced Firestore layout. Firestore paths must alternate
-// collection/document, so each entity is a document under sim_module with an
-// "items" subcollection holding its records.
-constexpr const char *kConfigPath = "sim_module/config";          // doc: flags, limits, block lists, active, name
-constexpr const char *kDevicePath = "sim_module/device";          // doc: heartbeat / health
-constexpr const char *kAllowedNumbersPath = "sim_module/allowed_numbers/items";
-constexpr const char *kSmsJobsPath = "sim_module/sms_jobs/items";
-constexpr const char *kCallJobsPath = "sim_module/call_jobs/items";
-constexpr const char *kSmsLogsPath = "sim_module/sms_logs/items";
-constexpr const char *kCallLogsPath = "sim_module/call_logs/items";
+// Firestore layout: sim_module > { device, sms, calls }. Paths alternate
+// collection/document, so sms/calls are container documents whose records live
+// in number-keyed subcollections (doc id = phone number).
+constexpr const char *kDevicePath = "sim_module/device";   // doc: config, health, block lists, counters
+constexpr const char *kSmsDocPath = "sim_module/sms";      // container doc
+constexpr const char *kCallsDocPath = "sim_module/calls";  // container doc
+constexpr const char *kSmsJobsPath = "sim_module/sms/sms_jobs";
+constexpr const char *kSmsReceivedPath = "sim_module/sms/sms_received";
+constexpr const char *kCallJobsPath = "sim_module/calls/call_jobs";
+constexpr const char *kCallReceivedPath = "sim_module/calls/call_received";
 
 void setHttpStatusError(String &error, const char *op, int statusCode, const String &body) {
   error = String(op) + String(" failed code=") + statusCode + String(" body=") + body;
@@ -265,9 +265,15 @@ void parseFirestoreJob(const JsonObjectConst &document, FirestoreJob &outJob) {
   outJob.id = firestoreDocumentId(document["name"] | "");
   JsonObjectConst fields = document["fields"].as<JsonObjectConst>();
   outJob.phoneNumber = firestoreStringField(fields, "phone_number");
+  // Jobs are keyed by phone number (doc id == number), so fall back to the id
+  // when the writer did not also store a phone_number field.
+  if (outJob.phoneNumber.length() == 0) {
+    outJob.phoneNumber = outJob.id;
+  }
   outJob.message = firestoreStringField(fields, "message");
   outJob.status = firestoreStringField(fields, "status");
   outJob.error = firestoreStringField(fields, "error");
+  outJob.enqueBy = firestoreStringField(fields, "enque_by");
   outJob.userPicked = firestoreBoolField(fields, "user_picked", false);
   outJob.durationSeconds = firestoreIntField(fields, "duration_seconds", 0);
 }
@@ -847,87 +853,27 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
   return true;
 }
 
-bool FirebaseManager::pushSimModuleEvent(const String &type,
-                                         const String &number,
-                                         const String &message,
-                                         bool blocked,
-                                         const String &pakistanTimestamp,
-                                         int simIndex) {
-  if (!ensureAuthenticated()) {
-    return false;
-  }
-
-  String section;
-  if (type == "call") {
-    section = "calls";
-  } else if (type == "sms") {
-    section = "sms";
-  } else {
-    error = "invalid sim event type";
-    return false;
-  }
-
-  String documentId = safeFirestoreDocumentId(number);
-  String documentPath = String("sim_module/") + section + String("/by_number/") + documentId;
-
-  DynamicJsonDocument doc(1792);
-  JsonObject fields = doc.createNestedObject("fields");
-  fields["type"]["stringValue"] = type;
-  fields["number"]["stringValue"] = number;
-  fields["documentId"]["stringValue"] = documentId;
-  fields["message"]["stringValue"] = message;
-  fields["blocked"]["booleanValue"] = blocked;
-  fields["source"]["stringValue"] = "ttgo_tcall_v8";
-  fields["pakistanTime"]["stringValue"] = pakistanTimestamp;
-  fields["receivedAtPakistan"]["stringValue"] = pakistanTimestamp;
-  fields["updatedAtPakistan"]["stringValue"] = pakistanTimestamp;
-  fields["uptimeSeconds"]["integerValue"] = String(millis() / 1000UL);
-  if (simIndex > 0) {
-    fields["simIndex"]["integerValue"] = String(simIndex);
-  }
-
-  String payload;
-  serializeJson(doc, payload);
-
-  String response;
-  int statusCode = 0;
-  String url = buildFirestoreUrl(documentPath);
-  if (!httpPatchBearerJson(url, payload, response, statusCode)) {
-    return false;
-  }
-
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "firestore sim event push", statusCode, response);
-    return false;
-  }
-
-  error = String();
-  return true;
-}
-
 bool FirebaseManager::bootstrapGateway(const String &deviceName,
                                        int pollIntervalSeconds,
-                                       int dailySmsDefaultLimit,
-                                       int dailyCallDefaultLimit,
                                        bool missedCallMode) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  // Make sure the config document and its block-list arrays exist first.
-  if (!ensureConfigDocument()) {
+  // Create the device document with seeded block lists/counters if missing.
+  if (!ensureDeviceDocument()) {
     return false;
   }
 
-  String url = buildFirestoreUrl(kConfigPath);
-  DynamicJsonDocument doc(1536);
+  // Patch the config/identity fields. SMS limits are intentionally NOT stored
+  // here; they live only in RTDB /ttgo_tcall/settings/runtime (no duplication).
+  String url = buildFirestoreUrl(kDevicePath);
+  DynamicJsonDocument doc(768);
   JsonObject fields = doc.createNestedObject("fields");
   setStringField(fields, "name", deviceName);
   setBoolField(fields, "active", true);
   setIntField(fields, "poll_interval_seconds", pollIntervalSeconds);
   setBoolField(fields, "missed_call_mode", missedCallMode);
-  setIntField(fields, "daily_sms_default_limit", dailySmsDefaultLimit);
-  setIntField(fields, "daily_call_default_limit", dailyCallDefaultLimit);
   setStringField(fields, "source", "ttgo_tcall_v8");
 
   String payload;
@@ -940,8 +886,6 @@ bool FirebaseManager::bootstrapGateway(const String &deviceName,
                     "&updateMask.fieldPaths=active"
                     "&updateMask.fieldPaths=poll_interval_seconds"
                     "&updateMask.fieldPaths=missed_call_mode"
-                    "&updateMask.fieldPaths=daily_sms_default_limit"
-                    "&updateMask.fieldPaths=daily_call_default_limit"
                     "&updateMask.fieldPaths=source";
   if (!httpPatchBearerJson(patchUrl, payload, response, statusCode)) {
     return false;
@@ -990,7 +934,7 @@ bool FirebaseManager::fetchNextSmsJob(FirestoreJob &outJob) {
 
     DynamicJsonDocument claimDoc(768);
     JsonObject fields = claimDoc.createNestedObject("fields");
-    setStringField(fields, "status", "processing");
+    setStringField(fields, "status", "in_progress");
     unsigned long now = currentFirestoreEpoch();
     setTimestampField(fields, "processing_started_at", now);
     setIntField(fields, "processing_started_epoch", (int)now);
@@ -1009,7 +953,7 @@ bool FirebaseManager::fetchNextSmsJob(FirestoreJob &outJob) {
       return false;
     }
 
-    candidate.status = "processing";
+    candidate.status = "in_progress";
     outJob = candidate;
     error = String();
     return true;
@@ -1054,7 +998,7 @@ bool FirebaseManager::fetchNextCallJob(FirestoreJob &outJob) {
 
     DynamicJsonDocument claimDoc(768);
     JsonObject fields = claimDoc.createNestedObject("fields");
-    setStringField(fields, "status", "processing");
+    setStringField(fields, "status", "in_progress");
     unsigned long now = currentFirestoreEpoch();
     setTimestampField(fields, "processing_started_at", now);
     setIntField(fields, "processing_started_epoch", (int)now);
@@ -1073,7 +1017,7 @@ bool FirebaseManager::fetchNextCallJob(FirestoreJob &outJob) {
       return false;
     }
 
-    candidate.status = "processing";
+    candidate.status = "in_progress";
     outJob = candidate;
     error = String();
     return true;
@@ -1091,7 +1035,7 @@ bool FirebaseManager::fetchGatewayActive(bool &outActive) {
   outActive = true;
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(kConfigPath), response, statusCode)) {
+  if (!httpGetBearer(buildFirestoreUrl(kDevicePath), response, statusCode)) {
     return false;
   }
 
@@ -1194,65 +1138,69 @@ bool FirebaseManager::updateCallJobStatus(const FirestoreJob &job,
   return true;
 }
 
-bool FirebaseManager::fetchAllowedNumber(const String &phoneNumber, FirestoreAllowedNumber &outAllowedNumber) {
+bool FirebaseManager::pushSmsReceived(const String &number,
+                                      const String &originalMessage,
+                                      const String &normalizedMessage,
+                                      bool wasDecoded,
+                                      bool notified,
+                                      bool blocked,
+                                      const String &pakistanTimestamp,
+                                      int simIndex) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  outAllowedNumber = FirestoreAllowedNumber();
-  String documentId = safeFirestoreDocumentId(phoneNumber);
+  String documentId = safeFirestoreDocumentId(number);
+  String documentPath = String(kSmsReceivedPath) + "/" + documentId;
+
+  DynamicJsonDocument doc(1792);
+  JsonObject fields = doc.createNestedObject("fields");
+  setStringField(fields, "number", number);
+  setStringField(fields, "original_message", originalMessage);
+  setStringField(fields, "normalized_message", normalizedMessage);
+  setBoolField(fields, "was_decoded", wasDecoded);
+  setBoolField(fields, "notified", notified);
+  setBoolField(fields, "blocked", blocked);
+  setStringField(fields, "last_received_at", pakistanTimestamp);
+  setStringField(fields, "source", "ttgo_tcall_v8");
+  if (simIndex > 0) {
+    setIntField(fields, "sim_index", simIndex);
+  }
+
+  String payload;
+  serializeJson(doc, payload);
+
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(String(kAllowedNumbersPath) + "/" + documentId), response, statusCode)) {
+  if (!httpPatchBearerJson(buildFirestoreUrl(documentPath), payload, response, statusCode)) {
     return false;
-  }
-
-  if (statusCode == 404) {
-    error = String();
-    return true;
   }
   if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "allowed number fetch", statusCode, response);
+    setHttpStatusError(error, "sms received push", statusCode, response);
     return false;
   }
 
-  DynamicJsonDocument doc(2048);
-  if (deserializeJson(doc, response)) {
-    error = String("allowed number parse failed body=") + response;
-    return false;
-  }
-
-  JsonObjectConst fields = doc["fields"].as<JsonObjectConst>();
-  outAllowedNumber.found = true;
-  outAllowedNumber.enabled = firestoreBoolField(fields, "enabled", false);
-  outAllowedNumber.smsLimitPerDay = firestoreIntField(fields, "sms_limit_per_day", 0);
-  outAllowedNumber.callLimitPerDay = firestoreIntField(fields, "call_limit_per_day", 0);
-  outAllowedNumber.notes = firestoreStringField(fields, "notes");
   error = String();
   return true;
 }
 
-bool FirebaseManager::pushSmsLog(const String &direction,
-                                 const String &phoneNumber,
-                                 const String &message,
-                                 unsigned long epochSeconds,
-                                 const String &status,
-                                 const String &errorReason) {
+bool FirebaseManager::pushCallReceived(const String &number,
+                                       bool notified,
+                                       bool blocked,
+                                       const String &pakistanTimestamp) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  String documentId = safeFirestoreDocumentId(String("sms_") + String(millis()) + "_" + phoneNumber);
-  DynamicJsonDocument doc(1536);
+  String documentId = safeFirestoreDocumentId(number);
+  String documentPath = String(kCallReceivedPath) + "/" + documentId;
+
+  DynamicJsonDocument doc(1024);
   JsonObject fields = doc.createNestedObject("fields");
-  setStringField(fields, "direction", direction);
-  setStringField(fields, "phone_number", phoneNumber);
-  setStringField(fields, "message", message);
-  setStringField(fields, "status", status);
-  setStringField(fields, "error", errorReason);
-  setTimestampField(fields, "timestamp", epochSeconds);
-  setIntField(fields, "timestamp_epoch", (int)epochSeconds);
-  setStringField(fields, "day_key", dayKeyFromEpoch(epochSeconds));
+  setStringField(fields, "number", number);
+  setBoolField(fields, "notified", notified);
+  setBoolField(fields, "blocked", blocked);
+  setStringField(fields, "last_received_at", pakistanTimestamp);
   setStringField(fields, "source", "ttgo_tcall_v8");
 
   String payload;
@@ -1260,11 +1208,11 @@ bool FirebaseManager::pushSmsLog(const String &direction,
 
   String response;
   int statusCode = 0;
-  if (!httpPatchBearerJson(buildFirestoreUrl(String(kSmsLogsPath) + "/" + documentId), payload, response, statusCode)) {
+  if (!httpPatchBearerJson(buildFirestoreUrl(documentPath), payload, response, statusCode)) {
     return false;
   }
   if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "sms log push", statusCode, response);
+    setHttpStatusError(error, "call received push", statusCode, response);
     return false;
   }
 
@@ -1272,126 +1220,36 @@ bool FirebaseManager::pushSmsLog(const String &direction,
   return true;
 }
 
-bool FirebaseManager::pushCallLog(const String &direction,
-                                  const String &phoneNumber,
-                                  int durationSeconds,
-                                  bool answered,
-                                  unsigned long epochSeconds,
-                                  const String &status,
-                                  const String &errorReason) {
+// Atomically +1 an integer field on sim_module/device using a Firestore commit
+// transform, so there is no read-modify-write race and a missing field is
+// treated as 0.
+bool FirebaseManager::incrementDeviceCounter(const char *field) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  String documentId = safeFirestoreDocumentId(String("call_") + String(millis()) + "_" + phoneNumber);
-  DynamicJsonDocument doc(1536);
-  JsonObject fields = doc.createNestedObject("fields");
-  setStringField(fields, "direction", direction);
-  setStringField(fields, "phone_number", phoneNumber);
-  setIntField(fields, "duration_seconds", durationSeconds);
-  setBoolField(fields, "answered", answered);
-  setStringField(fields, "status", status);
-  setStringField(fields, "error", errorReason);
-  setTimestampField(fields, "timestamp", epochSeconds);
-  setIntField(fields, "timestamp_epoch", (int)epochSeconds);
-  setStringField(fields, "day_key", dayKeyFromEpoch(epochSeconds));
-  setStringField(fields, "source", "ttgo_tcall_v8");
+  DynamicJsonDocument doc(1024);
+  JsonArray writes = doc.createNestedArray("writes");
+  JsonObject transform = writes.createNestedObject().createNestedObject("transform");
+  transform["document"] = firestoreDocumentName(kDevicePath);
+  JsonObject ft = transform["fieldTransforms"].createNestedArray().createNestedObject();
+  ft["fieldPath"] = field;
+  ft["increment"]["integerValue"] = "1";
 
   String payload;
   serializeJson(doc, payload);
 
+  String url = String("https://firestore.googleapis.com/v1/projects/") +
+               config.firebaseProjectId + String("/databases/(default)/documents:commit");
   String response;
   int statusCode = 0;
-  if (!httpPatchBearerJson(buildFirestoreUrl(String(kCallLogsPath) + "/" + documentId), payload, response, statusCode)) {
+  if (!httpPostBearerJson(url, payload, response, statusCode)) {
     return false;
   }
   if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "call log push", statusCode, response);
+    setHttpStatusError(error, "device counter increment", statusCode, response);
     return false;
   }
-
-  error = String();
-  return true;
-}
-
-bool FirebaseManager::countDailySmsUsage(const String &phoneNumber, const String &dayKey, int &outCount) {
-  if (!ensureAuthenticated()) {
-    return false;
-  }
-
-  outCount = 0;
-  String response;
-  int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(kSmsLogsPath), response, statusCode)) {
-    return false;
-  }
-  if (statusCode == 404) {
-    error = String();
-    return true;
-  }
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "sms quota fetch", statusCode, response);
-    return false;
-  }
-
-  DynamicJsonDocument doc(16384);
-  if (deserializeJson(doc, response)) {
-    error = String("sms quota parse failed body=") + response;
-    return false;
-  }
-
-  JsonArray documents = doc["documents"].as<JsonArray>();
-  for (JsonVariant item : documents) {
-    JsonObjectConst fields = item["fields"].as<JsonObjectConst>();
-    if (firestoreStringField(fields, "direction") == "outgoing" &&
-        firestoreStringField(fields, "status") == "sent" &&
-        firestoreStringField(fields, "phone_number") == phoneNumber &&
-        firestoreStringField(fields, "day_key") == dayKey) {
-      outCount++;
-    }
-  }
-
-  error = String();
-  return true;
-}
-
-bool FirebaseManager::countDailyCallUsage(const String &phoneNumber, const String &dayKey, int &outCount) {
-  if (!ensureAuthenticated()) {
-    return false;
-  }
-
-  outCount = 0;
-  String response;
-  int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(kCallLogsPath), response, statusCode)) {
-    return false;
-  }
-  if (statusCode == 404) {
-    error = String();
-    return true;
-  }
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "call quota fetch", statusCode, response);
-    return false;
-  }
-
-  DynamicJsonDocument doc(16384);
-  if (deserializeJson(doc, response)) {
-    error = String("call quota parse failed body=") + response;
-    return false;
-  }
-
-  JsonArray documents = doc["documents"].as<JsonArray>();
-  for (JsonVariant item : documents) {
-    JsonObjectConst fields = item["fields"].as<JsonObjectConst>();
-    if (firestoreStringField(fields, "direction") == "outgoing" &&
-        firestoreStringField(fields, "status") == "completed" &&
-        firestoreStringField(fields, "phone_number") == phoneNumber &&
-        firestoreStringField(fields, "day_key") == dayKey) {
-      outCount++;
-    }
-  }
-
   error = String();
   return true;
 }
@@ -1479,7 +1337,7 @@ bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
       JsonObjectConst fields = item["fields"].as<JsonObjectConst>();
       String status = firestoreStringField(fields, "status");
       unsigned long started = firestoreEpochField(fields, "processing_started_epoch", 0);
-      if (status != "processing" || started == 0 || started >= cutoffEpochSeconds) {
+      if (status != "in_progress" || started == 0 || started >= cutoffEpochSeconds) {
         continue;
       }
 
@@ -1510,118 +1368,114 @@ bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
   return true;
 }
 
-bool FirebaseManager::fetchSimBlockLists(String *blockedCallers,
-                                         size_t maxBlockedCallers,
-                                         size_t &blockedCallerCount,
-                                         String *blockedSmsSenders,
-                                         size_t maxBlockedSmsSenders,
-                                         size_t &blockedSmsSenderCount) {
+
+bool FirebaseManager::fetchBlockLists(BlockLists &out) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  blockedCallerCount = 0;
-  blockedSmsSenderCount = 0;
+  out = BlockLists();
 
-  if (!ensureConfigDocument()) {
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(buildFirestoreUrl(kDevicePath), response, statusCode)) {
+    return false;
+  }
+  if (statusCode == 404) {
+    error = String();
+    return true;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "block lists fetch", statusCode, response);
     return false;
   }
 
-  if (!fetchFirestoreSettingsList("blockedCallers", blockedCallers, maxBlockedCallers, blockedCallerCount)) {
+  DynamicJsonDocument doc(4096);
+  if (deserializeJson(doc, response)) {
+    error = String("block lists parse failed body=") + response;
     return false;
   }
 
-  if (!fetchFirestoreSettingsList("blockedSmsSenders", blockedSmsSenders, maxBlockedSmsSenders, blockedSmsSenderCount)) {
-    return false;
-  }
+  JsonObjectConst fields = doc["fields"].as<JsonObjectConst>();
+  appendFirestoreArrayStrings(fields["blockedIncomingCallers"], out.incomingCallers, BlockLists::kMax, out.incomingCallerCount);
+  appendFirestoreArrayStrings(fields["blockedIncomingSms"], out.incomingSms, BlockLists::kMax, out.incomingSmsCount);
+  appendFirestoreArrayStrings(fields["blockedOutgoingCallers"], out.outgoingCallers, BlockLists::kMax, out.outgoingCallerCount);
+  appendFirestoreArrayStrings(fields["blockedOutgoingSms"], out.outgoingSms, BlockLists::kMax, out.outgoingSmsCount);
 
   error = String();
   return true;
 }
 
-bool FirebaseManager::bootstrapSimModulePaths() {
-  if (!ensureAuthenticated()) {
+// Create sim_module/device with default block lists if missing, seeding any
+// empty block-list array with ["JAZZ","000"] as an editable template.
+bool FirebaseManager::ensureDeviceDocument() {
+  String url = buildFirestoreUrl(kDevicePath);
+  String response;
+  int statusCode = 0;
+  if (!httpGetBearer(url, response, statusCode)) {
     return false;
   }
 
-  // Parent documents for the incoming archives and for each entity's "items"
-  // subcollection, so the collections show up cleanly in the console.
-  const char *paths[] = {
-      "sim_module/sms",
-      "sim_module/calls",
-      "sim_module/allowed_numbers",
-      "sim_module/sms_jobs",
-      "sim_module/call_jobs",
-      "sim_module/sms_logs",
-      "sim_module/call_logs",
-      "sim_module/device",
-  };
-
-  for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
-    if (!ensureFirestoreDocument(paths[i])) {
-      return false;
-    }
-  }
-
-  if (!ensureConfigDocument()) {
+  bool exists = (statusCode >= 200 && statusCode < 300);
+  if (!exists && statusCode != 404) {
+    setHttpStatusError(error, "device doc check", statusCode, response);
     return false;
   }
 
-  error = String();
-  return true;
-}
+  bool seedIncomingCallers = true, seedIncomingSms = true, seedOutgoingCallers = true, seedOutgoingSms = true;
+  if (exists) {
+    DynamicJsonDocument readDoc(4096);
+    if (!deserializeJson(readDoc, response)) {
+      JsonObjectConst fields = readDoc["fields"].as<JsonObjectConst>();
+      auto hasItems = [&](const char *f) {
+        return fields[f]["arrayValue"]["values"].as<JsonArrayConst>().size() > 0;
+      };
+      seedIncomingCallers = !hasItems("blockedIncomingCallers");
+      seedIncomingSms = !hasItems("blockedIncomingSms");
+      seedOutgoingCallers = !hasItems("blockedOutgoingCallers");
+      seedOutgoingSms = !hasItems("blockedOutgoingSms");
+    }
+  }
 
-bool FirebaseManager::cleanupLegacySimModulePaths() {
-  if (!ensureAuthenticated()) {
+  if (exists && !seedIncomingCallers && !seedIncomingSms && !seedOutgoingCallers && !seedOutgoingSms) {
+    return true;  // already present with populated lists
+  }
+
+  Serial.println("[FIRESTORE] seeding sim_module/device defaults (JAZZ, 000)");
+
+  DynamicJsonDocument doc(2048);
+  JsonObject fields = doc.createNestedObject("fields");
+  String mask;
+  if (!exists) {
+    fields["active"]["booleanValue"] = true;
+    fields["name"]["stringValue"] = "TTGO T-Call";
+    fields["source"]["stringValue"] = "ttgo_tcall_v8";
+    mask += "&updateMask.fieldPaths=active&updateMask.fieldPaths=name&updateMask.fieldPaths=source";
+  }
+  const char *arrayFields[] = {"blockedIncomingCallers", "blockedIncomingSms", "blockedOutgoingCallers", "blockedOutgoingSms"};
+  bool seed[] = {seedIncomingCallers, seedIncomingSms, seedOutgoingCallers, seedOutgoingSms};
+  for (size_t i = 0; i < 4; ++i) {
+    if (!seed[i]) {
+      continue;
+    }
+    JsonArray values = fields[arrayFields[i]]["arrayValue"].createNestedArray("values");
+    values.createNestedObject()["stringValue"] = "JAZZ";
+    values.createNestedObject()["stringValue"] = "000";
+    mask += String("&updateMask.fieldPaths=") + arrayFields[i];
+  }
+
+  String payload;
+  serializeJson(doc, payload);
+  String writeResponse;
+  int writeStatus = 0;
+  String patchUrl = url + "?" + (mask.length() ? mask.substring(1) : String());
+  if (!httpPatchBearerJson(patchUrl, payload, writeResponse, writeStatus)) {
     return false;
   }
-
-  const char *legacyCollections[] = {
-      "sim_module/calls/entries",
-      "sim_module/sms/entries",
-      "sim_module/blocked_calls/entries",
-      "sim_module/blocked_sms/entries",
-      "sim_module/blocked_callers/numbers",
-      "sim_module/blocked_sms_senders/numbers",
-      "sim_module/blocked_caller/numbers",
-      "sim_module/blocked_sms_sender/numbers",
-      // Old flat-under-settings schema (pre v8.3) now superseded by the
-      // sim_module/<entity>/items layout.
-      "sim_module/settings/allowed_numbers",
-      "sim_module/settings/sms_jobs",
-      "sim_module/settings/call_jobs",
-      "sim_module/settings/sms_logs",
-      "sim_module/settings/call_logs",
-      "sim_modules",
-      "allowed_numbers",
-      "sms_jobs",
-      "call_jobs",
-      "sms_logs",
-      "call_logs",
-  };
-
-  for (size_t i = 0; i < sizeof(legacyCollections) / sizeof(legacyCollections[0]); ++i) {
-    if (!deleteFirestoreCollectionDocuments(legacyCollections[i])) {
-      return false;
-    }
+  if (writeStatus < 200 || writeStatus >= 300) {
+    setHttpStatusError(error, "device doc seed", writeStatus, writeResponse);
+    return false;
   }
-
-  const char *legacyDocuments[] = {
-      "sim_module/blocked_calls",
-      "sim_module/blocked_sms",
-      "sim_module/blocked_callers",
-      "sim_module/blocked_sms_senders",
-      "sim_module/blocked_caller",
-      "sim_module/blocked_sms_sender",
-      "sim_module/settings",
-  };
-
-  for (size_t i = 0; i < sizeof(legacyDocuments) / sizeof(legacyDocuments[0]); ++i) {
-    if (!deleteFirestoreDocument(legacyDocuments[i])) {
-      return false;
-    }
-  }
-
   error = String();
   return true;
 }
@@ -1631,16 +1485,25 @@ bool FirebaseManager::bootstrapPaths() {
     return false;
   }
 
-  if (!bootstrapSimModulePaths()) {
+  // Container documents so the subcollections render cleanly in the console.
+  if (!ensureFirestoreDocument(kSmsDocPath) || !ensureFirestoreDocument(kCallsDocPath)) {
     return false;
   }
-
-  if (!cleanupLegacySimModulePaths()) {
+  if (!ensureDeviceDocument()) {
     return false;
   }
 
   error = String();
   return true;
+}
+
+String FirebaseManager::firestoreDocumentName(const String &path) const {
+  String normalizedPath = path;
+  if (normalizedPath.startsWith("/")) {
+    normalizedPath.remove(0, 1);
+  }
+  return String("projects/") + config.firebaseProjectId +
+         String("/databases/(default)/documents/") + normalizedPath;
 }
 
 String FirebaseManager::rootPathFromConfig() const {
@@ -1780,158 +1643,6 @@ bool FirebaseManager::httpPatchBearerJson(const String &url, const String &paylo
   statusCode = http.PATCH(payload);
   responseBody = http.getString();
   http.end();
-  return true;
-}
-
-bool FirebaseManager::httpDeleteBearer(const String &url, String &responseBody, int &statusCode) {
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  if (!http.begin(client, url)) {
-    error = String("http bearer delete begin failed url=") + url;
-    return false;
-  }
-
-  http.addHeader("Authorization", String("Bearer ") + idToken);
-  statusCode = http.sendRequest("DELETE");
-  responseBody = http.getString();
-  http.end();
-  return true;
-}
-
-bool FirebaseManager::fetchFirestoreSettingsList(const String &fieldName, String *numbers, size_t maxNumbers, size_t &numberCount) {
-  String response;
-  int statusCode = 0;
-  String url = buildFirestoreUrl(kConfigPath);
-  if (!httpGetBearer(url, response, statusCode)) {
-    return false;
-  }
-
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "firestore settings fetch", statusCode, response);
-    return false;
-  }
-
-  DynamicJsonDocument doc(4096);
-  if (deserializeJson(doc, response)) {
-    error = String("firestore settings parse failed body=") + response;
-    return false;
-  }
-
-  JsonObjectConst fields = doc["fields"].as<JsonObjectConst>();
-  appendFirestoreArrayStrings(fields[fieldName.c_str()], numbers, maxNumbers, numberCount);
-
-  error = String();
-  return true;
-}
-
-bool FirebaseManager::ensureConfigDocument() {
-  String url = buildFirestoreUrl(kConfigPath);
-  String response;
-  int statusCode = 0;
-  if (!httpGetBearer(url, response, statusCode)) {
-    return false;
-  }
-
-  if (statusCode >= 200 && statusCode < 300) {
-    return true;
-  }
-
-  if (statusCode != 404) {
-    setHttpStatusError(error, "firestore config check", statusCode, response);
-    return false;
-  }
-
-  Serial.println("[FIRESTORE] sim_module/config not found; creating gateway config");
-
-  DynamicJsonDocument doc(1024);
-  JsonObject fields = doc.createNestedObject("fields");
-  JsonArray callers = fields["blockedCallers"]["arrayValue"].createNestedArray("values");
-  JsonArray smsSenders = fields["blockedSmsSenders"]["arrayValue"].createNestedArray("values");
-  (void)callers;
-  (void)smsSenders;
-  fields["active"]["booleanValue"] = true;
-  fields["name"]["stringValue"] = "TTGO T-Call";
-  fields["updatedAtPakistan"]["stringValue"] = "";
-  fields["source"]["stringValue"] = "ttgo_tcall_v8";
-
-  String payload;
-  serializeJson(doc, payload);
-
-  String writeResponse;
-  int writeStatusCode = 0;
-  if (!httpPatchBearerJson(url, payload, writeResponse, writeStatusCode)) {
-    return false;
-  }
-
-  if (writeStatusCode < 200 || writeStatusCode >= 300) {
-    setHttpStatusError(error, "firestore config create", writeStatusCode, writeResponse);
-    return false;
-  }
-
-  Serial.println("[FIRESTORE] sim_module/config created");
-  return true;
-}
-
-// Best-effort legacy cleanup. This is a one-time migration nicety, so any
-// failure (list or delete) is logged briefly and skipped rather than treated
-// as fatal. It must never abort bootstrap or disable the gateway. Anything it
-// cannot remove can be deleted by hand in the Firebase console.
-bool FirebaseManager::deleteFirestoreCollectionDocuments(const String &collectionPath) {
-  String response;
-  int statusCode = 0;
-  String url = buildFirestoreUrl(collectionPath);
-  if (!httpGetBearer(url, response, statusCode)) {
-    return true;
-  }
-
-  if (statusCode < 200 || statusCode >= 300) {
-    // 404 (no such collection) or any other status: nothing to clean here.
-    return true;
-  }
-
-  DynamicJsonDocument doc(8192);
-  if (deserializeJson(doc, response)) {
-    return true;
-  }
-
-  JsonArray documents = doc["documents"].as<JsonArray>();
-  for (JsonVariant item : documents) {
-    String name = item["name"] | "";
-    if (name.length() == 0) {
-      continue;
-    }
-
-    String deleteResponse;
-    int deleteStatusCode = 0;
-    String deleteUrl = String("https://firestore.googleapis.com/v1/") + name;
-    if (!httpDeleteBearer(deleteUrl, deleteResponse, deleteStatusCode) ||
-        (deleteStatusCode != 404 && (deleteStatusCode < 200 || deleteStatusCode >= 300))) {
-      Serial.print("[FIRESTORE] skipped legacy doc (delete code=");
-      Serial.print(deleteStatusCode);
-      Serial.print(") ");
-      Serial.println(name);
-      continue;
-    }
-    Serial.print("[FIRESTORE] deleted legacy document ");
-    Serial.println(name);
-  }
-
-  return true;
-}
-
-bool FirebaseManager::deleteFirestoreDocument(const String &documentPath) {
-  String response;
-  int statusCode = 0;
-  if (!httpDeleteBearer(buildFirestoreUrl(documentPath), response, statusCode)) {
-    return true;
-  }
-  if (statusCode != 404 && (statusCode < 200 || statusCode >= 300)) {
-    Serial.print("[FIRESTORE] skipped legacy doc (delete code=");
-    Serial.print(statusCode);
-    Serial.print(") ");
-    Serial.println(documentPath);
-  }
   return true;
 }
 

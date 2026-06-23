@@ -1,109 +1,101 @@
-# Server Job Flow
+# v8 Server / App Enqueue Guide
 
-Use this when a Rails app or another backend queues outgoing SMS/call work for the TTGO T-Call v8 firmware.
+How a backend (Rails, etc.) or the dashboard enqueues SMS and calls, and reads results. The device polls Firestore every few seconds, claims pending work, enforces block lists + global SMS limits, performs the GSM action, and writes the result back.
 
-## Firestore Paths
-- Device and policy document: `sim_module/config`
-- Allowed numbers: `sim_module/allowed_numbers/items/{safePhoneNumber}`
-- SMS jobs: `sim_module/sms_jobs/items/{autoId}`
-- Call jobs: `sim_module/call_jobs/items/{autoId}`
-- SMS logs: `sim_module/sms_logs/items/{autoId}`
-- Call logs: `sim_module/call_logs/items/{autoId}`
+## Firestore layout (single device)
 
-Do not write new gateway jobs to top-level `sms_jobs`, `call_jobs`, `allowed_numbers`, or `sim_modules`. Those were removed from the active flow.
-
-## Required Policy Before Sending
-Every outgoing target must exist in `sim_module/allowed_numbers/items`:
-
-```json
-{
-  "phone_number": "+923354888420",
-  "enabled": true,
-  "sms_limit_per_day": 5,
-  "call_limit_per_day": 5,
-  "notes": "Owner"
-}
+```
+sim_module/
+  device                                 (doc)  config + health + block lists + counters
+  sms/sms_jobs/{number}                   outgoing SMS queue   (doc id = phone number)
+  sms/sms_received/{number}               incoming SMS archive (doc id = sender)
+  calls/call_jobs/{number}                outgoing call queue  (doc id = phone number)
+  calls/call_received/{number}            incoming call archive
 ```
 
-If a job finishes as `blocked` with `error = number_not_allowed`, the number was missing from this collection or `enabled` was false. Add the number and retry the job.
+There is **one job document per number** (the document id *is* the number). Queueing a new job to a number that already has one overwrites it. There is no allow-list and no per-number quota — any number is allowed unless it is in an outgoing block list.
 
-## Queue SMS
-Create a document in `sim_module/sms_jobs/items`:
+## Queue an SMS
+
+Create/overwrite `sim_module/sms/sms_jobs/{number}`:
 
 ```json
 {
-  "phone_number": "+923354888420",
-  "message": "hello from Rails",
+  "phone_number": "+923001234567",
+  "message": "hello from the app",
   "status": "pending",
-  "created_at": "timestamp",
-  "processing_started_at": null,
-  "completed_at": null,
-  "error": null
+  "enque_by": "app:orders",
+  "created_at": "<server timestamp>"
 }
 ```
 
-Required fields:
-- `phone_number`
-- `message`
-- `status = pending`
+- `phone_number` should be canonical `+<countrycode><number>`. The device normalizes anyway, but the **document id must match** what the device looks up, so use the canonical number as the id.
+- `enque_by` is free-form and preserved untouched — use it to link a future reply back to the originating app/user.
+- Required: `message`, `status: "pending"`.
 
-## Queue Call
-Create a document in `sim_module/call_jobs/items`:
+## Queue a missed call
+
+Create/overwrite `sim_module/calls/call_jobs/{number}`:
 
 ```json
 {
-  "phone_number": "+923354888420",
+  "phone_number": "+923001234567",
   "status": "pending",
-  "created_at": "timestamp",
-  "processing_started_at": null,
-  "completed_at": null,
-  "user_picked": false,
-  "duration_seconds": 0,
-  "error": null
+  "enque_by": "app:otp",
+  "created_at": "<server timestamp>"
 }
 ```
 
-## Status Flow
-- `pending`: queued by Rails or dashboard.
-- `processing`: claimed by the ESP32.
-- `sent`: SMS sent.
-- `completed`: call attempt completed.
-- `failed`: modem, lookup, or execution failure.
-- `blocked`: device inactive or number not allowed.
-- `quota_exceeded`: daily per-number limit reached.
+## Status lifecycle (device-managed)
 
-## Logs
-Successful and failed execution attempts are written to:
+`pending → in_progress → sent` (SMS) or `→ called` (call), or `→ blocked` / `→ failed`.
 
-```text
-sim_module/sms_logs/items
-sim_module/call_logs/items
+| status | meaning |
+|---|---|
+| `pending` | created by the app, waiting to be claimed |
+| `in_progress` | claimed by the device, action in progress |
+| `sent` | SMS handed to the modem |
+| `called` | missed call placed (see `user_picked`, `duration_seconds`) |
+| `blocked` | number is in the outgoing block list (`error: "blocked_outgoing"`) or device inactive (`error: "device_inactive"`) |
+| `failed` | invalid number, send error, or global SMS rate limit reached (`error` explains) |
+
+Jobs stuck in `in_progress` for more than 5 minutes are reset to `pending` automatically.
+
+## Read incoming
+
+```json
+// sim_module/sms/sms_received/{number}
+{
+  "number": "+923001234567",
+  "original_message": "00310020...",        // raw, as received
+  "normalized_message": "1 Paise mai 8GB",   // decoded if it was UCS2
+  "was_decoded": true,
+  "notified": true,    // false when muted by an incoming block list
+  "blocked": false,
+  "last_received_at": "2026-06-17 23:09:27 PKT"
+}
+
+// sim_module/calls/call_received/{number}
+{ "number": "...", "notified": true, "blocked": false, "last_received_at": "..." }
 ```
 
-Daily quota checks count successful outgoing logs for the current `day_key`.
+Incoming SMS bodies are normalized before storage/notification — see [SMS normalization](#sms-normalization).
 
-## Runtime Settings
-Runtime settings stay in Realtime Database:
+## Block lists (on `sim_module/device`)
 
-```text
-ttgo_tcall/settings/runtime
-```
+Four string arrays, editable from the dashboard or directly in Firestore:
 
-Supported keys include `intervalOfDhtSeconds`, `showFirebasePushLogs`, `showThingSpeakPushLogs`, `dailySmsLimit`, `weeklySmsLimit`, `monthlySmsLimit`, `ntfyUrl`, and `jobLogs`.
+- `blockedIncomingCallers` / `blockedIncomingSms` — incoming events from these are still archived to `*_received` but do **not** trigger an ntfy notification (`notified: false`).
+- `blockedOutgoingCallers` / `blockedOutgoingSms` — jobs to these are marked `blocked` and never sent/dialed.
 
-`jobLogs = true` makes the ESP32 print serial lines such as job claim, validation result, quota result, send/dial attempt, and final status. Set it false to quiet those job logs.
+Entries may be phone numbers or alphanumeric sender ids (e.g. `JAZZ`). On first boot each empty list is seeded with `["JAZZ","000"]` as an editable template. The device refreshes these about once a minute and instantly when **Sync** is pressed.
 
-## Test Checklist
-1. Add the target number under `sim_module/allowed_numbers/items`.
-2. Confirm `sim_module/config.active` is true.
-3. Set `ttgo_tcall/settings/runtime/jobLogs` to true.
-4. Create one SMS or call job with `status = pending`.
-5. Watch Serial for `[JOB]` lines.
-6. Confirm the job leaves `pending`.
-7. Confirm a matching log appears under `sms_logs` or `call_logs`.
+## SMS normalization
 
-## Rails Implementation Notes
-- Use server timestamps for `created_at`.
-- Keep phone numbers normalized to E.164 where possible.
-- Use the same safe document ID rule for allowed numbers: keep letters, digits, `+`, `_`, `-`; replace other characters with `_`.
-- Never place Firebase service-account JSON on the ESP32.
+Incoming SMS that arrive as UCS2/UTF-16BE hex are decoded before storing/notifying. Detection: length divisible by 4, all hex, starts `00xx`, and decodes to mostly-printable text. On success the decoded text becomes `normalized_message` (`was_decoded: true`) and is what Firebase + ntfy receive; the raw payload is kept in `original_message`. On failure the original is kept unchanged. Example: `00310020005000610069007300650020006D006100690020003800470042` → `1 Paise mai 8GB`.
+
+## What lives where (no duplication)
+
+- **Firestore `sim_module/device`** — identity (`name`, `active`), `poll_interval_seconds`, `missed_call_mode`, the 4 block-list arrays, lifetime counters (`totalSmsSent`, `totalSmsReceived`, `totalSmsBlockedOutgoing`, `totalSmsMutedIncoming`, `totalCallsMade`, `totalCallsReceived`, `totalCallsBlockedOutgoing`, `totalCallsMutedIncoming`), and health (`battery_percent`, `signal_strength`, `network_operator`, `last_seen_epoch`).
+- **RTDB `/ttgo_tcall/settings/runtime`** — operational toggles and the **SMS rate limits** (`dailySmsLimit`, `weeklySmsLimit`, `monthlySmsLimit`), DHT interval, log flags, ntfy URL, WiFi pairs. SMS limits live **only** here — never duplicated in Firestore.
+- **RTDB `/ttgo_tcall/counters`** — rolling daily/weekly/monthly *rate-limit windows* (reset on rollover). Distinct from the Firestore lifetime totals above.
