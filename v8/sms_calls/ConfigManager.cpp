@@ -1,8 +1,7 @@
 #include "ConfigManager.h"
 
 #include <ArduinoJson.h>
-#include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -34,19 +33,19 @@ static void copyText(char *target, size_t targetSize, const char *source) {
 }
 
 void ConfigManager::begin() {
-  if (!SPIFFS.begin(true)) {
-    SPIFFS.format();
-    SPIFFS.begin(true);
+  if (!LittleFS.begin(true)) {
+    LittleFS.format();
+    LittleFS.begin(true);
   }
 
   loadDefaults();
-  if (!loadFromSPIFFS()) {
-    saveToSPIFFS();
+  if (!loadFromLittleFS()) {
+    saveToLittleFS();
   }
 }
 
 bool ConfigManager::save() {
-  return saveToSPIFFS();
+  return saveToLittleFS();
 }
 
 const V8Config &ConfigManager::get() const {
@@ -59,7 +58,7 @@ bool ConfigManager::updateUserWifi(const String &ssid1, const String &pass1,
   copyText(config.userWifiPass1, sizeof(config.userWifiPass1), pass1.c_str());
   copyText(config.userWifiSsid2, sizeof(config.userWifiSsid2), ssid2.c_str());
   copyText(config.userWifiPass2, sizeof(config.userWifiPass2), pass2.c_str());
-  return saveToSPIFFS();
+  return saveToLittleFS();
 }
 
 void ConfigManager::loadDefaults() {
@@ -107,12 +106,12 @@ void ConfigManager::loadDefaults() {
   copyText(config.thingSpeakWriteApiKey, sizeof(config.thingSpeakWriteApiKey), THINGSPEAK_WRITE_API_KEY_DEFAULT);
 }
 
-bool ConfigManager::loadFromSPIFFS() {
-  if (!SPIFFS.exists(kConfigPath)) {
+bool ConfigManager::loadFromLittleFS() {
+  if (!LittleFS.exists(kConfigPath)) {
     return false;
   }
 
-  File file = SPIFFS.open(kConfigPath, "r");
+  File file = LittleFS.open(kConfigPath, "r");
   if (!file) {
     return false;
   }
@@ -127,8 +126,8 @@ bool ConfigManager::loadFromSPIFFS() {
   return true;
 }
 
-bool ConfigManager::saveToSPIFFS() {
-  File file = SPIFFS.open(kConfigPath, "w");
+bool ConfigManager::saveToLittleFS() {
+  File file = LittleFS.open(kConfigPath, "w");
   if (!file) {
     return false;
   }

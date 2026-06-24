@@ -88,7 +88,7 @@ The root `ttgo_tcall` node is now treated as a container for folders only. Leaf 
 }
 ```
 
-WiFi pairs are optional and managed from the dashboard WiFi tab. The device reads them on sync and persists them to SPIFFS; they apply on the next reboot. Empty values are ignored.
+WiFi pairs are optional and managed from the dashboard WiFi tab. The device reads them on sync and persists them to LittleFS; they apply on the next reboot. Empty values are ignored.
 
 ## Firestore Gateway Data Model
 

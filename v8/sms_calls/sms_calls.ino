@@ -798,7 +798,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   refreshBlockLists();
 
   // Apply dashboard-managed WiFi pairs. Treat the cloud values as the desired
-  // state; persist to SPIFFS only when something actually changed and at least
+  // state; persist to LittleFS only when something actually changed and at least
   // one SSID is set, so the empty default never wipes locally stored networks.
   bool anyWifiProvided = settings.wifiSsid1.length() > 0 || settings.wifiSsid2.length() > 0;
   bool wifiChanged =
@@ -814,7 +814,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
       strlcpy(runtimeConfig.userWifiPass2, settings.wifiPass2.c_str(), sizeof(runtimeConfig.userWifiPass2));
       Serial.println("[SYNC] WiFi credentials updated from cloud; reboot to connect with the new network");
     } else {
-      Serial.println("[SYNC] WiFi credentials update failed to save to SPIFFS");
+      Serial.println("[SYNC] WiFi credentials update failed to save to LittleFS");
     }
   }
 

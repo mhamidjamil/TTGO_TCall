@@ -18,7 +18,7 @@ Firmware for the **TTGO T-Call ESP32** (SIM800 GSM modem + DHT sensor + SSD1306 
 - **archive/v7 is the modular reference** for structure, config handling, and dashboard/API organization.
 - **v8 must NOT include MQTT.** It was intentionally removed.
 - **AP fallback must be intentional and documented**, not accidental.
-- **SPIFFS must remain the local persistence fallback** when cloud access is unavailable.
+- **LittleFS must remain the local persistence fallback** when cloud access is unavailable.
 - For v8, **Firebase device access is Realtime Database first** unless the user explicitly switches database type.
 
 ## Build / Flash / Run
@@ -36,7 +36,7 @@ arduino-cli compile --fqbn esp32:esp32:esp32 v8/sms_calls
 arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 v8/sms_calls   # use the port from `arduino-cli board list`
 ```
 
-**SPIFFS web assets** (`v8/sms_calls/data/`) are flashed separately as the filesystem image so `/dashboard.html`, `/dashboard.css`, `/dashboard.js` are served by the device. Build with `mkspiffs`, flash with `esptool` (SPIFFS at `0x290000` for this repo's 4 MB partition — see `v8/README.md` for the exact commands). If upload reports `Wrong boot mode detected (0x13)`, hold `BOOT` while tapping `EN/RESET`, then retry.
+**LittleFS web assets** (`v8/sms_calls/data/`) are flashed separately as the filesystem image so `/dashboard.html`, `/dashboard.css`, `/dashboard.js` are served by the device. Build with `mklittlefs`, flash with `esptool` (data partition at `0x290000` for this repo's 4 MB partition — see `v8/README.md` for the exact commands). If upload reports `Wrong boot mode detected (0x13)`, hold `BOOT` while tapping `EN/RESET`, then retry.
 
 There is **no automated test suite** — verification is on-device via the serial monitor (115200 baud) and the web dashboard.
 
@@ -55,7 +55,7 @@ Configured via env vars: `DEVICE_HOST`, `DEVICE_PORT`, `DASHBOARD_PASSWORD`, `US
 
 | Manager | Responsibility |
 |---|---|
-| `ConfigManager` | Config precedence + SPIFFS persistence; produces the `runtimeConfig` struct passed to every other `begin()` |
+| `ConfigManager` | Config precedence + LittleFS persistence; produces the `runtimeConfig` struct passed to every other `begin()` |
 | `WiFiManager` | STA connect with AP fallback |
 | `FirebaseManager` | Firestore gateway (queues, allowed numbers, logs, heartbeat) + RTDB (counters, telemetry, runtime settings). **The largest module (~62 KB)** |
 | `RateLimitManager` | Per-number daily quotas + global daily/weekly/monthly SMS limits |
@@ -63,12 +63,12 @@ Configured via env vars: `DEVICE_HOST`, `DEVICE_PORT`, `DASHBOARD_PASSWORD`, `US
 | `DHTManager` / `ThingSpeakManager` | Temperature/humidity read + ThingSpeak upload (fields 1/2) |
 | `DisplayManager` | SSD1306 OLED output |
 | `NtfyManager` | Push notifications to ntfy on incoming SMS/call |
-| `WebDashboard` | Local HTTP server serving the SPIFFS dashboard + device API |
+| `WebDashboard` | Local HTTP server serving the LittleFS dashboard + device API |
 | `Logger` | Serial logging |
 
 ### Config precedence (order of truth)
 1. Compile-time defaults (`secrets.h` / `secrets.example.h`)
-2. SPIFFS persisted config
+2. LittleFS persisted config
 3. RTDB runtime settings (`/ttgo_tcall/settings/runtime`)
 4. Firestore `sim_module/device` (active switch + block lists) for control-plane decisions
 5. Live changes from dashboard / cloud sync (persisted back as last-known-good)
@@ -82,7 +82,7 @@ Configured via env vars: `DEVICE_HOST`, `DEVICE_PORT`, `DASHBOARD_PASSWORD`, `US
 - **Docs come first.** The versioned spec lives in `v8/docs/` (`00-IMPLEMENTATION-CHECKLIST` … `12-THINGSPEAK`). Before changing behavior: update the pin map before hardware-facing changes, config precedence before new settings, API doc before route changes. Keep `v8/docs/` in sync with the firmware — they are the spec, not afterthoughts.
 - **Self-healing runtime config.** For any Firebase-backed runtime variable, if it's missing/invalid/unreadable, create or heal it with a safe default **and print a clear serial log** so the operator knows. Runtime sync must work at startup, every 10 min, and on the manual `sync` serial command.
 - **Serial commands are documented inline with `help`.** Every serial command must appear in the `help` output with a short description, in the **same change** that adds the command. Current commands include `dht`, `status`, `sync`, `help`, `show sms`, `delete sms <i>`, `delete all sms`, `ntfy test`.
-- **SPIFFS asset versioning.** Any change under `v8/sms_calls/data/` must bump `data/version.txt` (new version + date) — the dashboard displays it.
+- **LittleFS asset versioning.** Any change under `v8/sms_calls/data/` must bump `data/version.txt` (new version + date) — the dashboard displays it.
 - **Secrets never go in markdown, examples, logs, or chat.** `secrets.h` is gitignored; `secrets.example.h` is the committed template with placeholder values. Copy it to `secrets.h` locally to build.
 - **Do NOT create commits or run push/rewrite operations unless the user explicitly asks.**
 

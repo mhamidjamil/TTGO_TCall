@@ -49,7 +49,7 @@ bool WiFiManager::connectStation(const V8Config &config) {
     return false;
   };
 
-  // SPIFFS user-entered pairs first, then the secrets.h networks, then AP.
+  // LittleFS user-entered pairs first, then the secrets.h networks, then AP.
   if (attempt(config.userWifiSsid1, config.userWifiPass1, "saved pair 1")) {
     return true;
   }

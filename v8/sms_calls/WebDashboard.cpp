@@ -1,7 +1,6 @@
 #include "WebDashboard.h"
 
-#include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <WebServer.h>
 #include "FirebaseManager.h"
 #include "NtfyManager.h"
@@ -29,10 +28,10 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
     server->send(302, "text/plain", "dashboard");
   });
 
-  server->serveStatic("/dashboard.html", SPIFFS, "/dashboard.html");
-  server->serveStatic("/dashboard.css", SPIFFS, "/dashboard.css");
-  server->serveStatic("/dashboard.js", SPIFFS, "/dashboard.js");
-  server->serveStatic("/version.txt", SPIFFS, "/version.txt");
+  server->serveStatic("/dashboard.html", LittleFS, "/dashboard.html");
+  server->serveStatic("/dashboard.css", LittleFS, "/dashboard.css");
+  server->serveStatic("/dashboard.js", LittleFS, "/dashboard.js");
+  server->serveStatic("/version.txt", LittleFS, "/version.txt");
 
   server->on("/api/status", [this]() {
     String payload = String("{\"mode\":\"") + wifiManager->modeName() +

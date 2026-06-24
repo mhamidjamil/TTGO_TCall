@@ -6,7 +6,7 @@
 | Display manager | Planned | Preserve existing display behavior. |
 | SMS support | Implemented | Sends outgoing SMS and handles incoming SMS ntfy/archive flow. |
 | Call support | Implemented | Hangs up incoming calls and handles ntfy/archive flow. |
-| SPIFFS configuration | Implemented | Local config plus dashboard assets and versioned UI metadata. |
+| LittleFS configuration | Implemented | Local config plus dashboard assets and versioned UI metadata. |
 | Firebase polling | Implemented | Firestore gateway queues plus RTDB legacy settings/counters. |
 | AP fallback | Planned | Start AP automatically on WiFi failure. |
 | Web dashboard | Implemented | Local UI, notification testing, and About/version display. |

@@ -50,7 +50,7 @@ struct FirebaseRuntimeSettings {
   int monthlySmsLimit = 4900;
   String ntfyUrl;
   // Desired WiFi pairs, managed from the dashboard via the RTDB runtime node.
-  // The device persists them to SPIFFS on sync; they apply on next reboot.
+  // The device persists them to LittleFS on sync; they apply on next reboot.
   String wifiSsid1;
   String wifiPass1;
   String wifiSsid2;

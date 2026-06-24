@@ -10,7 +10,7 @@ v8 is the Firebase-backed evolution of the TTGO T-Call project.
 - Process outgoing SMS and missed-call jobs from Firestore.
 - Enforce outgoing block lists and the global SMS rate limit before dialing or sending.
 - Push device heartbeat, signal, battery, operator, and queue health fields to Firestore.
-- Keep SPIFFS-backed dynamic configuration as the local fallback source of truth.
+- Keep LittleFS-backed dynamic configuration as the local fallback source of truth.
 - Remove MQTT from v8.
 - Add automatic AP fallback when STA WiFi fails.
 - Build clean, professional, and traceable logs.
@@ -65,10 +65,10 @@ Entries may be numbers or alphanumeric sender ids (e.g. `JAZZ`, matched case-ins
 UCS2/UTF-16BE hex messages are decoded to text before being stored or notified. `sms_received` keeps both `original_message` (raw) and `normalized_message` (decoded, `was_decoded:true`); ntfy gets the normalized text. Example: `00310020…0042` → `1 Paise mai 8GB`.
 
 ## Editable WiFi (no reflash to change networks)
-The **WiFi tab** lets you set up to two SSID/password pairs. They are saved to Firebase (the runtime settings node) like the other dashboard settings; the device reads them on sync and stores them in SPIFFS. On boot the device tries, in order: saved pair 1 → saved pair 2 → the `secrets.h` networks → its own AP. Set the new network while the device is still online, then use the **Reboot Device** button to reconnect. Serial prints which network it connects through.
+The **WiFi tab** lets you set up to two SSID/password pairs. They are saved to Firebase (the runtime settings node) like the other dashboard settings; the device reads them on sync and stores them in LittleFS. On boot the device tries, in order: saved pair 1 → saved pair 2 → the `secrets.h` networks → its own AP. Set the new network while the device is still online, then use the **Reboot Device** button to reconnect. Serial prints which network it connects through.
 
 ## Dashboard
-Upload `v8/sms_calls/data` to SPIFFS with the sketch. The local web UI is served from:
+Upload `v8/sms_calls/data` to LittleFS with the sketch. The local web UI is served from:
 
 ```text
 http://<device-ip>:<webServerPort>/dashboard.html
@@ -83,18 +83,19 @@ The dashboard uses Firebase anonymous auth from the browser and manages:
 
 If anonymous auth is disabled, use a separate hosted admin dashboard or adapt `dashboard.js` to your preferred sign-in method. Device email/password is intentionally not exposed to the browser.
 
-### SPIFFS Upload Rule
+### LittleFS Upload Rule
 - Every time anything under `v8/sms_calls/data` changes, bump `v8/sms_calls/data/version.txt` with a new version and date.
 - The dashboard reads that file and shows it in the header and About tab.
-- For the default ESP32 4 MB partition in this repo, SPIFFS starts at `0x290000`.
-- Build the image with `mkspiffs` and flash it with `esptool` when you want to verify the upload from the console.
+- For the default ESP32 4 MB partition in this repo, the data partition starts at `0x290000`.
+- Build the image with `mklittlefs` and flash it with `esptool` when you want to verify the upload from the console.
 
 ```sh
-IMG=/tmp/ttgo_spiffs.bin
-ROOT=/home/megatron/Desktop/projects/TTGO_TCall/v8/sms_calls/data
-MKSPIFFS=~/.arduino15/packages/esp32/tools/mkspiffs/0.2.3/mkspiffs
+IMG=/tmp/ttgo_littlefs.bin
+ROOT=/path/to/v8/sms_calls/data
+# Find the exact version with: ls ~/.arduino15/packages/esp32/tools/mklittlefs/
+MKLITTLEFS=~/.arduino15/packages/esp32/tools/mklittlefs/<version>/mklittlefs
 ESPTOOL=~/.arduino15/packages/esp32/tools/esptool_py/5.2.0/esptool
-$MKSPIFFS -c "$ROOT" -b 4096 -p 256 -s 0x160000 "$IMG"
+$MKLITTLEFS -c "$ROOT" -b 4096 -p 256 -s 0x160000 "$IMG"
 $ESPTOOL --chip esp32 --port /dev/ttyACM0 --baud 921600 write-flash 0x290000 "$IMG"
 ```
 
@@ -128,4 +129,4 @@ arduino-cli compile --fqbn esp32:esp32:esp32 v8/sms_calls
 arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 v8/sms_calls
 ```
 
-Use the actual serial port shown by `arduino-cli board list`. Upload `v8/sms_calls/data` as the SPIFFS/LittleFS data folder with your ESP32 filesystem upload tool so `/dashboard.html`, `/dashboard.css`, and `/dashboard.js` are available on the device.
+Use the actual serial port shown by `arduino-cli board list`. Upload `v8/sms_calls/data` as the LittleFS data folder with your ESP32 filesystem upload tool so `/dashboard.html`, `/dashboard.css`, and `/dashboard.js` are available on the device.

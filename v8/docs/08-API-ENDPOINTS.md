@@ -2,7 +2,7 @@
 
 ## Active Surface
 - `GET /` redirects to `/dashboard.html`.
-- `GET /dashboard.html`, `GET /dashboard.css`, `GET /dashboard.js`, `GET /version.txt` serve SPIFFS assets.
+- `GET /dashboard.html`, `GET /dashboard.css`, `GET /dashboard.js`, `GET /version.txt` serve LittleFS assets.
 - `GET /api/status` returns WiFi mode, IP, and Firebase readiness.
 - `GET /api/firebase-web-config` returns browser-safe Firebase settings.
 - `POST /api/notify-test` sends a local ntfy test using the configured topic.
