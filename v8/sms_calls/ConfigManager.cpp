@@ -19,6 +19,7 @@
 
 namespace {
 constexpr const char *kConfigPath = "/v8_config.json";
+constexpr const char *kWifiNetPath = "/wifi_nets.json";
 }
 
 static void copyText(char *target, size_t targetSize, const char *source) {
@@ -42,6 +43,7 @@ void ConfigManager::begin() {
   if (!loadFromLittleFS()) {
     saveToLittleFS();
   }
+  loadWifiNetworks();
 }
 
 bool ConfigManager::save() {
@@ -234,4 +236,125 @@ String ConfigManager::writeJsonConfig() const {
   String jsonText;
   serializeJsonPretty(doc, jsonText);
   return jsonText;
+}
+
+void ConfigManager::loadWifiNetworks() {
+  wifiNetworkCount = 0;
+  if (!LittleFS.exists(kWifiNetPath)) {
+    return;
+  }
+  File f = LittleFS.open(kWifiNetPath, "r");
+  if (!f) {
+    return;
+  }
+  String json = f.readString();
+  f.close();
+  if (json.isEmpty()) {
+    return;
+  }
+  DynamicJsonDocument doc(1024);
+  if (deserializeJson(doc, json)) {
+    Serial.println("[WIFI_NET] failed to parse wifi_nets.json");
+    return;
+  }
+  JsonArray arr = doc.as<JsonArray>();
+  for (JsonObject entry : arr) {
+    if (wifiNetworkCount >= kMaxWifiNetworks) {
+      break;
+    }
+    const char *ssid = entry["ssid"] | "";
+    const char *pass = entry["pass"] | "";
+    if (strlen(ssid) == 0) {
+      continue;
+    }
+    strlcpy(wifiNetworks[wifiNetworkCount].ssid, ssid, sizeof(wifiNetworks[wifiNetworkCount].ssid));
+    strlcpy(wifiNetworks[wifiNetworkCount].pass, pass, sizeof(wifiNetworks[wifiNetworkCount].pass));
+    wifiNetworkCount++;
+  }
+  Serial.print("[WIFI_NET] loaded ");
+  Serial.print(wifiNetworkCount);
+  Serial.println(" saved network(s)");
+}
+
+bool ConfigManager::saveWifiNetworks() {
+  DynamicJsonDocument doc(1024);
+  JsonArray arr = doc.to<JsonArray>();
+  for (int i = 0; i < wifiNetworkCount; i++) {
+    JsonObject entry = arr.createNestedObject();
+    entry["ssid"] = wifiNetworks[i].ssid;
+    entry["pass"] = wifiNetworks[i].pass;
+  }
+  String json;
+  serializeJson(doc, json);
+  File f = LittleFS.open(kWifiNetPath, "w");
+  if (!f) {
+    return false;
+  }
+  bool ok = f.print(json) > 0;
+  f.close();
+  return ok;
+}
+
+bool ConfigManager::addWifiNetwork(const String &ssid, const String &pass) {
+  if (ssid.length() == 0) {
+    return false;
+  }
+  for (int i = 0; i < wifiNetworkCount; i++) {
+    if (String(wifiNetworks[i].ssid) == ssid) {
+      strlcpy(wifiNetworks[i].pass, pass.c_str(), sizeof(wifiNetworks[i].pass));
+      return saveWifiNetworks();
+    }
+  }
+  if (wifiNetworkCount >= kMaxWifiNetworks) {
+    return false;
+  }
+  strlcpy(wifiNetworks[wifiNetworkCount].ssid, ssid.c_str(), sizeof(wifiNetworks[wifiNetworkCount].ssid));
+  strlcpy(wifiNetworks[wifiNetworkCount].pass, pass.c_str(), sizeof(wifiNetworks[wifiNetworkCount].pass));
+  wifiNetworkCount++;
+  return saveWifiNetworks();
+}
+
+bool ConfigManager::removeWifiNetwork(const String &ssid) {
+  for (int i = 0; i < wifiNetworkCount; i++) {
+    if (String(wifiNetworks[i].ssid) == ssid) {
+      for (int j = i; j < wifiNetworkCount - 1; j++) {
+        wifiNetworks[j] = wifiNetworks[j + 1];
+      }
+      wifiNetworkCount--;
+      return saveWifiNetworks();
+    }
+  }
+  return false;
+}
+
+bool ConfigManager::clearWifiNetworks() {
+  wifiNetworkCount = 0;
+  if (LittleFS.exists(kWifiNetPath)) {
+    LittleFS.remove(kWifiNetPath);
+  }
+  return true;
+}
+
+int ConfigManager::getWifiNetworkCount() const {
+  return wifiNetworkCount;
+}
+
+WifiNetwork ConfigManager::getWifiNetwork(int index) const {
+  if (index < 0 || index >= wifiNetworkCount) {
+    WifiNetwork empty = {};
+    return empty;
+  }
+  return wifiNetworks[index];
+}
+
+String ConfigManager::getWifiNetworksJson() const {
+  DynamicJsonDocument doc(1024);
+  JsonArray arr = doc.to<JsonArray>();
+  for (int i = 0; i < wifiNetworkCount; i++) {
+    JsonObject entry = arr.createNestedObject();
+    entry["ssid"] = wifiNetworks[i].ssid;
+  }
+  String json;
+  serializeJson(doc, json);
+  return json;
 }

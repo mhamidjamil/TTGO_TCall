@@ -3,6 +3,13 @@
 
 #include <Arduino.h>
 
+struct WifiNetwork {
+  char ssid[64];
+  char pass[64];
+};
+
+static const int kMaxWifiNetworks = 8;
+
 struct V8Config {
   bool wifiEnabled;
   bool apFallbackEnabled;
@@ -56,9 +63,19 @@ public:
   void begin();
   bool save();
   const V8Config &get() const;
-  // Persist the dashboard-entered WiFi pairs to LittleFS. Applied on next reboot.
+  // Persist the dashboard-entered WiFi pairs to LittleFS (legacy two-slot API).
   bool updateUserWifi(const String &ssid1, const String &pass1,
                       const String &ssid2, const String &pass2);
+
+  // Dynamic WiFi network list (stored in /wifi_nets.json).
+  // Tried in order before the secrets.h networks on every connect attempt.
+  bool addWifiNetwork(const String &ssid, const String &pass);
+  bool removeWifiNetwork(const String &ssid);
+  bool clearWifiNetworks();
+  int getWifiNetworkCount() const;
+  WifiNetwork getWifiNetwork(int index) const;
+  // Returns a JSON array of {ssid} objects (no passwords) for the API.
+  String getWifiNetworksJson() const;
 
 private:
   void loadDefaults();
@@ -66,8 +83,12 @@ private:
   bool saveToLittleFS();
   void readJsonConfig(const String &jsonText);
   String writeJsonConfig() const;
+  void loadWifiNetworks();
+  bool saveWifiNetworks();
 
   V8Config config;
+  WifiNetwork wifiNetworks[kMaxWifiNetworks];
+  int wifiNetworkCount = 0;
 };
 
 #endif

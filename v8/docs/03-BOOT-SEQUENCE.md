@@ -14,10 +14,10 @@
 ## WiFi Self-Healing (Post-Boot Reconnect)
 
 If the router was not up when the device booted (e.g. power outage — router needs
-5 min to warm up, device tries for ≤60 s and falls to AP mode), the device would
-previously stay offline until manually rebooted.
+5 min to warm up, device tries for ≤15 s per SSID and falls to AP mode), the device
+would previously stay offline until manually rebooted.
 
-**v8 now retries STA every 2 minutes when in AP/OFFLINE mode.**  
+**v8 now retries STA every 5 minutes when in AP/OFFLINE mode.**  
 On a successful reconnect it:
 - Re-syncs NTP
 - Re-initializes Firebase (if not already connected)
@@ -25,7 +25,13 @@ On a successful reconnect it:
 - Pushes a startup status update
 
 This means after a power outage, once the router is up, the device recovers on its
-own within ≤2 minutes — no manual reboot required.
+own within ≤5 minutes — no manual reboot required.
+
+## Dynamic WiFi Network List
+
+The boot retry now tries **all networks from the dynamic list** (`/wifi_nets.json`)
+on every attempt, not just two fixed slots. Networks are tried in insertion order.
+See `v8/docs/13-WIFI-MANAGEMENT.md` for full details on adding/removing networks.
 
 ## Acceptance Criteria
 - Boot order is deterministic.

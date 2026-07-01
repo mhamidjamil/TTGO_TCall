@@ -10,7 +10,7 @@ class NtfyManager;
 
 class WebDashboard {
 public:
-  bool begin(const V8Config &config, WiFiManager &wifiManager, FirebaseManager &firebaseManager, NtfyManager &ntfyManager);
+  bool begin(const V8Config &config, WiFiManager &wifiManager, FirebaseManager &firebaseManager, NtfyManager &ntfyManager, ConfigManager &configManager);
   void loop();
   bool consumeRuntimeSyncRequest();
   String docsUrl() const;
@@ -20,6 +20,7 @@ private:
   WiFiManager *wifiManager = nullptr;
   FirebaseManager *firebaseManager = nullptr;
   NtfyManager *ntfyManager = nullptr;
+  ConfigManager *configManager = nullptr;
   bool runtimeSyncRequested = false;
 };
 

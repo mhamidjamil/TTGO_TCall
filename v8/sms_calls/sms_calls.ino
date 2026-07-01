@@ -42,10 +42,11 @@ static unsigned long lastHeartbeatPush = 0;
 static unsigned long lastRecoveryRun = 0;
 static unsigned long pendingPollStartMs = 0;
 static unsigned long lastWifiReconnect = 0;
-// Retry STA every 2 minutes when in AP/OFFLINE mode (e.g. router was slow to
-// boot after a power outage). 2 min gives the router plenty of warm-up time
-// without hammering it on every loop.
-static const unsigned long wifiReconnectIntervalMs = 2UL * 60UL * 1000UL;
+// Retry STA every 5 minutes when in AP/OFFLINE mode (e.g. router was slow to
+// boot after a power outage). 5 min gives routers plenty of warm-up time and
+// means the first retry fires ~5 min after boot, matching the user's expectation
+// of "wait 5 minutes then try all saved networks again".
+static const unsigned long wifiReconnectIntervalMs = 5UL * 60UL * 1000UL;
 static V8Config runtimeConfig;
 static String startupBootTime;
 static String startupIp;
@@ -411,6 +412,75 @@ static void processIncomingCall(const String &rawNumber) {
   }
 }
 
+// Returns true if `number` is in the comma-separated list (phone-aware matching).
+static bool isNumberInList(const String &number, const char *commaSeparatedList) {
+  if (!commaSeparatedList || strlen(commaSeparatedList) == 0) {
+    return false;
+  }
+  String list = String(commaSeparatedList);
+  int start = 0;
+  while (start < (int)list.length()) {
+    int comma = list.indexOf(',', start);
+    String entry;
+    if (comma < 0) {
+      entry = list.substring(start);
+      start = list.length();
+    } else {
+      entry = list.substring(start, comma);
+      start = comma + 1;
+    }
+    entry.trim();
+    if (entry.length() > 0 && numbersMatch(number, entry)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool isAdminOrAuthentic(const String &number) {
+  return isNumberInList(number, runtimeConfig.adminNumbers) ||
+         isNumberInList(number, runtimeConfig.authenticNumbers);
+}
+
+// Parse [newwifi: 'ssid', password: 'pass'] or [..., reboot: true].
+// Returns true and populates out-params when the pattern matches.
+static bool parseWifiConfigSms(const String &text, String &outSsid, String &outPass, bool &outReboot) {
+  String lower = text;
+  lower.toLowerCase();
+
+  int start = lower.indexOf("[newwifi:");
+  if (start < 0) {
+    return false;
+  }
+
+  int q1 = text.indexOf('\'', start + 9);
+  if (q1 < 0) {
+    return false;
+  }
+  int q2 = text.indexOf('\'', q1 + 1);
+  if (q2 <= q1) {
+    return false;
+  }
+  outSsid = text.substring(q1 + 1, q2);
+
+  int passKey = lower.indexOf("password:", q2);
+  if (passKey < 0) {
+    return false;
+  }
+  int q3 = text.indexOf('\'', passKey + 9);
+  if (q3 < 0) {
+    return false;
+  }
+  int q4 = text.indexOf('\'', q3 + 1);
+  if (q4 <= q3) {
+    return false;
+  }
+  outPass = text.substring(q3 + 1, q4);
+
+  outReboot = lower.indexOf("reboot: true", q4) >= 0 || lower.indexOf("reboot:true", q4) >= 0;
+  return outSsid.length() > 0;
+}
+
 static void processIncomingSms(const String &rawNumber, const String &rawMessage, int smsIndex) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
@@ -418,6 +488,38 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
 
   // Normalize UCS2/UTF-16BE payloads before storing or notifying.
   SmsNormalization norm = normalizeSmsBody(rawMessage);
+
+  // WiFi config command — intercept BEFORE Firestore push so the password is
+  // never stored in the cloud. Only admin/authentic senders are honoured.
+  if (isAdminOrAuthentic(number)) {
+    String wifiSsid, wifiPass;
+    bool doReboot = false;
+    if (parseWifiConfigSms(norm.text, wifiSsid, wifiPass, doReboot)) {
+      bool saved = configManager.addWifiNetwork(wifiSsid, wifiPass);
+      String reply;
+      if (saved) {
+        reply = String("[v8] WiFi '") + wifiSsid +
+                (doReboot ? String("' saved. Rebooting now.")
+                          : String("' saved. Reboot device to apply."));
+      } else {
+        reply = String("[v8] WiFi save failed: list full (max 8) or empty SSID.");
+      }
+      Serial.print("[WIFI] config via SMS ssid=");
+      Serial.print(wifiSsid);
+      Serial.print(" saved=");
+      Serial.println(saved ? "yes" : "no");
+      smsManager.sendMessage(number, reply);
+      if (smsIndex > 0) {
+        smsManager.deleteMessage(smsIndex);
+      }
+      if (saved && doReboot) {
+        delay(1500);
+        ESP.restart();
+      }
+      return;
+    }
+  }
+
   bool blocked = isBlockedNumber(number, blockLists.incomingSms, blockLists.incomingSmsCount);
 
   bool firebaseOk = false;
@@ -669,6 +771,10 @@ static void printCommandHelp() {
   Serial.println(" - show sms : list all SMS messages with SIM indexes");
   Serial.println(" - delete sms <index> : delete one SMS by SIM index");
   Serial.println(" - delete all sms : delete every SMS from SIM memory");
+  Serial.println(" - wifi list : list saved WiFi networks");
+  Serial.println(" - wifi add <ssid> <pass> : save a new WiFi network (no spaces in ssid)");
+  Serial.println(" - wifi delete <ssid> : remove a saved WiFi network");
+  Serial.println(" - wifi clear : remove all saved WiFi networks");
   Serial.println(" - help   : show this command list");
 }
 
@@ -834,6 +940,20 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   Serial.print(" jobLogs=");
   Serial.println(jobLogs ? "true" : "false");
 
+  // Report the currently connected SSID to RTDB so it's visible in the dashboard.
+  if (wifiManager.isStationConnected()) {
+    String ssid = wifiManager.getConnectedSsid();
+    if (ssid.length() > 0) {
+      if (!firebaseManager.pushConnectedSsid(ssid)) {
+        Serial.print("[SYNC] connectedSsid push failed: ");
+        Serial.println(firebaseManager.lastError());
+      } else {
+        Serial.print("[SYNC] connectedSsid=");
+        Serial.println(ssid);
+      }
+    }
+  }
+
   lastRuntimeSettingsSync = millis();
   return true;
 }
@@ -905,6 +1025,72 @@ static void handleSerialCommand(String command) {
     }
     return;
   }
+  if (command.startsWith("wifi ")) {
+    String sub = command.substring(5);
+    sub.trim();
+    if (sub == "list") {
+      int count = configManager.getWifiNetworkCount();
+      Serial.print("[WIFI] saved networks: ");
+      Serial.println(count);
+      for (int i = 0; i < count; i++) {
+        WifiNetwork net = configManager.getWifiNetwork(i);
+        Serial.print("  [");
+        Serial.print(i);
+        Serial.print("] ssid=");
+        Serial.println(net.ssid);
+      }
+      return;
+    }
+    if (sub == "clear") {
+      configManager.clearWifiNetworks();
+      Serial.println("[WIFI] all saved networks cleared");
+      return;
+    }
+    if (sub.startsWith("delete ")) {
+      // command was lowercased; match case-insensitively and remove by original SSID.
+      String targetLower = sub.substring(7);
+      targetLower.trim();
+      bool removed = false;
+      int count = configManager.getWifiNetworkCount();
+      for (int i = 0; i < count; i++) {
+        WifiNetwork net = configManager.getWifiNetwork(i);
+        String netLower = String(net.ssid);
+        netLower.toLowerCase();
+        if (netLower == targetLower) {
+          removed = configManager.removeWifiNetwork(String(net.ssid));
+          break;
+        }
+      }
+      if (removed) {
+        Serial.println("[WIFI] network removed");
+      } else {
+        Serial.println("[WIFI] network not found");
+      }
+      return;
+    }
+    if (sub.startsWith("add ")) {
+      String rest = sub.substring(4);
+      rest.trim();
+      int spaceIdx = rest.indexOf(' ');
+      if (spaceIdx < 0) {
+        Serial.println("[WIFI] usage: wifi add <ssid> <pass>");
+        Serial.println("[WIFI] note: SSIDs with spaces must be configured via dashboard or SMS");
+        return;
+      }
+      String ssid = rest.substring(0, spaceIdx);
+      String pass = rest.substring(spaceIdx + 1);
+      pass.trim();
+      if (configManager.addWifiNetwork(ssid, pass)) {
+        Serial.print("[WIFI] saved ssid=");
+        Serial.println(ssid);
+      } else {
+        Serial.println("[WIFI] save failed (list full — max 8 networks)");
+      }
+      return;
+    }
+    Serial.println("[WIFI] commands: wifi list | wifi add <ssid> <pass> | wifi delete <ssid> | wifi clear");
+    return;
+  }
   printCommandHelp();
 }
 
@@ -925,7 +1111,7 @@ void setup() {
   initializeModemHardware();
   Logger::info("MODEM", "Hardware initialized");
 
-  wifiManager.begin(runtimeConfig);
+  wifiManager.begin(configManager);
   Logger::info("WIFI", wifiManager.modeName().c_str());
   if (wifiManager.isStationConnected()) {
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
@@ -961,7 +1147,7 @@ void setup() {
   callManager.begin();
   displayManager.begin();
   dhtManager.begin();
-  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager, ntfyManager);
+  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager, ntfyManager, configManager);
 
   startupIp = wifiManager.localIp().toString();
   Logger::info("BOOT", startupIp.c_str());
@@ -993,7 +1179,7 @@ void loop() {
   if (!wifiManager.isStationConnected() &&
       millis() - lastWifiReconnect >= wifiReconnectIntervalMs) {
     lastWifiReconnect = millis();
-    if (wifiManager.tryReconnect(runtimeConfig)) {
+    if (wifiManager.tryReconnect(configManager)) {
       // Re-sync NTP and Firebase now that we have internet.
       configTime(0, 0, "pool.ntp.org", "time.nist.gov");
       if (!firebaseManager.isReady()) {

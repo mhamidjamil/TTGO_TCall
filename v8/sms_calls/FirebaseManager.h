@@ -130,6 +130,8 @@ public:
                            bool missedCallMode);
   bool recoverStuckJobs(unsigned long cutoffEpochSeconds);
   bool fetchBlockLists(BlockLists &out);
+  // Write connectedSsid to /ttgo_tcall/settings/runtime in RTDB.
+  bool pushConnectedSsid(const String &ssid);
   String lastError() const;
 
 private:

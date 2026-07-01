@@ -700,6 +700,30 @@ bool FirebaseManager::pushLandingSnapshot(float temperature,
   return true;
 }
 
+bool FirebaseManager::pushConnectedSsid(const String &ssid) {
+  if (!ready) {
+    return false;
+  }
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+  String runtimePath = rootPathFromConfig() + "/settings/runtime";
+  String escaped = ssid;
+  escaped.replace("\\", "\\\\");
+  escaped.replace("\"", "\\\"");
+  String payload = String("{\"connectedSsid\":\"") + escaped + String("\"}");
+  String response;
+  int statusCode = 0;
+  if (!httpPatchJson(buildPathUrl(runtimePath), payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    error = String("connectedSsid push http ") + String(statusCode);
+    return false;
+  }
+  return true;
+}
+
 bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
                                            uint32_t defaultIntervalOfDhtSeconds,
                                            bool defaultShowFirebasePushLogs,

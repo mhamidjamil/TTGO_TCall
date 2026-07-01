@@ -53,3 +53,16 @@ Specs live in [`v8/docs/`](v8/docs) — implementation checklist, feature invent
 ## Roadmap
 
 A Rails backend (and, later, a mobile front-end) will enqueue SMS/call jobs into the same Firestore collections the dashboard uses, so the device stays a thin executor.
+
+## Future Ideas
+
+### Over-the-Air (OTA) Firmware Updates — esp32FOTA
+
+[`chrisjoyce911/esp32FOTA`](https://github.com/chrisjoyce911/esp32FOTA) is the recommended approach for wireless firmware updates:
+
+- **Unattended**: polls a JSON manifest URL, compares semver, downloads and self-flashes with no serial cable.
+- **Verified**: supports RSA signature verification so only your signed binaries can be applied.
+- **HTTPS out of the box**: works against GitHub Releases, S3, or Firebase Storage; Arduino 3.x bundles root CAs, no manual certificate embedding needed.
+- Install via Arduino Library Manager: search `esp32FOTA`.
+
+The manifest JSON specifies the firmware version, type, and binary URL. The device checks it periodically and applies the update if the remote version is newer. This would eliminate the need to physically access the device for firmware upgrades.
