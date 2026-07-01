@@ -1,6 +1,14 @@
 # v8 Server / App Enqueue Guide
 
-How a backend (Rails, etc.) or the dashboard enqueues SMS and calls, and reads results. The device polls Firestore every few seconds, claims pending work, enforces block lists + global SMS limits, performs the GSM action, and writes the result back.
+How a backend (Rails, etc.) or the dashboard enqueues SMS and calls, and reads results. The device polls Firestore every 10 s, claims pending work, enforces block lists + global SMS limits, performs the GSM action, and writes the result back.
+
+## How the device drains the queue
+
+- Every 10 s the device runs a server-side query (`runQuery`) for `status == "pending"` only, so finished (`sent`/`failed`/`blocked`) jobs are never downloaded — the queue scales to any size and completed jobs are simply ignored (cleanup, if any, is a separate backend concern, not the device's).
+- It grabs up to **5 pending SMS jobs** per batch and sends them **one at a time** with a random **5–30 s gap** between actual sends (anti-SIM-ban pacing). The next batch of 5 is not fetched until the current batch is fully drained.
+- Each send is gated by the global rate limit and the SIM package validity; when the daily/weekly/monthly limit is hit, the remaining jobs are left `pending` (for the next window) and an ntfy alert is sent.
+- If a batch cannot finish within **5 minutes** (e.g. a wedged send), it is abandoned ("rescue") with an ntfy alert and the unprocessed jobs stay `pending` for re-fetch — the device never gets stuck on one batch.
+- Calls are processed one per poll (no anti-ban delay needed for low-volume missed calls).
 
 ## Firestore layout (single device)
 
@@ -57,9 +65,9 @@ Create/overwrite `sim_module/calls/call_jobs/{number}`:
 | `sent` | SMS handed to the modem |
 | `called` | missed call placed (see `user_picked`, `duration_seconds`) |
 | `blocked` | number is in the outgoing block list (`error: "blocked_outgoing"`) or device inactive (`error: "device_inactive"`) |
-| `failed` | invalid number, send error, or global SMS rate limit reached (`error` explains) |
+| `failed` | invalid number, send error, package expired (`error: "package_expired"`), or global SMS rate limit reached (`error` explains) |
 
-Jobs stuck in `in_progress` for more than 5 minutes are reset to `pending` automatically.
+Jobs stuck in `in_progress` for more than 5 minutes are reset to `pending` automatically. Rate-limited jobs are left `pending` (not failed) so they retry once the window resets.
 
 ## Read incoming
 

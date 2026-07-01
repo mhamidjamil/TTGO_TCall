@@ -49,6 +49,7 @@ struct FirebaseRuntimeSettings {
   int weeklySmsLimit = 950;
   int monthlySmsLimit = 4900;
   String ntfyUrl;
+  String ntfyLogUrl;
   // Desired WiFi pairs, managed from the dashboard via the RTDB runtime node.
   // The device persists them to LittleFS on sync; they apply on next reboot.
   String wifiSsid1;
@@ -63,6 +64,7 @@ struct FirebaseRuntimeSettings {
   bool createdWeeklySmsLimit = false;
   bool createdMonthlySmsLimit = false;
   bool createdNtfyUrl = false;
+  bool createdNtfyLogUrl = false;
 };
 
 // SIM package/subscription state, persisted at RTDB /ttgo_tcall/package and
@@ -113,7 +115,12 @@ public:
   bool bootstrapGateway(const String &deviceName,
                         int pollIntervalSeconds,
                         bool missedCallMode);
-  bool fetchNextSmsJob(FirestoreJob &outJob);
+  // Fetch up to maxJobs PENDING sms jobs via a server-side query (status ==
+  // pending), so finished jobs are never downloaded. Does NOT claim them.
+  bool fetchPendingSmsJobs(FirestoreJob *outJobs, int maxJobs, int &outCount);
+  // Mark an sms job in_progress (call right before sending).
+  bool claimSmsJob(const FirestoreJob &job);
+  // Fetch + claim the next pending call job (server-side query, limit 1).
   bool fetchNextCallJob(FirestoreJob &outJob);
   bool fetchGatewayActive(bool &outActive);
   bool updateSmsJobStatus(const FirestoreJob &job, const String &status, const String &errorReason = String());
@@ -169,6 +176,10 @@ private:
   bool httpGetBearer(const String &url, String &responseBody, int &statusCode);
   bool httpPostBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
   bool httpPatchBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
+  // Server-side query for pending jobs under parentPath's collectionId.
+  bool queryPendingJobs(const String &parentPath, const char *collectionId, int limit,
+                        FirestoreJob *outJobs, int maxJobs, int &outCount);
+  bool claimJob(const String &collectionPath, const FirestoreJob &job);
   bool ensureDeviceDocument();
   bool ensureFirestoreDocument(const String &documentPath);
 

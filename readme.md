@@ -37,7 +37,7 @@ The web UI assets in `v8/sms_calls/data/` are flashed **separately** as the SPIF
 
 ## What v8 does
 
-- **Outgoing queue** — polls Firestore `sms_jobs` / `call_jobs`, claims one of each per cycle, drains the queue quickly when work is pending.
+- **Outgoing queue** — polls Firestore every 10 s with a server-side query for `status == pending` only (finished jobs are never downloaded). Grabs up to **5 pending SMS** per batch and sends them one at a time with a random **5–30 s anti-SIM-ban gap**; the next batch isn't fetched until the current one drains. A batch that can't finish in 5 min is abandoned (rescue) with an alert. Calls are processed one per poll.
 - **Block-list + rate limit** — any number is sent/dialed unless it's in an outgoing block list; a global daily/weekly/monthly SMS limit (RTDB runtime) still applies. No allow-list, no per-number quota.
 - **Block-list** — incoming calls/SMS from blocked senders (numeric **or** alphanumeric IDs like `JAZZ`) are archived without notifying.
 - **Editable WiFi** — set two WiFi networks from the dashboard; saved to SPIFFS and tried before the `secrets.h` networks on next boot, then AP fallback. No reflash needed to change networks.
@@ -46,6 +46,11 @@ The web UI assets in `v8/sms_calls/data/` are flashed **separately** as the SPIF
 - **Self-healing connectivity** — retries STA WiFi every 5 min in AP/OFFLINE mode, and re-initializes **Firebase + ThingSpeak** (rate-limited to every 90 s, and re-checked right before each telemetry push) whenever WiFi is up but a cloud service never came online (router up but uplink not ready at boot).
 - **Serial `[JOB]` logs** — see every claim, validation, quota check, send/dial, and final status (toggle with the `jobLogs` flag).
 - **Telemetry** — temperature/humidity to Firebase RTDB and ThingSpeak; device heartbeat (battery, signal, operator) to Firestore.
+- **ntfy channels** — two topics on the same ntfy server (URLs configurable via `secrets.h` / RTDB runtime, never hardcoded):
+  - **`oracle_ntfy`** — user-facing notifications: incoming SMS/calls, package subscription + expiry reminders.
+  - **`ttgo_stuff`** — operational log/error channel: job lifecycle (pending → processing → sent/failed), rate-limit and rescue alerts, boot line. Chatty by design — subscribe and mute it.
+
+  Only the channel names are shown here; set the full topic URLs in `secrets.h`.
 - **No MQTT.** SPIFFS is the local config fallback. AP fallback is intentional.
 
 ## Documentation

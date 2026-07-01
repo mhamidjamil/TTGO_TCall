@@ -32,7 +32,8 @@ static DisplayManager displayManager;
 static DHTManager dhtManager;
 static ThingSpeakManager thingSpeakManager;
 static WebDashboard webDashboard;
-static NtfyManager ntfyManager;
+static NtfyManager ntfyManager;      // user-facing notifications (oracle_ntfy)
+static NtfyManager logNtfy;          // operational job/error log channel (ttgo_stuff)
 static PackageManager packageManager;
 
 static unsigned long lastUiRefresh = 0;
@@ -82,6 +83,17 @@ static bool jobLogs = true;
 static BlockLists blockLists;
 static unsigned long lastBlockListSync = 0;
 static const unsigned long blockListSyncIntervalMs = 60UL * 1000UL;
+// SMS batch processing: grab up to 5 pending jobs, then send one at a time with a
+// random 5–30 s anti-SIM-ban gap. The next batch is not fetched until this one is
+// drained. A stuck batch is abandoned (rescue) after smsBatchRescueMs.
+static const int kSmsBatchMax = 5;
+static FirestoreJob smsBatch[kSmsBatchMax];
+static int smsBatchCount = 0;
+static int smsBatchIndex = 0;
+static unsigned long nextSmsSendAtMs = 0;
+static unsigned long smsBatchStartedMs = 0;
+static const unsigned long smsBatchRescueMs = 5UL * 60UL * 1000UL;
+static bool rateLimitAlerted = false;
 static String modemLineBuffer;
 static bool awaitingSmsBody = false;
 static String pendingSmsNumber;
@@ -266,6 +278,18 @@ static void logJob(const String &message) {
     Serial.print("[JOB] ");
     Serial.println(message);
   }
+}
+
+// Push an operational log/status/error line to the ttgo_stuff ntfy channel (and
+// always to serial). Best-effort: silently no-ops if the log URL is unset or
+// WiFi is down. Use for job lifecycle (pending/processing/sent/failed) and any
+// bad event the operator should see instantly.
+static void pushLog(const String &title, const String &message) {
+  Serial.print("[LOG] ");
+  Serial.print(title);
+  Serial.print(": ");
+  Serial.println(message);
+  logNtfy.notify(title, message);
 }
 
 static unsigned long currentEpochSeconds() {
@@ -661,99 +685,181 @@ static void handleModemEvents() {
   }
 }
 
-static bool processPendingCommand() {
-  bool claimedAny = false;
+// Random anti-SIM-ban gap between actual GSM sends (5–30 s).
+static unsigned long randomSendDelayMs() {
+  return 5000UL + (unsigned long)random(0, 25001);
+}
 
-  FirestoreJob smsJob;
-  if (firebaseManager.fetchNextSmsJob(smsJob)) {
-    claimedAny = true;
-    logJob(String("sms claimed id=") + smsJob.id + " enque_by=" + smsJob.enqueBy);
-    String normalizedNumber = normalizePhoneNumber(smsJob.phoneNumber);
-    bool active = true;
-    String limitReason;
-    if (normalizedNumber.length() == 0) {
-      logJob(String("sms failed id=") + smsJob.id + " reason=number_invalid");
-      firebaseManager.updateSmsJobStatus(smsJob, "failed", "number_invalid");
-    } else if (!firebaseManager.fetchGatewayActive(active)) {
-      logJob(String("sms failed id=") + smsJob.id + " reason=device_status_unavailable");
-      firebaseManager.updateSmsJobStatus(smsJob, "failed", "device_status_unavailable");
-    } else if (!active) {
-      logJob(String("sms blocked id=") + smsJob.id + " reason=device_inactive");
-      firebaseManager.updateSmsJobStatus(smsJob, "blocked", "device_inactive");
-    } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingSms, blockLists.outgoingSmsCount)) {
-      logJob(String("sms blocked id=") + smsJob.id + " number=" + normalizedNumber + " reason=blocked_outgoing");
-      firebaseManager.updateSmsJobStatus(smsJob, "blocked", "blocked_outgoing");
-      firebaseManager.incrementDeviceCounter("totalSmsBlockedOutgoing");
-    } else if (!packageManager.isSmsAllowed(currentEpochSeconds())) {
-      logJob(String("sms failed id=") + smsJob.id + " reason=package_expired");
-      firebaseManager.updateSmsJobStatus(smsJob, "failed", "package_expired");
-    } else if (!rateLimitManager.canSend(limitReason)) {
-      logJob(String("sms failed id=") + smsJob.id + " reason=" + limitReason);
-      firebaseManager.updateSmsJobStatus(smsJob, "failed", limitReason);
-    } else {
-      logJob(String("sms sending id=") + smsJob.id + " number=" + normalizedNumber);
-      bool sent = smsManager.sendMessage(normalizedNumber, smsJob.message);
-      if (sent) {
-        rateLimitManager.recordSend();
-        firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
-        firebaseManager.updateSmsJobStatus(smsJob, "sent", String());
-        firebaseManager.incrementDeviceCounter("totalSmsSent");
-        logJob(String("sms sent id=") + smsJob.id + " number=" + normalizedNumber);
-      } else {
-        firebaseManager.updateSmsJobStatus(smsJob, "failed", "send_failed");
-        logJob(String("sms failed id=") + smsJob.id + " reason=send_failed");
-      }
-    }
-  }
-
+// Fetch + process one pending CALL job per poll (calls are low volume and don't
+// need the anti-ban pacing that bulk SMS does).
+static bool processCallJob() {
   FirestoreJob callJob;
-  if (firebaseManager.fetchNextCallJob(callJob)) {
-    claimedAny = true;
-    logJob(String("call claimed id=") + callJob.id + " enque_by=" + callJob.enqueBy);
-    String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
-    bool active = true;
-    if (normalizedNumber.length() == 0) {
-      logJob(String("call failed id=") + callJob.id + " reason=number_invalid");
-      firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "number_invalid");
-    } else if (!firebaseManager.fetchGatewayActive(active)) {
-      logJob(String("call failed id=") + callJob.id + " reason=device_status_unavailable");
-      firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
-    } else if (!active) {
-      logJob(String("call blocked id=") + callJob.id + " reason=device_inactive");
-      firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
-    } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingCallers, blockLists.outgoingCallerCount)) {
-      logJob(String("call blocked id=") + callJob.id + " number=" + normalizedNumber + " reason=blocked_outgoing");
-      firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "blocked_outgoing");
-      firebaseManager.incrementDeviceCounter("totalCallsBlockedOutgoing");
-    } else {
-      logJob(String("call dialing id=") + callJob.id + " number=" + normalizedNumber);
-      bool userPicked = false;
-      int durationSeconds = 0;
-      bool completed = callManager.placeMissedCall(normalizedNumber, missedCallRingMs, userPicked, durationSeconds);
-      firebaseManager.updateCallJobStatus(
-          callJob,
-          completed ? "called" : "failed",
-          userPicked,
-          durationSeconds,
-          completed ? String() : String("call_failed"));
-      if (completed) {
-        firebaseManager.incrementDeviceCounter("totalCallsMade");
+  if (!firebaseManager.fetchNextCallJob(callJob)) {
+    return false;
+  }
+  pushLog("call processing", String("dialing ") + displayPhoneNumber(callJob.phoneNumber));
+  String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
+  bool active = true;
+  if (normalizedNumber.length() == 0) {
+    pushLog("call failed", String(callJob.id) + " invalid number");
+    firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "number_invalid");
+  } else if (!firebaseManager.fetchGatewayActive(active)) {
+    pushLog("call failed", normalizedNumber + " device status unavailable");
+    firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
+  } else if (!active) {
+    pushLog("call blocked", normalizedNumber + " device inactive");
+    firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
+  } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingCallers, blockLists.outgoingCallerCount)) {
+    pushLog("call blocked", normalizedNumber + " blocked_outgoing");
+    firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "blocked_outgoing");
+    firebaseManager.incrementDeviceCounter("totalCallsBlockedOutgoing");
+  } else {
+    bool userPicked = false;
+    int durationSeconds = 0;
+    bool completed = callManager.placeMissedCall(normalizedNumber, missedCallRingMs, userPicked, durationSeconds);
+    firebaseManager.updateCallJobStatus(
+        callJob,
+        completed ? "called" : "failed",
+        userPicked,
+        durationSeconds,
+        completed ? String() : String("call_failed"));
+    if (completed) {
+      firebaseManager.incrementDeviceCounter("totalCallsMade");
+    }
+    pushLog(completed ? "call done" : "call failed",
+            normalizedNumber + (completed ? String(" called (picked=") + (userPicked ? "yes" : "no") + ")"
+                                          : String(" call_failed")));
+  }
+  return true;
+}
+
+// Grab up to kSmsBatchMax PENDING SMS jobs (server-side query) into the batch.
+// Called only when the batch is empty, so the next 5 are not fetched until the
+// current batch is fully drained (as requested). Skips fetching while rate-
+// limited so we never pull jobs we cannot send.
+static void fetchSmsBatch() {
+  String reason;
+  if (!rateLimitManager.canSend(reason)) {
+    if (!rateLimitAlerted) {
+      rateLimitAlerted = true;
+      ntfyManager.notify("sms limit reached",
+                         String("SMS rate limit hit (") + reason + "). Sending paused until the window resets.");
+      logJob(String("sms fetch paused reason=") + reason);
+    }
+    return;
+  }
+  rateLimitAlerted = false;
+
+  int count = 0;
+  if (!firebaseManager.fetchPendingSmsJobs(smsBatch, kSmsBatchMax, count)) {
+    pushLog("sms error", String("pending-jobs query failed: ") + firebaseManager.lastError());
+    return;
+  }
+  if (count == 0) {
+    static unsigned long lastIdlePollLogMs = 0;
+    if (millis() - lastIdlePollLogMs >= 30000UL) {
+      lastIdlePollLogMs = millis();
+      logJob("poll idle: no pending sms jobs");
+    }
+    return;
+  }
+  smsBatchCount = count;
+  smsBatchIndex = 0;
+  smsBatchStartedMs = millis();
+  nextSmsSendAtMs = millis();  // first send fires immediately; gap applies after
+  pushLog("sms pending", String("received ") + String(count) + " pending SMS job(s); processing one by one");
+}
+
+// Drive the active SMS batch: process at most ONE job per call, and only once the
+// random anti-ban gap since the previous send has elapsed. Non-blocking, so the
+// modem/dashboard/heartbeat keep running between sends. A batch that cannot finish
+// within smsBatchRescueMs (e.g. a wedged send) is abandoned with an ntfy alert so
+// the device never gets stuck on the first 5 messages.
+static void driveSmsBatch() {
+  if (smsBatchCount == 0) {
+    return;
+  }
+
+  if (millis() - smsBatchStartedMs > smsBatchRescueMs) {
+    int remaining = smsBatchCount - smsBatchIndex;
+    pushLog("sms rescue job",
+            String("Rescue took over: SMS batch stuck ~5 min (last error: ") +
+                firebaseManager.lastError() + "). Abandoning " + String(remaining) +
+                " unprocessed job(s); they stay pending for re-fetch.");
+    smsBatchCount = 0;
+    smsBatchIndex = 0;
+    return;
+  }
+
+  if (smsBatchIndex >= smsBatchCount) {
+    logJob("sms batch complete");
+    smsBatchCount = 0;
+    smsBatchIndex = 0;
+    return;
+  }
+
+  if (millis() < nextSmsSendAtMs) {
+    return;  // waiting on the anti-ban gap
+  }
+
+  FirestoreJob &job = smsBatch[smsBatchIndex];
+  String normalizedNumber = normalizePhoneNumber(job.phoneNumber);
+  String progress = String(smsBatchIndex + 1) + "/" + String(smsBatchCount);
+  bool active = true;
+  bool didSend = false;
+  if (normalizedNumber.length() == 0) {
+    pushLog("sms failed", String("[") + progress + "] " + job.id + " invalid number");
+    firebaseManager.updateSmsJobStatus(job, "failed", "number_invalid");
+  } else if (!firebaseManager.fetchGatewayActive(active)) {
+    pushLog("sms failed", String("[") + progress + "] " + normalizedNumber + " device status unavailable");
+    firebaseManager.updateSmsJobStatus(job, "failed", "device_status_unavailable");
+  } else if (!active) {
+    pushLog("sms blocked", String("[") + progress + "] " + normalizedNumber + " device inactive");
+    firebaseManager.updateSmsJobStatus(job, "blocked", "device_inactive");
+  } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingSms, blockLists.outgoingSmsCount)) {
+    pushLog("sms blocked", String("[") + progress + "] " + normalizedNumber + " blocked_outgoing");
+    firebaseManager.updateSmsJobStatus(job, "blocked", "blocked_outgoing");
+    firebaseManager.incrementDeviceCounter("totalSmsBlockedOutgoing");
+  } else if (!packageManager.isSmsAllowed(currentEpochSeconds())) {
+    pushLog("sms failed", String("[") + progress + "] " + normalizedNumber + " package expired");
+    firebaseManager.updateSmsJobStatus(job, "failed", "package_expired");
+  } else {
+    String reason;
+    if (!rateLimitManager.canSend(reason)) {
+      // Limit reached mid-batch: alert once, stop, leave the rest PENDING (not
+      // claimed) so they are retried automatically once the window resets.
+      if (!rateLimitAlerted) {
+        rateLimitAlerted = true;
+        ntfyManager.notify("sms limit reached",
+                           String("SMS rate limit hit (") + reason + "). " +
+                               String(smsBatchCount - smsBatchIndex) + " job(s) left pending.");
       }
-      logJob(String("call ") + (completed ? "called" : "failed") + " id=" + callJob.id + " picked=" + (userPicked ? "true" : "false") + " duration=" + String(durationSeconds));
+      pushLog("sms limit reached", String("rate limit (") + reason + "); " +
+                                       String(smsBatchCount - smsBatchIndex) + " job(s) left pending");
+      smsBatchCount = 0;
+      smsBatchIndex = 0;
+      return;
+    }
+    firebaseManager.claimSmsJob(job);
+    pushLog("sms processing", String("[") + progress + "] sending to " + normalizedNumber);
+    bool sent = smsManager.sendMessage(normalizedNumber, job.message);
+    if (sent) {
+      didSend = true;
+      rateLimitManager.recordSend();
+      firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+      firebaseManager.updateSmsJobStatus(job, "sent", String());
+      firebaseManager.incrementDeviceCounter("totalSmsSent");
+      pushLog("sms sent", String("[") + progress + "] sent to " + normalizedNumber);
+    } else {
+      firebaseManager.updateSmsJobStatus(job, "failed", "send_failed");
+      pushLog("sms failed", String("[") + progress + "] " + normalizedNumber + " send_failed");
     }
   }
 
-  // Surface liveness on serial: when nothing was claimed, print an idle line
-  // at most once per idle window so the operator can see polling is running
-  // without flooding the terminal on every 3s poll.
-  static unsigned long lastIdlePollLogMs = 0;
-  const unsigned long idlePollLogIntervalMs = 30000UL;
-  if (!claimedAny && millis() - lastIdlePollLogMs >= idlePollLogIntervalMs) {
-    lastIdlePollLogMs = millis();
-    logJob("poll idle: no pending sms/call jobs");
-  }
-
-  return claimedAny;
+  smsBatchIndex++;
+  // Only pace with the random gap after an actual GSM send; terminal outcomes
+  // (invalid/blocked/expired) advance promptly.
+  nextSmsSendAtMs = didSend ? millis() + randomSendDelayMs() : millis() + 500UL;
 }
 
 static void syncCountersFromCloud() {
@@ -871,6 +977,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   int oldWeeklyLimit = runtimeConfig.weeklySmsLimit;
   int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
   String oldNtfyUrl = runtimeConfig.ntfyUrl;
+  String oldNtfyLogUrl = runtimeConfig.ntfyLogUrl;
 
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
   // Enforce the 1-minute floor so we never push telemetry every few seconds.
@@ -886,6 +993,8 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   runtimeConfig.monthlySmsLimit = settings.monthlySmsLimit;
   strlcpy(runtimeConfig.ntfyUrl, settings.ntfyUrl.c_str(), sizeof(runtimeConfig.ntfyUrl));
   ntfyManager.setUrl(settings.ntfyUrl);
+  strlcpy(runtimeConfig.ntfyLogUrl, settings.ntfyLogUrl.c_str(), sizeof(runtimeConfig.ntfyLogUrl));
+  logNtfy.setUrl(settings.ntfyLogUrl);
   rateLimitManager.setLimits(runtimeConfig.dailySmsLimit, runtimeConfig.weeklySmsLimit, runtimeConfig.monthlySmsLimit);
 
   if (settings.createdIntervalOfDht) {
@@ -912,6 +1021,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (settings.createdNtfyUrl) {
     Serial.println("[SYNC] created or healed Firebase variable: ntfyUrl");
   }
+  if (settings.createdNtfyLogUrl) {
+    Serial.println("[SYNC] created or healed Firebase variable: ntfyLogUrl");
+  }
 
   if (oldIntervalSeconds != settings.intervalOfDhtSeconds) {
     printRuntimeSettingChange("intervalOfDhtSeconds", String(oldIntervalSeconds), String(settings.intervalOfDhtSeconds));
@@ -936,6 +1048,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   }
   if (oldNtfyUrl != String(runtimeConfig.ntfyUrl)) {
     printRuntimeSettingChange("ntfyUrl", oldNtfyUrl, String(runtimeConfig.ntfyUrl));
+  }
+  if (oldNtfyLogUrl != String(runtimeConfig.ntfyLogUrl)) {
+    printRuntimeSettingChange("ntfyLogUrl", oldNtfyLogUrl, String(runtimeConfig.ntfyLogUrl));
   }
 
   refreshBlockLists();
@@ -1161,10 +1276,14 @@ void setup() {
 
   configManager.begin();
   runtimeConfig = configManager.get();
-  if (runtimeConfig.pollingIntervalSeconds < 3) {
-    runtimeConfig.pollingIntervalSeconds = 3;
+  // Poll the job queue no faster than every 10 s (was 3 s). Batches of 5 SMS are
+  // then paced out with a random 5–30 s gap between sends for SIM-ban safety.
+  if (runtimeConfig.pollingIntervalSeconds < 10) {
+    runtimeConfig.pollingIntervalSeconds = 10;
   }
+  randomSeed(esp_random());
   ntfyManager.begin(runtimeConfig.ntfyUrl);
+  logNtfy.begin(runtimeConfig.ntfyLogUrl);
 
   initializeModemHardware();
   Logger::info("MODEM", "Hardware initialized");
@@ -1213,6 +1332,10 @@ void setup() {
   Logger::info("BOOT", startupIp.c_str());
   Logger::info("API", webDashboard.docsUrl().c_str());
   pendingPollStartMs = millis();
+
+  pushLog("device boot", String("v8 online — wifi=") + wifiManager.modeName() +
+                             " ip=" + startupIp +
+                             " firebase=" + (firebaseManager.isReady() ? "ready" : "down"));
 
   if (firebaseManager.isReady()) {
     if (firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), startupIp, true)) {
@@ -1335,12 +1458,16 @@ void loop() {
   if (firebaseManager.isReady() && millis() >= pendingPollStartMs &&
       millis() - lastCloudPoll >= (unsigned long)runtimeConfig.pollingIntervalSeconds * 1000UL) {
     lastCloudPoll = millis();
-    // If we just drained a job there may be more queued behind it. Re-arm the
-    // poll timer so the next loop iteration polls again immediately and the
-    // queue empties quickly, instead of waiting a full interval per job.
-    if (processPendingCommand()) {
-      lastCloudPoll = 0;
+    processCallJob();               // one call per poll
+    if (smsBatchCount == 0) {
+      fetchSmsBatch();              // grab up to 5 pending SMS only when idle
     }
+  }
+  // Drive the active SMS batch every loop (non-blocking, anti-ban paced). While a
+  // batch is in flight (smsBatchCount > 0) the fetch above is skipped, so the next
+  // 5 are not pulled until the current batch is fully drained.
+  if (firebaseManager.isReady()) {
+    driveSmsBatch();
   }
 
   callManager.loop();

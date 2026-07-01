@@ -32,8 +32,11 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Meaning: monthly SMS cap used by the rate limiter.
   - Default: `4900`
 - `ntfyUrl` (string)
-  - Meaning: ntfy topic URL used for call/SMS notifications.
-  - Default: `https://ntfy.innovorix.com/oracle_ntfy`
+  - Meaning: ntfy topic URL for user-facing notifications (incoming SMS/calls, package events).
+  - Default: from `secrets.h` `NTFY_URL_DEFAULT` (channel `oracle_ntfy`).
+- `ntfyLogUrl` (string)
+  - Meaning: ntfy topic URL for the operational log/error channel (job lifecycle, rate-limit/rescue alerts, boot). Chatty — subscribe + mute.
+  - Default: from `secrets.h` `NTFY_LOG_URL_DEFAULT` (channel `ttgo_stuff`).
 
 ## Firestore Block Lists
 - Stored on `sim_module/device`: `blockedIncomingCallers`, `blockedIncomingSms`, `blockedOutgoingCallers`, `blockedOutgoingSms`.

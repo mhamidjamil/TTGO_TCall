@@ -53,7 +53,11 @@
 #define FIREBASE_TELEMETRY_PATH_DEFAULT "/ttgo_tcall/telemetry"
 
 // ntfy defaults
+// User-facing notifications (incoming SMS/calls, package events).
 #define NTFY_URL_DEFAULT "https://ntfy.innovorix.com/oracle_ntfy"
+// Operational log channel (job status: pending/processing/sent/failed + errors).
+// Subscribe + mute this one; it is chatty by design.
+#define NTFY_LOG_URL_DEFAULT "https://ntfy.innovorix.com/ttgo_stuff"
 
 // ThingSpeak defaults
 #define THINGSPEAK_CHANNEL_ID_DEFAULT 0UL
