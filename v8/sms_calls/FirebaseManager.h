@@ -65,6 +65,22 @@ struct FirebaseRuntimeSettings {
   bool createdNtfyUrl = false;
 };
 
+// SIM package/subscription state, persisted at RTDB /ttgo_tcall/package and
+// mirrored to LittleFS. Detection tokens and the safety margin live here too so
+// they can be tuned from the cloud without reflashing (e.g. when the operator
+// changes the SMS count or the message wording).
+struct PackageState {
+  bool known = false;              // have we ever recorded a subscription?
+  unsigned long subscribedEpoch = 0;
+  unsigned long expiryEpoch = 0;
+  int validityDays = 0;
+  long smsAllowance = 0;
+  int safetyMarginDays = 1;        // subtract from validity to be safe (Jazz expires early)
+  String matchTokens;              // comma-separated: ALL must appear to count as a subscription SMS
+  String lastMessage;
+  bool createdNode = false;        // set true when we had to create/heal the node
+};
+
 class FirebaseManager {
 public:
   bool begin(const V8Config &config);
@@ -132,6 +148,10 @@ public:
   bool fetchBlockLists(BlockLists &out);
   // Write connectedSsid to /ttgo_tcall/settings/runtime in RTDB.
   bool pushConnectedSsid(const String &ssid);
+  // Package/subscription state at RTDB /ttgo_tcall/package. fetch heals defaults
+  // (createdNode=true) when the node is missing; push persists the given state.
+  bool fetchPackageState(PackageState &outState, const String &defaultTokens, int defaultSafetyMarginDays);
+  bool pushPackageState(const PackageState &state);
   String lastError() const;
 
 private:

@@ -20,6 +20,7 @@
 #include "WebDashboard.h"
 #include "Logger.h"
 #include "NtfyManager.h"
+#include "PackageManager.h"
 
 static ConfigManager configManager;
 static WiFiManager wifiManager;
@@ -32,6 +33,7 @@ static DHTManager dhtManager;
 static ThingSpeakManager thingSpeakManager;
 static WebDashboard webDashboard;
 static NtfyManager ntfyManager;
+static PackageManager packageManager;
 
 static unsigned long lastUiRefresh = 0;
 static unsigned long lastCloudPoll = 0;
@@ -47,14 +49,28 @@ static unsigned long lastWifiReconnect = 0;
 // means the first retry fires ~5 min after boot, matching the user's expectation
 // of "wait 5 minutes then try all saved networks again".
 static const unsigned long wifiReconnectIntervalMs = 5UL * 60UL * 1000UL;
+static unsigned long lastFirebaseRetry = 0;
+// Retry Firebase init every 90 s when WiFi is connected but Firebase is not ready.
+// Covers the "router up but uplink/DNS not ready yet at boot" case: WiFi connects,
+// but firebaseManager.begin() failed for lack of internet, so the device stays
+// online yet never reaches Firebase/ThingSpeak until this retry succeeds.
+static const unsigned long firebaseRetryIntervalMs = 90UL * 1000UL;
 static V8Config runtimeConfig;
 static String startupBootTime;
 static String startupIp;
 static bool lastTelemetryPushOk = false;
 static String lastTelemetryPushMessage = "not_attempted";
-static unsigned long telemetryIntervalMs = 15000UL;
-static unsigned long thingSpeakIntervalMs = 15000UL;
-static const unsigned long runtimeSettingsSyncIntervalMs = 10UL * 60UL * 1000UL;
+// Minimum gap between telemetry/ThingSpeak pushes. We never push more often than
+// this, no matter how low intervalOfDhtSeconds is set — avoids spamming Firebase
+// and ThingSpeak every few seconds. Adjust here if a faster cadence is ever needed.
+static const unsigned long kMinTelemetryIntervalMs = 60UL * 1000UL;
+static unsigned long telemetryIntervalMs = kMinTelemetryIntervalMs;
+static unsigned long thingSpeakIntervalMs = kMinTelemetryIntervalMs;
+// Re-sync runtime settings from Firebase every 5 minutes, so dashboard/cloud
+// edits (limits, intervals, ntfy, tokens) take effect within 5 min without a
+// reboot. (There is no 30 s sync job; polling for SMS/call JOBS is separate and
+// runs on pollingIntervalSeconds.)
+static const unsigned long runtimeSettingsSyncIntervalMs = 5UL * 60UL * 1000UL;
 static const unsigned long heartbeatIntervalMs = 60UL * 1000UL;
 static const unsigned long recoveryIntervalMs = 60UL * 1000UL;
 static const unsigned long stuckJobAgeSeconds = 5UL * 60UL;
@@ -496,19 +512,16 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
     bool doReboot = false;
     if (parseWifiConfigSms(norm.text, wifiSsid, wifiPass, doReboot)) {
       bool saved = configManager.addWifiNetwork(wifiSsid, wifiPass);
-      String reply;
-      if (saved) {
-        reply = String("[v8] WiFi '") + wifiSsid +
-                (doReboot ? String("' saved. Rebooting now.")
-                          : String("' saved. Reboot device to apply."));
-      } else {
-        reply = String("[v8] WiFi save failed: list full (max 8) or empty SSID.");
-      }
+      // Confirm over ntfy (free, uses data), NOT via SMS — an SMS reply would
+      // fail or waste balance when the SIM has no package. Also log to serial.
+      String confirm = saved
+          ? (String("WiFi '") + wifiSsid + "' saved" + (doReboot ? " — rebooting now" : " — reboot to apply"))
+          : (String("WiFi '") + wifiSsid + "' save FAILED (list full max 8, or empty SSID)");
       Serial.print("[WIFI] config via SMS ssid=");
       Serial.print(wifiSsid);
       Serial.print(" saved=");
       Serial.println(saved ? "yes" : "no");
-      smsManager.sendMessage(number, reply);
+      ntfyManager.notify(String("wifi config from ") + number, confirm);
       if (smsIndex > 0) {
         smsManager.deleteMessage(smsIndex);
       }
@@ -519,6 +532,13 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
       return;
     }
   }
+
+  // Package subscription detection (content-based, ANY sender — the operator's
+  // confirmation comes from a short code / alphanumeric ID, not an admin number).
+  // PackageManager persists the new expiry and sends its own detailed ntfy, so we
+  // suppress the generic ntfy below when it handles the message. The SMS is still
+  // archived to Firestore and cleared from the SIM by the normal flow.
+  bool isPackageMsg = packageManager.handleIncomingSms(norm.text, epochSeconds);
 
   bool blocked = isBlockedNumber(number, blockLists.incomingSms, blockLists.incomingSmsCount);
 
@@ -551,6 +571,8 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
 
   if (blocked) {
     Logger::info("SMS", "Blocked SMS sender logged without ntfy");
+  } else if (isPackageMsg) {
+    Logger::info("PACKAGE", "Subscription SMS detected; package notification sent");
   } else {
     if (ntfyManager.notify(String("sms from ") + number, norm.text)) {
       Serial.print("[NTFY] sms notification sent number=");
@@ -662,6 +684,9 @@ static bool processPendingCommand() {
       logJob(String("sms blocked id=") + smsJob.id + " number=" + normalizedNumber + " reason=blocked_outgoing");
       firebaseManager.updateSmsJobStatus(smsJob, "blocked", "blocked_outgoing");
       firebaseManager.incrementDeviceCounter("totalSmsBlockedOutgoing");
+    } else if (!packageManager.isSmsAllowed(currentEpochSeconds())) {
+      logJob(String("sms failed id=") + smsJob.id + " reason=package_expired");
+      firebaseManager.updateSmsJobStatus(smsJob, "failed", "package_expired");
     } else if (!rateLimitManager.canSend(limitReason)) {
       logJob(String("sms failed id=") + smsJob.id + " reason=" + limitReason);
       firebaseManager.updateSmsJobStatus(smsJob, "failed", limitReason);
@@ -775,6 +800,9 @@ static void printCommandHelp() {
   Serial.println(" - wifi add <ssid> <pass> : save a new WiFi network (no spaces in ssid)");
   Serial.println(" - wifi delete <ssid> : remove a saved WiFi network");
   Serial.println(" - wifi clear : remove all saved WiFi networks");
+  Serial.println(" - package status : show SIM package validity/expiry");
+  Serial.println(" - package set <days> : manually set package validity from today");
+  Serial.println(" - package clear : clear package state (sending allowed again)");
   Serial.println(" - help   : show this command list");
 }
 
@@ -825,7 +853,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
     return false;
   }
 
-  const uint32_t defaultIntervalOfDhtSeconds = 15;
+  const uint32_t defaultIntervalOfDhtSeconds = 60;
   const bool defaultShowFirebasePushLogs = true;
   const bool defaultShowThingSpeakPushLogs = true;
 
@@ -845,7 +873,11 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   String oldNtfyUrl = runtimeConfig.ntfyUrl;
 
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
-  thingSpeakIntervalMs = telemetryIntervalMs < 15000UL ? 15000UL : telemetryIntervalMs;
+  // Enforce the 1-minute floor so we never push telemetry every few seconds.
+  if (telemetryIntervalMs < kMinTelemetryIntervalMs) {
+    telemetryIntervalMs = kMinTelemetryIntervalMs;
+  }
+  thingSpeakIntervalMs = telemetryIntervalMs;
   showFirebasePushLogs = settings.showFirebasePushLogs;
   showThingSpeakPushLogs = settings.showThingSpeakPushLogs;
   jobLogs = settings.jobLogs;
@@ -1091,6 +1123,32 @@ static void handleSerialCommand(String command) {
     Serial.println("[WIFI] commands: wifi list | wifi add <ssid> <pass> | wifi delete <ssid> | wifi clear");
     return;
   }
+  if (command.startsWith("package")) {
+    String sub = command.substring(7);
+    sub.trim();
+    if (sub == "status" || sub.length() == 0) {
+      Serial.print("[PACKAGE] ");
+      Serial.println(packageManager.statusLine(currentEpochSeconds()));
+      return;
+    }
+    if (sub == "clear") {
+      packageManager.clear();
+      Serial.println("[PACKAGE] cleared; sending allowed (unknown state)");
+      return;
+    }
+    if (sub.startsWith("set ")) {
+      int days = sub.substring(4).toInt();
+      if (packageManager.setManual(days, currentEpochSeconds())) {
+        Serial.print("[PACKAGE] manual set ");
+        Serial.println(packageManager.statusLine(currentEpochSeconds()));
+      } else {
+        Serial.println("[PACKAGE] usage: package set <days> (days must be > 0)");
+      }
+      return;
+    }
+    Serial.println("[PACKAGE] commands: package status | package set <days> | package clear");
+    return;
+  }
   printCommandHelp();
 }
 
@@ -1141,6 +1199,8 @@ void setup() {
     Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
   }
 
+  packageManager.begin(&firebaseManager, &ntfyManager);
+
   if (!smsManager.begin()) {
     Logger::warn("SMS", "SMS manager init failed");
   }
@@ -1171,6 +1231,52 @@ void setup() {
   }
 }
 
+// Make sure Firebase AND ThingSpeak are initialized whenever WiFi is connected.
+// Covers the "router up at boot but uplink/DNS not ready yet" case where begin()
+// failed for lack of internet: without this the device stays online forever with
+// no Firebase and (because ThingSpeak pushes are gated behind firebase-ready) no
+// telemetry, even though ntfy still works. Rate-limited to firebaseRetryIntervalMs
+// so we never hammer auth. Called from loop() and again right before each
+// telemetry push so the cloud is guaranteed live at push time.
+static void ensureCloudServices() {
+  if (!wifiManager.isStationConnected()) {
+    return;
+  }
+  if (firebaseManager.isReady() && thingSpeakManager.isReady()) {
+    return;
+  }
+  if (millis() - lastFirebaseRetry < firebaseRetryIntervalMs) {
+    return;
+  }
+  lastFirebaseRetry = millis();
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
+  if (!firebaseManager.isReady()) {
+    Serial.println("[FIREBASE] ensure: init retry (wifi up, not ready)");
+    firebaseManager.begin(runtimeConfig);
+    if (firebaseManager.isReady()) {
+      Logger::info("FIREBASE", "Init succeeded; gateway + telemetry now live");
+      firebaseManager.bootstrapGateway(runtimeConfig.deviceName, runtimeConfig.pollingIntervalSeconds, missedCallMode);
+      syncCountersFromCloud();
+      syncRuntimeSettingsFromCloud("ensure_cloud");
+      firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), wifiManager.localIp().toString(), true);
+      pendingPollStartMs = millis();
+    } else {
+      Serial.print("[FIREBASE] ensure: still failing: ");
+      Serial.println(firebaseManager.lastError());
+    }
+  }
+
+  if (!thingSpeakManager.isReady()) {
+    if (thingSpeakManager.begin(runtimeConfig)) {
+      Logger::info("THINGSPEAK", "Init succeeded");
+    } else {
+      Serial.print("[THINGSPEAK] ensure: still failing: ");
+      Serial.println(thingSpeakManager.lastError());
+    }
+  }
+}
+
 void loop() {
   // ── WiFi self-healing ─────────────────────────────────────────────────────
   // If we booted before the router was up (power outage, cold start) we end up
@@ -1180,20 +1286,14 @@ void loop() {
       millis() - lastWifiReconnect >= wifiReconnectIntervalMs) {
     lastWifiReconnect = millis();
     if (wifiManager.tryReconnect(configManager)) {
-      // Re-sync NTP and Firebase now that we have internet.
-      configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-      if (!firebaseManager.isReady()) {
-        firebaseManager.begin(runtimeConfig);
-        if (firebaseManager.isReady()) {
-          Logger::info("FIREBASE", "Reconnected and Firebase re-initialized");
-          syncCountersFromCloud();
-          syncRuntimeSettingsFromCloud("wifi_reconnect");
-          firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), wifiManager.localIp().toString(), true);
-        }
-      }
+      // Reconnected — force an immediate cloud (re)init on the next line.
+      lastFirebaseRetry = 0;
       pendingPollStartMs = millis();
     }
   }
+  // Ensure Firebase + ThingSpeak are up whenever WiFi is connected (handles the
+  // "router up but internet not ready at boot" cold start). Rate-limited inside.
+  ensureCloudServices();
 
   firebaseManager.pollCommands();
 
@@ -1245,6 +1345,7 @@ void loop() {
 
   callManager.loop();
   handleModemEvents();
+  packageManager.loop(currentEpochSeconds());
   webDashboard.loop();
   if (webDashboard.consumeRuntimeSyncRequest()) {
     syncRuntimeSettingsFromCloud("dashboard");
@@ -1269,6 +1370,10 @@ void loop() {
         rateLimitManager.dailyCount(),
         rateLimitManager.weeklyCount(),
         rateLimitManager.monthlyCount());
+
+    // Before pushing, make sure both cloud services are live (inits them if the
+    // uplink came up late). Rate-limited, so this is cheap when already ready.
+    ensureCloudServices();
 
     if (firebaseManager.isReady() && millis() - lastTelemetryPush > telemetryIntervalMs) {
       lastTelemetryPush = millis();

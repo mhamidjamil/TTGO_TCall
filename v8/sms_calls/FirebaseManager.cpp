@@ -724,6 +724,106 @@ bool FirebaseManager::pushConnectedSsid(const String &ssid) {
   return true;
 }
 
+bool FirebaseManager::fetchPackageState(PackageState &outState, const String &defaultTokens, int defaultSafetyMarginDays) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  outState = PackageState();
+  outState.matchTokens = defaultTokens;
+  outState.safetyMarginDays = defaultSafetyMarginDays;
+
+  String packagePath = rootPathFromConfig() + String("/package");
+  String response;
+  int statusCode = 0;
+  if (!httpGetJson(buildPathUrl(packagePath), response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode == 404 || response == "null") {
+    // No node yet — seed it with detection defaults so the operator can edit
+    // the tokens/margin in Firebase. "known" stays false (allow-when-unknown).
+    outState.createdNode = true;
+  } else if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "package state fetch", statusCode, response);
+    return false;
+  } else {
+    DynamicJsonDocument readDoc(1024);
+    if (deserializeJson(readDoc, response)) {
+      error = String("package state parse failed body=") + response;
+      return false;
+    }
+    JsonObject root = readDoc.as<JsonObject>();
+    bool knownValue = false;
+    if (parseBoolVariant(root["known"], knownValue)) {
+      outState.known = knownValue;
+    }
+    outState.subscribedEpoch = root["subscribedEpoch"] | 0UL;
+    outState.expiryEpoch = root["expiryEpoch"] | 0UL;
+    outState.validityDays = root["validityDays"] | 0;
+    outState.smsAllowance = root["smsAllowance"] | 0L;
+    int marginParsed = 0;
+    if (parseLimitVariant(root["safetyMarginDays"], marginParsed)) {
+      outState.safetyMarginDays = marginParsed;
+    } else {
+      outState.createdNode = true;  // heal the margin key
+    }
+    String tokensParsed;
+    if (parseStringVariant(root["matchTokens"], tokensParsed) && tokensParsed.length() > 0) {
+      outState.matchTokens = tokensParsed;
+    } else {
+      outState.createdNode = true;  // heal the tokens key
+    }
+    String lastMsgParsed;
+    if (parseStringVariant(root["lastMessage"], lastMsgParsed)) {
+      outState.lastMessage = lastMsgParsed;
+    }
+  }
+
+  if (outState.createdNode) {
+    // Write back the (possibly partial) state so the node exists with defaults.
+    if (!pushPackageState(outState)) {
+      return false;  // error already set by pushPackageState
+    }
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::pushPackageState(const PackageState &state) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(1024);
+  doc["known"] = state.known;
+  doc["subscribedEpoch"] = state.subscribedEpoch;
+  doc["expiryEpoch"] = state.expiryEpoch;
+  doc["validityDays"] = state.validityDays;
+  doc["smsAllowance"] = state.smsAllowance;
+  doc["safetyMarginDays"] = state.safetyMarginDays;
+  doc["matchTokens"] = state.matchTokens;
+  doc["lastMessage"] = state.lastMessage;
+  doc["updatedAtMs"] = millis();
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String packagePath = rootPathFromConfig() + String("/package");
+  String response;
+  int statusCode = 0;
+  if (!httpPatchJson(buildPathUrl(packagePath), payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "package state write", statusCode, response);
+    return false;
+  }
+  error = String();
+  return true;
+}
+
 bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
                                            uint32_t defaultIntervalOfDhtSeconds,
                                            bool defaultShowFirebasePushLogs,
@@ -930,7 +1030,9 @@ bool FirebaseManager::fetchNextSmsJob(FirestoreJob &outJob) {
 
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(kSmsJobsPath), response, statusCode)) {
+  // pageSize=300 so every queued number (one doc per number) is returned in a
+  // single page — otherwise a pending job past the default page could be missed.
+  if (!httpGetBearer(buildFirestoreUrl(kSmsJobsPath) + "?pageSize=300", response, statusCode)) {
     return false;
   }
   if (statusCode == 404) {
@@ -994,7 +1096,7 @@ bool FirebaseManager::fetchNextCallJob(FirestoreJob &outJob) {
 
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(kCallJobsPath), response, statusCode)) {
+  if (!httpGetBearer(buildFirestoreUrl(kCallJobsPath) + "?pageSize=300", response, statusCode)) {
     return false;
   }
   if (statusCode == 404) {

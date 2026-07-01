@@ -4,7 +4,7 @@
 2. IP5306 keep-on setup.
 3. Serial modem start.
 4. SIM module restart.
-5. Attempt STA WiFi connection (tries saved pairs → secrets primary → secrets backup; 15 s each).
+5. Attempt STA WiFi connection (tries dynamic saved list `/wifi_nets.json` → legacy fixed slots → secrets primary → secrets backup; 15 s each).
 6. If STA fails, start AP fallback.
 7. Start web dashboard and API.
 8. Initialize DHT and display managers.
@@ -32,6 +32,24 @@ own within ≤5 minutes — no manual reboot required.
 The boot retry now tries **all networks from the dynamic list** (`/wifi_nets.json`)
 on every attempt, not just two fixed slots. Networks are tried in insertion order.
 See `v8/docs/13-WIFI-MANAGEMENT.md` for full details on adding/removing networks.
+
+## Cloud Late-Init (WiFi up, cloud not ready)
+
+A separate failure mode: the station **connects** at boot, but the uplink/DNS
+isn't ready yet (router just powered on), so `firebaseManager.begin()` fails for
+lack of internet. Because the WiFi self-healing block only fires when the station
+is *down*, the device would otherwise stay online forever with **no Firebase and
+no ThingSpeak** (ThingSpeak pushes are gated behind Firebase-ready) even though
+ntfy — an independent HTTP call — still works.
+
+**v8 runs `ensureCloudServices()` every loop** (rate-limited to one attempt per
+90 s): whenever WiFi is connected but Firebase or ThingSpeak is not ready, it
+re-initializes them. On Firebase success it re-bootstraps the gateway, syncs
+counters + runtime settings, and pushes a startup status. It is called both at
+the top of `loop()` and again **right before each telemetry push**, so the cloud
+is guaranteed live at push time. On a successful WiFi reconnect the retry timer is
+reset so the re-init happens immediately. This recovers telemetry after a "router
+booted but internet lagged" cold start.
 
 ## Acceptance Criteria
 - Boot order is deterministic.

@@ -47,8 +47,9 @@ Send an SMS from a number listed in `adminNumbers` or `authenticNumbers`:
 The device will:
 1. Validate the sender is admin or authentic.
 2. Save the network to LittleFS.
-3. Reply with a confirmation SMS.
+3. Confirm via an **ntfy push notification** (free, over data) — it does **NOT** reply by SMS, so no SIM package/balance is needed and no SMS is wasted.
 4. **NOT** push the message to Firestore (passwords are never stored in the cloud).
+5. Delete the command SMS from SIM memory.
 
 To save **and immediately reboot** in one step:
 
