@@ -41,6 +41,11 @@ static unsigned long lastRuntimeSettingsSync = 0;
 static unsigned long lastHeartbeatPush = 0;
 static unsigned long lastRecoveryRun = 0;
 static unsigned long pendingPollStartMs = 0;
+static unsigned long lastWifiReconnect = 0;
+// Retry STA every 2 minutes when in AP/OFFLINE mode (e.g. router was slow to
+// boot after a power outage). 2 min gives the router plenty of warm-up time
+// without hammering it on every loop.
+static const unsigned long wifiReconnectIntervalMs = 2UL * 60UL * 1000UL;
 static V8Config runtimeConfig;
 static String startupBootTime;
 static String startupIp;
@@ -981,6 +986,29 @@ void setup() {
 }
 
 void loop() {
+  // ── WiFi self-healing ─────────────────────────────────────────────────────
+  // If we booted before the router was up (power outage, cold start) we end up
+  // in AP/OFFLINE mode. Retry STA every wifiReconnectIntervalMs so the device
+  // reconnects automatically once the router is ready — no manual reboot needed.
+  if (!wifiManager.isStationConnected() &&
+      millis() - lastWifiReconnect >= wifiReconnectIntervalMs) {
+    lastWifiReconnect = millis();
+    if (wifiManager.tryReconnect(runtimeConfig)) {
+      // Re-sync NTP and Firebase now that we have internet.
+      configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+      if (!firebaseManager.isReady()) {
+        firebaseManager.begin(runtimeConfig);
+        if (firebaseManager.isReady()) {
+          Logger::info("FIREBASE", "Reconnected and Firebase re-initialized");
+          syncCountersFromCloud();
+          syncRuntimeSettingsFromCloud("wifi_reconnect");
+          firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), wifiManager.localIp().toString(), true);
+        }
+      }
+      pendingPollStartMs = millis();
+    }
+  }
+
   firebaseManager.pollCommands();
 
   if (firebaseManager.isReady() && millis() - lastRuntimeSettingsSync >= runtimeSettingsSyncIntervalMs) {

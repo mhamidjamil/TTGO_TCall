@@ -8,6 +8,9 @@
 class WiFiManager {
 public:
   bool begin(const V8Config &config);
+  // Try STA-only reconnect (no AP fallback). Returns true if now connected.
+  // Call from loop() on a timer when isStationConnected() == false.
+  bool tryReconnect(const V8Config &config);
   bool isStationConnected() const;
   bool isAccessPointActive() const;
   String modeName() const;

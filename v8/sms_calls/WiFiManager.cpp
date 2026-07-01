@@ -72,6 +72,30 @@ void WiFiManager::startAccessPoint(const V8Config &config) {
   accessPointActive = WiFi.softAP(config.apSsid, config.apPass);
 }
 
+bool WiFiManager::tryReconnect(const V8Config &config) {
+  if (stationConnected) {
+    return true;
+  }
+  Serial.println("[WIFI] reconnect attempt (STA only)");
+  // Tear down AP if it was running so we can switch to STA mode cleanly.
+  if (accessPointActive) {
+    WiFi.softAPdisconnect(true);
+    accessPointActive = false;
+    delay(200);
+  }
+  stationConnected = connectStation(config);
+  if (stationConnected) {
+    Serial.println("[WIFI] reconnected as STA");
+  } else {
+    // Bring AP back up so the dashboard remains reachable for credential edits.
+    if (config.apFallbackEnabled) {
+      startAccessPoint(config);
+    }
+    Serial.println("[WIFI] reconnect failed; AP restored");
+  }
+  return stationConnected;
+}
+
 bool WiFiManager::isStationConnected() const {
   return stationConnected;
 }
