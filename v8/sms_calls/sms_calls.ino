@@ -8,6 +8,7 @@
 #include "secrets.example.h"
 #endif
 
+#include "SmsTypes.h"
 #include "ConfigManager.h"
 #include "WiFiManager.h"
 #include "FirebaseManager.h"
@@ -247,14 +248,9 @@ static bool decodeUcs2Hex(const String &hex, String &out) {
   return (printable * 100) >= (units * 80);
 }
 
-struct SmsNormalization {
-  String text;
-  String original;
-  bool wasDecoded;
-};
-
 // If the body looks like UCS2 (hex, length %4, starts 00xx, decodes to text),
 // return the decoded text; otherwise return the original unchanged.
+// (SmsNormalization is defined in SmsTypes.h so it precedes auto-prototypes.)
 static SmsNormalization normalizeSmsBody(const String &raw) {
   SmsNormalization result;
   result.original = raw;
