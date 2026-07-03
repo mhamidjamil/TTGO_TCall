@@ -28,7 +28,7 @@ v8 is the Firebase-backed evolution of the TTGO T-Call project.
 - v7 is the reference for modular structure, config handling, and dashboard/API organization.
 
 ## ntfy Notifications
-- Default topic URL: `https://ntfy.innovorix.com/oracle_ntfy`.
+- Default topic URL: set in the gitignored `secrets.h` (`NTFY_URL_DEFAULT`) — never commit the real value, an ntfy topic name is a bearer credential.
 - Runtime setting: `/ttgo_tcall/settings/runtime/ntfyUrl`.
 - Incoming call title: `call from <number>`.
 - Incoming SMS title: `sms from <number>`, with the SMS body as the notification description.

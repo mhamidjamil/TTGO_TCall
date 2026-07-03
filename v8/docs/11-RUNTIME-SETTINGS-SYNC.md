@@ -33,10 +33,13 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Default: `4900`
 - `ntfyUrl` (string)
   - Meaning: ntfy topic URL for user-facing notifications (incoming SMS/calls, package events).
-  - Default: from `secrets.h` `NTFY_URL_DEFAULT` (channel `oracle_ntfy`).
+  - Default: from `secrets.h` `NTFY_URL_DEFAULT`. Real topic URL lives only in the gitignored `secrets.h` — never commit it, since an ntfy topic name is a bearer credential (anyone who knows it can publish to or subscribe to the channel), and this channel carries WiFi passwords on save.
 - `ntfyLogUrl` (string)
   - Meaning: ntfy topic URL for the operational log/error channel (job lifecycle, rate-limit/rescue alerts, boot). Chatty — subscribe + mute.
-  - Default: from `secrets.h` `NTFY_LOG_URL_DEFAULT` (channel `ttgo_stuff`).
+  - Default: from `secrets.h` `NTFY_LOG_URL_DEFAULT`. Real topic URL lives only in `secrets.h`.
+- `ntfyMuteUrl` (string)
+  - Meaning: ntfy topic URL for incoming SMS from a sender on `blockedIncomingSms`. Fires instead of `ntfyUrl` so blocked/muted traffic stays visible on its own channel rather than being silently dropped. The SMS is still archived to Firestore and deleted from the SIM as usual.
+  - Default: from `secrets.h` `NTFY_MUTE_URL_DEFAULT`. Real topic URL lives only in `secrets.h`.
 
 ## Firestore Block Lists
 - Stored on `sim_module/device`: `blockedIncomingCallers`, `blockedIncomingSms`, `blockedOutgoingCallers`, `blockedOutgoingSms`.

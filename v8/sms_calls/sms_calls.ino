@@ -33,8 +33,9 @@ static DisplayManager displayManager;
 static DHTManager dhtManager;
 static ThingSpeakManager thingSpeakManager;
 static WebDashboard webDashboard;
-static NtfyManager ntfyManager;      // user-facing notifications (oracle_ntfy)
-static NtfyManager logNtfy;          // operational job/error log channel (ttgo_stuff)
+static NtfyManager ntfyManager;      // user-facing notifications (ntfyUrl)
+static NtfyManager logNtfy;          // operational job/error log channel (ntfyLogUrl)
+static NtfyManager muteNtfy;         // muted/blocked incoming SMS channel (ntfyMuteUrl)
 static PackageManager packageManager;
 
 static unsigned long lastUiRefresh = 0;
@@ -288,7 +289,7 @@ static void logJob(const String &message) {
   }
 }
 
-// Push an operational log/status/error line to the ttgo_stuff ntfy channel (and
+// Push an operational log/status/error line to the ntfyLogUrl ntfy channel (and
 // always to serial). Best-effort: silently no-ops if the log URL is unset or
 // WiFi is down. Use for job lifecycle (pending/processing/sent/failed) and any
 // bad event the operator should see instantly.
@@ -602,7 +603,14 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
   Serial.println(norm.text);
 
   if (blocked) {
-    Logger::info("SMS", "Blocked SMS sender logged without ntfy");
+    if (muteNtfy.notify(String("muted sms from ") + number, norm.text)) {
+      Serial.print("[NTFY] muted sms notification sent number=");
+      Serial.print(number);
+      Serial.print(" message=");
+      Serial.println(norm.text);
+    } else {
+      Logger::warn("NTFY", muteNtfy.lastError().c_str());
+    }
   } else if (isPackageMsg) {
     Logger::info("PACKAGE", "Subscription SMS detected; package notification sent");
   } else {
@@ -1090,6 +1098,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
   String oldNtfyUrl = runtimeConfig.ntfyUrl;
   String oldNtfyLogUrl = runtimeConfig.ntfyLogUrl;
+  String oldNtfyMuteUrl = runtimeConfig.ntfyMuteUrl;
 
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
   // Enforce the 1-minute floor so we never push telemetry every few seconds.
@@ -1107,6 +1116,8 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   ntfyManager.setUrl(settings.ntfyUrl);
   strlcpy(runtimeConfig.ntfyLogUrl, settings.ntfyLogUrl.c_str(), sizeof(runtimeConfig.ntfyLogUrl));
   logNtfy.setUrl(settings.ntfyLogUrl);
+  strlcpy(runtimeConfig.ntfyMuteUrl, settings.ntfyMuteUrl.c_str(), sizeof(runtimeConfig.ntfyMuteUrl));
+  muteNtfy.setUrl(settings.ntfyMuteUrl);
   rateLimitManager.setLimits(runtimeConfig.dailySmsLimit, runtimeConfig.weeklySmsLimit, runtimeConfig.monthlySmsLimit);
 
   if (settings.createdIntervalOfDht) {
@@ -1136,6 +1147,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (settings.createdNtfyLogUrl) {
     Serial.println("[SYNC] created or healed Firebase variable: ntfyLogUrl");
   }
+  if (settings.createdNtfyMuteUrl) {
+    Serial.println("[SYNC] created or healed Firebase variable: ntfyMuteUrl");
+  }
 
   if (oldIntervalSeconds != settings.intervalOfDhtSeconds) {
     printRuntimeSettingChange("intervalOfDhtSeconds", String(oldIntervalSeconds), String(settings.intervalOfDhtSeconds));
@@ -1163,6 +1177,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   }
   if (oldNtfyLogUrl != String(runtimeConfig.ntfyLogUrl)) {
     printRuntimeSettingChange("ntfyLogUrl", oldNtfyLogUrl, String(runtimeConfig.ntfyLogUrl));
+  }
+  if (oldNtfyMuteUrl != String(runtimeConfig.ntfyMuteUrl)) {
+    printRuntimeSettingChange("ntfyMuteUrl", oldNtfyMuteUrl, String(runtimeConfig.ntfyMuteUrl));
   }
 
   refreshBlockLists();
@@ -1401,6 +1418,7 @@ void setup() {
   randomSeed(esp_random());
   ntfyManager.begin(runtimeConfig.ntfyUrl);
   logNtfy.begin(runtimeConfig.ntfyLogUrl);
+  muteNtfy.begin(runtimeConfig.ntfyMuteUrl);
 
   initializeModemHardware();
   Logger::info("MODEM", "Hardware initialized");

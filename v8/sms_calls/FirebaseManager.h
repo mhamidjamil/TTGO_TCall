@@ -54,6 +54,7 @@ struct FirebaseRuntimeSettings {
   int monthlySmsLimit = 4900;
   String ntfyUrl;
   String ntfyLogUrl;
+  String ntfyMuteUrl;
   // Desired WiFi pairs, managed from the dashboard via the RTDB runtime node.
   // The device persists them to LittleFS on sync; they apply on next reboot.
   String wifiSsid1;
@@ -69,6 +70,7 @@ struct FirebaseRuntimeSettings {
   bool createdMonthlySmsLimit = false;
   bool createdNtfyUrl = false;
   bool createdNtfyLogUrl = false;
+  bool createdNtfyMuteUrl = false;
 };
 
 // SIM package/subscription state, persisted at RTDB /ttgo_tcall/package and

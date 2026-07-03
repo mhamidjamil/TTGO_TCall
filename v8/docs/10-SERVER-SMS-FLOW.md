@@ -102,7 +102,7 @@ Incoming SMS bodies are normalized before storage/notification — see [SMS norm
 
 Four string arrays, editable from the dashboard or directly in Firestore:
 
-- `blockedIncomingCallers` / `blockedIncomingSms` — incoming events from these are still archived to `*_received` but do **not** trigger an ntfy notification (`notified: false`).
+- `blockedIncomingCallers` / `blockedIncomingSms` — incoming events from these are still archived to `*_received` (and the SMS is still deleted from the SIM once archived) but do **not** trigger the user-facing `ntfyUrl` notification (`notified: false`). Blocked/muted incoming SMS instead fire a separate notification on the `ntfyMuteUrl` channel (see [11-RUNTIME-SETTINGS-SYNC](11-RUNTIME-SETTINGS-SYNC.md)), so muted senders stay visible without mixing into the main channel.
 - `blockedOutgoingCallers` / `blockedOutgoingSms` — jobs to these are marked `blocked` and never sent/dialed.
 
 Entries may be phone numbers or alphanumeric sender ids (e.g. `JAZZ`). On first boot each empty list is seeded with `["JAZZ","000"]` as an editable template. The device refreshes these about once a minute and instantly when **Sync** is pressed.
