@@ -194,6 +194,47 @@ String safeFirestoreDocumentId(const String &value) {
   return id;
 }
 
+// Render an epoch as a human-readable Pakistan-time string, or "" for 0.
+// Written next to the *Epoch fields in RTDB so the operator can read them.
+String formatPktHuman(unsigned long epochSeconds) {
+  if (epochSeconds < 1000000000UL) {
+    return String("");
+  }
+  time_t pkt = (time_t)epochSeconds + 5 * 60 * 60;
+  struct tm timeInfo;
+  if (!gmtime_r(&pkt, &timeInfo)) {
+    return String("");
+  }
+  char buffer[28];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M PKT", &timeInfo);
+  return String(buffer);
+}
+
+// Percent-encode a document ID for use as a URL path segment. Google's HTTP
+// front-end decodes a raw '+' in the path as a SPACE, so an unencoded
+// PATCH .../sms_jobs/+923001234567 writes to a DIFFERENT (auto-created)
+// document " 923001234567" — the original job then stays pending forever and
+// the device re-sends it in an endless loop. Encoding '+' as %2B routes every
+// claim/update to the real document.
+String urlEncodeDocId(const String &raw) {
+  static const char *hexDigits = "0123456789ABCDEF";
+  String out;
+  out.reserve(raw.length() + 4);
+  for (size_t i = 0; i < raw.length(); ++i) {
+    char c = raw.charAt(i);
+    bool unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                      (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
+    if (unreserved) {
+      out += c;
+    } else {
+      out += '%';
+      out += hexDigits[((unsigned char)c >> 4) & 0xF];
+      out += hexDigits[(unsigned char)c & 0xF];
+    }
+  }
+  return out;
+}
+
 void appendFirestoreArrayStrings(const JsonVariantConst &field, String *numbers, size_t maxNumbers, size_t &numberCount) {
   JsonArrayConst values = field["arrayValue"]["values"].as<JsonArrayConst>();
   for (JsonVariantConst value : values) {
@@ -274,8 +315,10 @@ void parseFirestoreJob(const JsonObjectConst &document, FirestoreJob &outJob) {
   outJob.status = firestoreStringField(fields, "status");
   outJob.error = firestoreStringField(fields, "error");
   outJob.enqueBy = firestoreStringField(fields, "enque_by");
+  outJob.kind = firestoreStringField(fields, "kind");
   outJob.userPicked = firestoreBoolField(fields, "user_picked", false);
   outJob.durationSeconds = firestoreIntField(fields, "duration_seconds", 0);
+  outJob.processingStartedEpoch = firestoreEpochField(fields, "processing_started_epoch", 0);
 }
 }
 
@@ -700,6 +743,134 @@ bool FirebaseManager::pushLandingSnapshot(float temperature,
   return true;
 }
 
+bool FirebaseManager::pushConnectedSsid(const String &ssid) {
+  if (!ready) {
+    return false;
+  }
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+  String runtimePath = rootPathFromConfig() + "/settings/runtime";
+  String escaped = ssid;
+  escaped.replace("\\", "\\\\");
+  escaped.replace("\"", "\\\"");
+  String payload = String("{\"connectedSsid\":\"") + escaped + String("\"}");
+  String response;
+  int statusCode = 0;
+  if (!httpPatchJson(buildPathUrl(runtimePath), payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    error = String("connectedSsid push http ") + String(statusCode);
+    return false;
+  }
+  return true;
+}
+
+bool FirebaseManager::fetchPackageState(PackageState &outState, const String &defaultTokens, int defaultSafetyMarginDays) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  outState = PackageState();
+  outState.matchTokens = defaultTokens;
+  outState.safetyMarginDays = defaultSafetyMarginDays;
+
+  String packagePath = rootPathFromConfig() + String("/package");
+  String response;
+  int statusCode = 0;
+  if (!httpGetJson(buildPathUrl(packagePath), response, statusCode)) {
+    return false;
+  }
+
+  if (statusCode == 404 || response == "null") {
+    // No node yet — seed it with detection defaults so the operator can edit
+    // the tokens/margin in Firebase. "known" stays false (allow-when-unknown).
+    outState.createdNode = true;
+  } else if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "package state fetch", statusCode, response);
+    return false;
+  } else {
+    DynamicJsonDocument readDoc(1024);
+    if (deserializeJson(readDoc, response)) {
+      error = String("package state parse failed body=") + response;
+      return false;
+    }
+    JsonObject root = readDoc.as<JsonObject>();
+    bool knownValue = false;
+    if (parseBoolVariant(root["known"], knownValue)) {
+      outState.known = knownValue;
+    }
+    outState.subscribedEpoch = root["subscribedEpoch"] | 0UL;
+    outState.expiryEpoch = root["expiryEpoch"] | 0UL;
+    outState.validityDays = root["validityDays"] | 0;
+    outState.smsAllowance = root["smsAllowance"] | 0L;
+    int marginParsed = 0;
+    if (parseLimitVariant(root["safetyMarginDays"], marginParsed)) {
+      outState.safetyMarginDays = marginParsed;
+    } else {
+      outState.createdNode = true;  // heal the margin key
+    }
+    String tokensParsed;
+    if (parseStringVariant(root["matchTokens"], tokensParsed) && tokensParsed.length() > 0) {
+      outState.matchTokens = tokensParsed;
+    } else {
+      outState.createdNode = true;  // heal the tokens key
+    }
+    String lastMsgParsed;
+    if (parseStringVariant(root["lastMessage"], lastMsgParsed)) {
+      outState.lastMessage = lastMsgParsed;
+    }
+  }
+
+  if (outState.createdNode) {
+    // Write back the (possibly partial) state so the node exists with defaults.
+    if (!pushPackageState(outState)) {
+      return false;  // error already set by pushPackageState
+    }
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::pushPackageState(const PackageState &state) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  DynamicJsonDocument doc(1024);
+  doc["known"] = state.known;
+  doc["subscribedEpoch"] = state.subscribedEpoch;
+  doc["expiryEpoch"] = state.expiryEpoch;
+  doc["validityDays"] = state.validityDays;
+  doc["smsAllowance"] = state.smsAllowance;
+  doc["safetyMarginDays"] = state.safetyMarginDays;
+  doc["matchTokens"] = state.matchTokens;
+  doc["lastMessage"] = state.lastMessage;
+  // Human-readable mirrors of the *Epoch fields (PKT) — display only, the device
+  // reads back only the epochs. Edit expiryEpoch (seconds) to change the expiry.
+  doc["subscribedHuman"] = formatPktHuman(state.subscribedEpoch);
+  doc["expiryHuman"] = formatPktHuman(state.expiryEpoch);
+  doc["updatedAtMs"] = millis();
+
+  String payload;
+  serializeJson(doc, payload);
+
+  String packagePath = rootPathFromConfig() + String("/package");
+  String response;
+  int statusCode = 0;
+  if (!httpPatchJson(buildPathUrl(packagePath), payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "package state write", statusCode, response);
+    return false;
+  }
+  error = String();
+  return true;
+}
+
 bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
                                            uint32_t defaultIntervalOfDhtSeconds,
                                            bool defaultShowFirebasePushLogs,
@@ -718,6 +889,8 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
   outSettings.weeklySmsLimit = config.weeklySmsLimit;
   outSettings.monthlySmsLimit = config.monthlySmsLimit;
   outSettings.ntfyUrl = defaultNtfyUrl.length() > 0 ? defaultNtfyUrl : String(config.ntfyUrl);
+  outSettings.ntfyLogUrl = String(config.ntfyLogUrl);
+  outSettings.ntfyMuteUrl = String(config.ntfyMuteUrl);
 
   String runtimePath = rootPathFromConfig() + String("/settings/runtime");
   String response;
@@ -738,6 +911,8 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     outSettings.createdWeeklySmsLimit = true;
     outSettings.createdMonthlySmsLimit = true;
     outSettings.createdNtfyUrl = true;
+    outSettings.createdNtfyLogUrl = true;
+    outSettings.createdNtfyMuteUrl = true;
     shouldWriteBack = true;
   } else if (statusCode < 200 || statusCode >= 300) {
     setHttpStatusError(error, "runtime settings fetch", statusCode, response);
@@ -814,6 +989,22 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       shouldWriteBack = true;
     }
 
+    String parsedNtfyLogUrl;
+    if (parseStringVariant(root["ntfyLogUrl"], parsedNtfyLogUrl)) {
+      outSettings.ntfyLogUrl = parsedNtfyLogUrl;
+    } else {
+      outSettings.createdNtfyLogUrl = true;
+      shouldWriteBack = true;
+    }
+
+    String parsedNtfyMuteUrl;
+    if (parseStringVariant(root["ntfyMuteUrl"], parsedNtfyMuteUrl)) {
+      outSettings.ntfyMuteUrl = parsedNtfyMuteUrl;
+    } else {
+      outSettings.createdNtfyMuteUrl = true;
+      shouldWriteBack = true;
+    }
+
     // WiFi pairs are optional and managed from the dashboard. Read them when
     // present; absence just means "no dashboard override set" (we do not heal
     // these keys so the runtime node stays clean until the operator sets them).
@@ -833,6 +1024,8 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     writeDoc["weeklySmsLimit"] = outSettings.weeklySmsLimit;
     writeDoc["monthlySmsLimit"] = outSettings.monthlySmsLimit;
     writeDoc["ntfyUrl"] = outSettings.ntfyUrl;
+    writeDoc["ntfyLogUrl"] = outSettings.ntfyLogUrl;
+    writeDoc["ntfyMuteUrl"] = outSettings.ntfyMuteUrl;
     writeDoc["updatedAtMs"] = millis();
 
     String payload;
@@ -899,132 +1092,161 @@ bool FirebaseManager::bootstrapGateway(const String &deviceName,
   return true;
 }
 
-bool FirebaseManager::fetchNextSmsJob(FirestoreJob &outJob) {
+// Run a structured query for jobs with the given status. Only matching docs are
+// returned by the server, so finished (sent/failed/blocked) jobs never reach the
+// device and the response stays tiny regardless of how large the collection grows.
+bool FirebaseManager::queryJobsByStatus(const String &parentPath, const char *collectionId, const char *statusValue,
+                                        int limit, FirestoreJob *outJobs, int maxJobs, int &outCount) {
+  outCount = 0;
   if (!ensureAuthenticated()) {
     return false;
   }
 
+  String payload = String("{\"structuredQuery\":{\"from\":[{\"collectionId\":\"") + collectionId +
+                   "\"}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"status\"},"
+                   "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + statusValue + "\"}}},\"limit\":" +
+                   String(limit) + "}}";
+
+  String url = buildFirestoreUrl(parentPath) + ":runQuery";
   String response;
   int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(kSmsJobsPath), response, statusCode)) {
-    return false;
-  }
-  if (statusCode == 404) {
-    error = String();
+  if (!httpPostBearerJson(url, payload, response, statusCode)) {
     return false;
   }
   if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "sms job fetch", statusCode, response);
+    setHttpStatusError(error, "pending jobs query", statusCode, response);
     return false;
   }
 
-  DynamicJsonDocument doc(12288);
+  DynamicJsonDocument doc(8192);
   if (deserializeJson(doc, response)) {
-    error = String("sms job parse failed body=") + response;
+    error = String("pending jobs parse failed body=") + response;
     return false;
   }
 
-  JsonArray documents = doc["documents"].as<JsonArray>();
-  for (JsonVariant item : documents) {
-    FirestoreJob candidate;
-    parseFirestoreJob(item.as<JsonObjectConst>(), candidate);
-    if (candidate.status != "pending") {
+  JsonArray results = doc.as<JsonArray>();
+  for (JsonVariant element : results) {
+    if (outCount >= maxJobs) {
+      break;
+    }
+    if (!element.containsKey("document")) {
+      continue;  // readTime-only elements when there are no matches
+    }
+    FirestoreJob job;
+    parseFirestoreJob(element["document"].as<JsonObjectConst>(), job);
+    if (job.status != statusValue) {
       continue;
     }
-
-    DynamicJsonDocument claimDoc(768);
-    JsonObject fields = claimDoc.createNestedObject("fields");
-    setStringField(fields, "status", "in_progress");
-    unsigned long now = currentFirestoreEpoch();
-    setTimestampField(fields, "processing_started_at", now);
-    setIntField(fields, "processing_started_epoch", (int)now);
-    String payload;
-    serializeJson(claimDoc, payload);
-
-    String claimResponse;
-    int claimStatus = 0;
-    String claimUrl = buildFirestoreUrl(String(kSmsJobsPath) + "/" + candidate.id) +
-                      "?updateMask.fieldPaths=status"
-                      "&updateMask.fieldPaths=processing_started_at"
-                      "&updateMask.fieldPaths=processing_started_epoch";
-    if (!httpPatchBearerJson(claimUrl, payload, claimResponse, claimStatus) ||
-        claimStatus < 200 || claimStatus >= 300) {
-      setHttpStatusError(error, "sms job claim", claimStatus, claimResponse);
-      return false;
-    }
-
-    candidate.status = "in_progress";
-    outJob = candidate;
-    error = String();
-    return true;
+    outJobs[outCount++] = job;
   }
 
   error = String();
-  return false;
+  return true;
+}
+
+// Mark a job in_progress right before we act on it (crash-recovery marker).
+bool FirebaseManager::claimJob(const String &collectionPath, const FirestoreJob &job) {
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+  DynamicJsonDocument claimDoc(768);
+  JsonObject fields = claimDoc.createNestedObject("fields");
+  setStringField(fields, "status", "in_progress");
+  unsigned long now = currentFirestoreEpoch();
+  setTimestampField(fields, "processing_started_at", now);
+  setIntField(fields, "processing_started_epoch", (int)now);
+  String payload;
+  serializeJson(claimDoc, payload);
+
+  String claimResponse;
+  int claimStatus = 0;
+  // exists=true precondition: a claim must UPDATE the queued job, never create a
+  // new document. If the id were ever mis-routed again, Firestore now rejects the
+  // write (409) instead of silently spawning a ghost job.
+  String claimUrl = buildFirestoreUrl(collectionPath + "/" + urlEncodeDocId(job.id)) +
+                    "?currentDocument.exists=true"
+                    "&updateMask.fieldPaths=status"
+                    "&updateMask.fieldPaths=processing_started_at"
+                    "&updateMask.fieldPaths=processing_started_epoch";
+  if (!httpPatchBearerJson(claimUrl, payload, claimResponse, claimStatus) ||
+      claimStatus < 200 || claimStatus >= 300) {
+    setHttpStatusError(error, "job claim", claimStatus, claimResponse);
+    return false;
+  }
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::fetchPendingSmsJobs(FirestoreJob *outJobs, int maxJobs, int &outCount) {
+  return queryJobsByStatus(kSmsDocPath, "sms_jobs", "pending", maxJobs, outJobs, maxJobs, outCount);
+}
+
+bool FirebaseManager::fetchPendingOtpJobs(FirestoreJob *outJobs, int maxJobs, int &outCount) {
+  outCount = 0;
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  // Composite equality filter (status==pending AND kind==otp) — equality-only,
+  // so Firestore serves it without a manual composite index.
+  String payload =
+      "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"sms_jobs\"}],"
+      "\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":["
+      "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"status\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"pending\"}}},"
+      "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"kind\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"otp\"}}}"
+      "]}},\"limit\":" + String(maxJobs) + "}}";
+
+  String url = buildFirestoreUrl(kSmsDocPath) + ":runQuery";
+  String response;
+  int statusCode = 0;
+  if (!httpPostBearerJson(url, payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "otp jobs query", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(8192);
+  if (deserializeJson(doc, response)) {
+    error = String("otp jobs parse failed body=") + response;
+    return false;
+  }
+
+  JsonArray results = doc.as<JsonArray>();
+  for (JsonVariant element : results) {
+    if (outCount >= maxJobs) {
+      break;
+    }
+    if (!element.containsKey("document")) {
+      continue;
+    }
+    FirestoreJob job;
+    parseFirestoreJob(element["document"].as<JsonObjectConst>(), job);
+    if (job.status != "pending" || job.kind != "otp") {
+      continue;
+    }
+    outJobs[outCount++] = job;
+  }
+
+  error = String();
+  return true;
+}
+
+bool FirebaseManager::claimSmsJob(const FirestoreJob &job) {
+  return claimJob(kSmsJobsPath, job);
 }
 
 bool FirebaseManager::fetchNextCallJob(FirestoreJob &outJob) {
-  if (!ensureAuthenticated()) {
+  int count = 0;
+  if (!queryJobsByStatus(kCallsDocPath, "call_jobs", "pending", 1, &outJob, 1, count) || count == 0) {
     return false;
   }
-
-  String response;
-  int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(kCallJobsPath), response, statusCode)) {
+  if (!claimJob(kCallJobsPath, outJob)) {
     return false;
   }
-  if (statusCode == 404) {
-    error = String();
-    return false;
-  }
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "call job fetch", statusCode, response);
-    return false;
-  }
-
-  DynamicJsonDocument doc(12288);
-  if (deserializeJson(doc, response)) {
-    error = String("call job parse failed body=") + response;
-    return false;
-  }
-
-  JsonArray documents = doc["documents"].as<JsonArray>();
-  for (JsonVariant item : documents) {
-    FirestoreJob candidate;
-    parseFirestoreJob(item.as<JsonObjectConst>(), candidate);
-    if (candidate.status != "pending") {
-      continue;
-    }
-
-    DynamicJsonDocument claimDoc(768);
-    JsonObject fields = claimDoc.createNestedObject("fields");
-    setStringField(fields, "status", "in_progress");
-    unsigned long now = currentFirestoreEpoch();
-    setTimestampField(fields, "processing_started_at", now);
-    setIntField(fields, "processing_started_epoch", (int)now);
-    String payload;
-    serializeJson(claimDoc, payload);
-
-    String claimResponse;
-    int claimStatus = 0;
-    String claimUrl = buildFirestoreUrl(String(kCallJobsPath) + "/" + candidate.id) +
-                      "?updateMask.fieldPaths=status"
-                      "&updateMask.fieldPaths=processing_started_at"
-                      "&updateMask.fieldPaths=processing_started_epoch";
-    if (!httpPatchBearerJson(claimUrl, payload, claimResponse, claimStatus) ||
-        claimStatus < 200 || claimStatus >= 300) {
-      setHttpStatusError(error, "call job claim", claimStatus, claimResponse);
-      return false;
-    }
-
-    candidate.status = "in_progress";
-    outJob = candidate;
-    error = String();
-    return true;
-  }
-
-  error = String();
-  return false;
+  outJob.status = "in_progress";
+  return true;
 }
 
 bool FirebaseManager::fetchGatewayActive(bool &outActive) {
@@ -1078,8 +1300,9 @@ bool FirebaseManager::updateSmsJobStatus(const FirestoreJob &job, const String &
 
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(String(kSmsJobsPath) + "/" + job.id) +
-               "?updateMask.fieldPaths=status"
+  String url = buildFirestoreUrl(String(kSmsJobsPath) + "/" + urlEncodeDocId(job.id)) +
+               "?currentDocument.exists=true"
+               "&updateMask.fieldPaths=status"
                "&updateMask.fieldPaths=completed_at"
                "&updateMask.fieldPaths=completed_epoch"
                "&updateMask.fieldPaths=error";
@@ -1119,8 +1342,9 @@ bool FirebaseManager::updateCallJobStatus(const FirestoreJob &job,
 
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(String(kCallJobsPath) + "/" + job.id) +
-               "?updateMask.fieldPaths=status"
+  String url = buildFirestoreUrl(String(kCallJobsPath) + "/" + urlEncodeDocId(job.id)) +
+               "?currentDocument.exists=true"
+               "&updateMask.fieldPaths=status"
                "&updateMask.fieldPaths=completed_at"
                "&updateMask.fieldPaths=completed_epoch"
                "&updateMask.fieldPaths=user_picked"
@@ -1151,7 +1375,7 @@ bool FirebaseManager::pushSmsReceived(const String &number,
   }
 
   String documentId = safeFirestoreDocumentId(number);
-  String documentPath = String(kSmsReceivedPath) + "/" + documentId;
+  String documentPath = String(kSmsReceivedPath) + "/" + urlEncodeDocId(documentId);
 
   DynamicJsonDocument doc(1792);
   JsonObject fields = doc.createNestedObject("fields");
@@ -1193,7 +1417,7 @@ bool FirebaseManager::pushCallReceived(const String &number,
   }
 
   String documentId = safeFirestoreDocumentId(number);
-  String documentPath = String(kCallReceivedPath) + "/" + documentId;
+  String documentPath = String(kCallReceivedPath) + "/" + urlEncodeDocId(documentId);
 
   DynamicJsonDocument doc(1024);
   JsonObject fields = doc.createNestedObject("fields");
@@ -1311,37 +1535,34 @@ bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
     return false;
   }
 
-  const char *collections[] = {kSmsJobsPath, kCallJobsPath};
-  for (size_t i = 0; i < sizeof(collections) / sizeof(collections[0]); ++i) {
-    String response;
-    int statusCode = 0;
-    if (!httpGetBearer(buildFirestoreUrl(collections[i]), response, statusCode)) {
-      return false;
-    }
-    if (statusCode == 404) {
-      continue;
-    }
-    if (statusCode < 200 || statusCode >= 300) {
-      setHttpStatusError(error, "stuck job fetch", statusCode, response);
+  // Server-side query for in_progress jobs only — the old full-collection GET
+  // parsed into a fixed 16 KB buffer and silently failed once the collection
+  // grew, which disabled recovery exactly when it mattered.
+  struct QueryTarget {
+    const char *parentPath;
+    const char *collectionId;
+    const char *jobsPath;
+  };
+  const QueryTarget targets[] = {
+      {kSmsDocPath, "sms_jobs", kSmsJobsPath},
+      {kCallsDocPath, "call_jobs", kCallJobsPath},
+  };
+
+  const int kMaxStuck = 10;
+  FirestoreJob stuck[kMaxStuck];
+  for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); ++i) {
+    int count = 0;
+    if (!queryJobsByStatus(targets[i].parentPath, targets[i].collectionId, "in_progress",
+                           kMaxStuck, stuck, kMaxStuck, count)) {
       return false;
     }
 
-    DynamicJsonDocument readDoc(16384);
-    if (deserializeJson(readDoc, response)) {
-      error = String("stuck job parse failed body=") + response;
-      return false;
-    }
-
-    JsonArray documents = readDoc["documents"].as<JsonArray>();
-    for (JsonVariant item : documents) {
-      JsonObjectConst fields = item["fields"].as<JsonObjectConst>();
-      String status = firestoreStringField(fields, "status");
-      unsigned long started = firestoreEpochField(fields, "processing_started_epoch", 0);
-      if (status != "in_progress" || started == 0 || started >= cutoffEpochSeconds) {
-        continue;
+    for (int j = 0; j < count; ++j) {
+      unsigned long started = stuck[j].processingStartedEpoch;
+      if (started == 0 || started >= cutoffEpochSeconds) {
+        continue;  // fresh claim still being worked — leave it alone
       }
 
-      String jobId = firestoreDocumentId(item["name"] | "");
       DynamicJsonDocument writeDoc(512);
       JsonObject writeFields = writeDoc.createNestedObject("fields");
       setStringField(writeFields, "status", "pending");
@@ -1351,8 +1572,9 @@ bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
 
       String writeResponse;
       int writeStatus = 0;
-      String url = buildFirestoreUrl(String(collections[i]) + "/" + jobId) +
-                   "?updateMask.fieldPaths=status"
+      String url = buildFirestoreUrl(String(targets[i].jobsPath) + "/" + urlEncodeDocId(stuck[j].id)) +
+                   "?currentDocument.exists=true"
+                   "&updateMask.fieldPaths=status"
                    "&updateMask.fieldPaths=error";
       if (!httpPatchBearerJson(url, payload, writeResponse, writeStatus)) {
         return false;

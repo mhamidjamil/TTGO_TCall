@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WiFi Management — TTGO v8</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,sans-serif;max-width:620px;margin:20px auto;padding:0 16px;color:#111;line-height:1.5}
+    h1{font-size:1.4rem;margin-bottom:4px}
+    h2{font-size:1.05rem;margin:20px 0 8px}
+    nav{font-size:.9rem;margin-bottom:14px}
+    nav a{color:#0050b3;text-decoration:none;margin-right:14px}
+    nav a:hover{text-decoration:underline}
+    .card{border:1px solid #ddd;border-radius:8px;padding:12px 16px;margin-bottom:10px;background:#fafafa}
+    .status-chip{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.9rem;font-weight:600}
+    .sta{background:#e6f4ea;color:#1a7a1a}.ap{background:#fff3e0;color:#b26a00}.off{background:#fce8e8;color:#c62828}
+    .net-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #eee}
+    .net-row:last-child{border-bottom:none}
+    .ssid{font-weight:500}
+    .badge{font-size:.8rem;color:#666;margin-left:6px}
+    .btn-del{background:#fff;border:1px solid #d32f2f;color:#d32f2f;border-radius:4px;padding:4px 12px;font-size:.85rem;cursor:pointer}
+    .btn-del:hover{background:#ffebee}
+    label{font-size:.9rem;color:#444;margin-bottom:2px;display:block}
+    input[type=text],input[type=password]{padding:8px 10px;border:1px solid #ccc;border-radius:4px;font-size:1rem;width:100%;margin-bottom:8px}
+    input[type=text]:focus,input[type=password]:focus{outline:none;border-color:#1a73e8}
+    .btn-add{background:#1a73e8;border:none;color:#fff;border-radius:4px;padding:9px 20px;font-size:1rem;cursor:pointer;margin-top:2px}
+    .btn-add:hover{background:#1557b0}
+    .btn-add:disabled{background:#aaa;cursor:default}
+    .msg{margin-top:8px;font-size:.9rem;min-height:1.2em}
+    .ok{color:#1a7a1a}.err{color:#c62828}
+    .note{background:#fffde7;border:1px solid #f0c040;border-radius:8px;padding:10px 14px;font-size:.88rem;margin-top:12px;color:#555}
+    .empty{color:#888;font-style:italic;padding:6px 0}
+  </style>
+</head>
+<body>
+<nav>
+  <a href="/dashboard.html">← Dashboard</a>
+  <a href="/docs">Docs</a>
+</nav>
+<h1>WiFi Management</h1>
+
+<div class="card" id="status-card">
+  <span style="font-size:.9rem;color:#555">Connection: </span>
+  <span id="connected-ssid"><em>loading…</em></span>
+</div>
+
+<h2>Saved Networks <span id="count-badge" style="font-size:.9rem;color:#888"></span></h2>
+<div class="card" id="networks-list"><span class="empty">Loading…</span></div>
+
+<h2>Add Network</h2>
+<div class="card">
+  <label for="new-ssid">Network name (SSID)</label>
+  <input type="text" id="new-ssid" placeholder="MyHomeWifi" autocomplete="off" spellcheck="false">
+  <label for="new-pass">Password</label>
+  <input type="password" id="new-pass" placeholder="(leave blank for open networks)">
+  <button class="btn-add" id="btn-add" onclick="addNetwork()">Add &amp; Save</button>
+  <div class="msg" id="add-msg"></div>
+</div>
+
+<div class="note">
+  <b>How it works:</b> Networks are saved to device storage immediately. On the next boot (or after the 5-minute auto-retry), the device tries each saved network in order before falling back to AP mode. You can also send an SMS from an authenticated number: <code>[newwifi: 'SSID', password: 'pass']</code>
+</div>
+
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+async function load() {
+  try {
+    const r = await fetch('/api/wifi/list');
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+
+    const ssid = d.connected || '';
+    const chipCls = ssid ? 'sta' : 'ap';
+    const chipText = ssid ? ssid : 'AP mode (no uplink)';
+    document.getElementById('connected-ssid').innerHTML =
+      '<span class="status-chip '+chipCls+'">'+esc(chipText)+'</span>';
+
+    const nets = Array.isArray(d.networks) ? d.networks : [];
+    const max = d.max || 8;
+    document.getElementById('count-badge').textContent = '('+nets.length+'/'+max+')';
+    const list = document.getElementById('networks-list');
+    if (nets.length === 0) {
+      list.innerHTML = '<span class="empty">No saved networks — add one below.</span>';
+    } else {
+      list.innerHTML = nets.map(n => {
+        const s = typeof n === 'string' ? n : (n.ssid || '');
+        const active = ssid && s === ssid;
+        return '<div class="net-row">'
+          +'<span class="ssid">'+esc(s)+(active?'<span class="badge">● connected</span>':'')+'</span>'
+          +'<button class="btn-del" onclick="del('+JSON.stringify(s)+')">Delete</button>'
+          +'</div>';
+      }).join('');
+    }
+  } catch(e) {
+    document.getElementById('networks-list').innerHTML = '<span class="err">Failed to load ('+esc(e.message)+')</span>';
+  }
+}
+
+async function addNetwork() {
+  const ssid = document.getElementById('new-ssid').value.trim();
+  const pass = document.getElementById('new-pass').value;
+  const msg  = document.getElementById('add-msg');
+  const btn  = document.getElementById('btn-add');
+  if (!ssid) { msg.textContent='SSID is required.'; msg.className='msg err'; return; }
+  msg.textContent='Saving…'; msg.className='msg'; btn.disabled=true;
+  try {
+    const r = await fetch('/api/wifi/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid,pass})});
+    const d = await r.json();
+    if (d.ok) {
+      msg.textContent = "'"+ssid+"' saved. Reboot to apply.";
+      msg.className='msg ok';
+      document.getElementById('new-ssid').value='';
+      document.getElementById('new-pass').value='';
+      load();
+    } else {
+      msg.textContent = d.message || 'Save failed.';
+      msg.className='msg err';
+    }
+  } catch(e) { msg.textContent='Request failed.'; msg.className='msg err'; }
+  btn.disabled=false;
+}
+
+async function del(ssid) {
+  if (!confirm("Delete network '"+ssid+"'?")) return;
+  try {
+    const r = await fetch('/api/wifi/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid})});
+    const d = await r.json();
+    if (d.ok) load();
+    else alert(d.message || 'Delete failed.');
+  } catch(e) { alert('Request failed.'); }
+}
+
+load();
+</script>
+</body>
+</html>

@@ -1,6 +1,21 @@
 # v8 Server / App Enqueue Guide
 
-How a backend (Rails, etc.) or the dashboard enqueues SMS and calls, and reads results. The device polls Firestore every few seconds, claims pending work, enforces block lists + global SMS limits, performs the GSM action, and writes the result back.
+How a backend (Rails, etc.) or the dashboard enqueues SMS and calls, and reads results. The device polls Firestore every 10 s, claims pending work, enforces block lists + global SMS limits, performs the GSM action, and writes the result back.
+
+## How the device drains the queue
+
+- Every 10 s the device runs a server-side query (`runQuery`) for `status == "pending"` only, so finished (`sent`/`failed`/`blocked`) jobs are never downloaded — the queue scales to any size and completed jobs are simply ignored (cleanup, if any, is a separate backend concern, not the device's).
+- It grabs up to **5 pending SMS jobs** per batch and sends them **one at a time** with a random **5–30 s gap** between actual sends (anti-SIM-ban pacing). The next batch of 5 is not fetched until the current batch is fully drained.
+- Each send is gated by the global rate limit and the SIM package validity; when the daily/weekly/monthly limit is hit, the remaining jobs are left `pending` (for the next window) and an ntfy alert is sent.
+- If a batch cannot finish within **5 minutes** (e.g. a wedged send), it is abandoned ("rescue") with an ntfy alert and the unprocessed jobs stay `pending` for re-fetch — the device never gets stuck on one batch.
+- Calls are processed one per poll (no anti-ban delay needed for low-volume missed calls).
+- **OTP priority**: a job written with `kind: "otp"` is processed BEFORE calls and the
+  regular batch on every poll, is sent immediately (no 5–30 s gap), and **bypasses the
+  package-expired gate** (verification must never silently break because the tracked
+  package lapsed; a truly unable SIM just fails the job). Rate limits and block lists
+  still apply. OTP jobs are excluded from the regular batch so they can't be queued
+  behind paced sends. The mobile app writes `kind: "otp"` when enqueueing verification
+  codes.
 
 ## Firestore layout (single device)
 
@@ -30,6 +45,8 @@ Create/overwrite `sim_module/sms/sms_jobs/{number}`:
 ```
 
 - `phone_number` should be canonical `+<countrycode><number>`. The device normalizes anyway, but the **document id must match** what the device looks up, so use the canonical number as the id.
+- **Canonical format is E.164 WITH the leading `+`** (`+923001234567`) for both the doc id and `phone_number` — the app and the device must agree on this. The device percent-encodes the `+` (`%2B`) in every REST URL; an unencoded `+` is decoded as a *space* by Google's front-end, which used to route status updates to a ghost document and left the real job `pending` forever (endless resend loop — fixed).
+- Device write-safety: all job claims/status updates carry a `currentDocument.exists=true` precondition (the device can never accidentally *create* a job doc), and a device-side loop guard marks a job `failed`/`duplicate_guard` if the exact same id+message was already sent within the last 15 minutes but reappears as pending.
 - `enque_by` is free-form and preserved untouched — use it to link a future reply back to the originating app/user.
 - Required: `message`, `status: "pending"`.
 
@@ -57,9 +74,9 @@ Create/overwrite `sim_module/calls/call_jobs/{number}`:
 | `sent` | SMS handed to the modem |
 | `called` | missed call placed (see `user_picked`, `duration_seconds`) |
 | `blocked` | number is in the outgoing block list (`error: "blocked_outgoing"`) or device inactive (`error: "device_inactive"`) |
-| `failed` | invalid number, send error, or global SMS rate limit reached (`error` explains) |
+| `failed` | invalid number, send error, package expired (`error: "package_expired"`), or global SMS rate limit reached (`error` explains) |
 
-Jobs stuck in `in_progress` for more than 5 minutes are reset to `pending` automatically.
+Jobs stuck in `in_progress` for more than 5 minutes are reset to `pending` automatically. Rate-limited jobs are left `pending` (not failed) so they retry once the window resets.
 
 ## Read incoming
 
@@ -85,7 +102,7 @@ Incoming SMS bodies are normalized before storage/notification — see [SMS norm
 
 Four string arrays, editable from the dashboard or directly in Firestore:
 
-- `blockedIncomingCallers` / `blockedIncomingSms` — incoming events from these are still archived to `*_received` but do **not** trigger an ntfy notification (`notified: false`).
+- `blockedIncomingCallers` / `blockedIncomingSms` — incoming events from these are still archived to `*_received` (and the SMS is still deleted from the SIM once archived) but do **not** trigger the user-facing `ntfyUrl` notification (`notified: false`). Blocked/muted incoming SMS instead fire a separate notification on the `ntfyMuteUrl` channel (see [11-RUNTIME-SETTINGS-SYNC](11-RUNTIME-SETTINGS-SYNC.md)), so muted senders stay visible without mixing into the main channel.
 - `blockedOutgoingCallers` / `blockedOutgoingSms` — jobs to these are marked `blocked` and never sent/dialed.
 
 Entries may be phone numbers or alphanumeric sender ids (e.g. `JAZZ`). On first boot each empty list is seeded with `["JAZZ","000"]` as an editable template. The device refreshes these about once a minute and instantly when **Sync** is pressed.

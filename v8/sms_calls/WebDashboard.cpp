@@ -1,7 +1,7 @@
 #include "WebDashboard.h"
 
-#include <FS.h>
-#include <SPIFFS.h>
+#include <ArduinoJson.h>
+#include <LittleFS.h>
 #include <WebServer.h>
 #include "FirebaseManager.h"
 #include "NtfyManager.h"
@@ -11,11 +11,12 @@ namespace {
 WebServer *server = nullptr;
 }
 
-bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager, NtfyManager &incomingNtfyManager) {
+bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWiFiManager, FirebaseManager &incomingFirebaseManager, NtfyManager &incomingNtfyManager, ConfigManager &incomingConfigManager) {
   config = &incomingConfig;
   wifiManager = &incomingWiFiManager;
   firebaseManager = &incomingFirebaseManager;
   ntfyManager = &incomingNtfyManager;
+  configManager = &incomingConfigManager;
 
   if (server != nullptr) {
     delete server;
@@ -29,10 +30,11 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
     server->send(302, "text/plain", "dashboard");
   });
 
-  server->serveStatic("/dashboard.html", SPIFFS, "/dashboard.html");
-  server->serveStatic("/dashboard.css", SPIFFS, "/dashboard.css");
-  server->serveStatic("/dashboard.js", SPIFFS, "/dashboard.js");
-  server->serveStatic("/version.txt", SPIFFS, "/version.txt");
+  server->serveStatic("/dashboard.html", LittleFS, "/dashboard.html");
+  server->serveStatic("/dashboard.css", LittleFS, "/dashboard.css");
+  server->serveStatic("/dashboard.js", LittleFS, "/dashboard.js");
+  server->serveStatic("/version.txt", LittleFS, "/version.txt");
+  server->serveStatic("/wifi.html", LittleFS, "/wifi.html");
 
   server->on("/api/status", [this]() {
     String payload = String("{\"mode\":\"") + wifiManager->modeName() +
@@ -63,6 +65,63 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
                      String(",\"message\":\"") + message +
                      String("\"}");
     server->send(ok ? 200 : 500, "application/json", payload);
+  });
+
+  server->on("/api/wifi/list", HTTP_GET, [this]() {
+    String connected = wifiManager != nullptr ? wifiManager->getConnectedSsid() : String();
+    String nets = configManager != nullptr ? configManager->getWifiNetworksJson() : String("[]");
+    String payload = String("{\"connected\":\"") + connected +
+                     String("\",\"networks\":") + nets +
+                     String(",\"max\":") + String(kMaxWifiNetworks) + String("}");
+    server->send(200, "application/json", payload);
+  });
+
+  server->on("/api/wifi/add", HTTP_POST, [this]() {
+    if (configManager == nullptr) {
+      server->send(500, "application/json", "{\"ok\":false,\"message\":\"config manager unavailable\"}");
+      return;
+    }
+    String body = server->arg("plain");
+    DynamicJsonDocument doc(256);
+    if (deserializeJson(doc, body)) {
+      server->send(400, "application/json", "{\"ok\":false,\"message\":\"invalid JSON\"}");
+      return;
+    }
+    String ssid = doc["ssid"] | "";
+    String pass = doc["pass"] | "";
+    ssid.trim();
+    if (ssid.length() == 0) {
+      server->send(400, "application/json", "{\"ok\":false,\"message\":\"ssid required\"}");
+      return;
+    }
+    if (configManager->addWifiNetwork(ssid, pass)) {
+      server->send(200, "application/json", "{\"ok\":true}");
+    } else {
+      server->send(500, "application/json", "{\"ok\":false,\"message\":\"save failed (list full — max 8 networks)\"}");
+    }
+  });
+
+  server->on("/api/wifi/delete", HTTP_POST, [this]() {
+    if (configManager == nullptr) {
+      server->send(500, "application/json", "{\"ok\":false,\"message\":\"config manager unavailable\"}");
+      return;
+    }
+    String body = server->arg("plain");
+    DynamicJsonDocument doc(256);
+    if (deserializeJson(doc, body)) {
+      server->send(400, "application/json", "{\"ok\":false,\"message\":\"invalid JSON\"}");
+      return;
+    }
+    String ssid = doc["ssid"] | "";
+    if (ssid.length() == 0) {
+      server->send(400, "application/json", "{\"ok\":false,\"message\":\"ssid required\"}");
+      return;
+    }
+    if (configManager->removeWifiNetwork(ssid)) {
+      server->send(200, "application/json", "{\"ok\":true}");
+    } else {
+      server->send(404, "application/json", "{\"ok\":false,\"message\":\"network not found\"}");
+    }
   });
 
   server->on("/api/sync-runtime", HTTP_POST, [this]() {
@@ -173,12 +232,24 @@ h1,h2{margin-top:24px}
   });
 
   server->begin();
+
+  // Serve HTTP from a dedicated task on core 0 so the dashboard stays instant
+  // while the main loop (core 1) is deep in TLS or modem AT waits. 12 KB stack:
+  // handlers build JSON Strings and /api/notify-test runs a full TLS request.
+  if (taskHandle == nullptr) {
+    xTaskCreatePinnedToCore(WebDashboard::serverTask, "websrv", 12288, this, 2,
+                            reinterpret_cast<TaskHandle_t *>(&taskHandle), 0);
+  }
   return true;
 }
 
-void WebDashboard::loop() {
-  if (server != nullptr) {
-    server->handleClient();
+void WebDashboard::serverTask(void *param) {
+  (void)param;
+  for (;;) {
+    if (server != nullptr) {
+      server->handleClient();
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
 

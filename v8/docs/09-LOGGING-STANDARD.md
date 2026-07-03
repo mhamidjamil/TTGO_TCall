@@ -11,6 +11,18 @@
 - CALL
 - API
 - THINGSPEAK
+- JOB (queue claim/validation/send/dial lifecycle)
+- LOG (mirrored to the `ntfyLogUrl` ntfy log channel)
+- PACKAGE (SIM subscription detection/expiry)
+
+## ntfy log channel
+Job lifecycle and error events are pushed to a second ntfy topic (URL from
+`NTFY_LOG_URL_DEFAULT` / RTDB `ntfyLogUrl`, real value only in the gitignored
+`secrets.h`) in addition to serial, via `pushLog(title, message)`. This is
+separate from the user-facing `ntfyUrl` topic. It is best-effort (no-ops when the
+URL is unset or WiFi is down) and chatty by design — subscribe and mute. Events
+include: pending batch received, per-message processing/sent/failed, rate-limit
+hit, batch rescue, and boot.
 
 ## Rules
 - One meaningful line per event.

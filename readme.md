@@ -37,13 +37,20 @@ The web UI assets in `v8/sms_calls/data/` are flashed **separately** as the SPIF
 
 ## What v8 does
 
-- **Outgoing queue** — polls Firestore `sms_jobs` / `call_jobs`, claims one of each per cycle, drains the queue quickly when work is pending.
+- **Outgoing queue** — polls Firestore every 10 s with a server-side query for `status == pending` only (finished jobs are never downloaded). Grabs up to **5 pending SMS** per batch and sends them one at a time with a random **5–30 s anti-SIM-ban gap**; the next batch isn't fetched until the current one drains. A batch that can't finish in 5 min is abandoned (rescue) with an alert. Calls are processed one per poll.
 - **Block-list + rate limit** — any number is sent/dialed unless it's in an outgoing block list; a global daily/weekly/monthly SMS limit (RTDB runtime) still applies. No allow-list, no per-number quota.
 - **Block-list** — incoming calls/SMS from blocked senders (numeric **or** alphanumeric IDs like `JAZZ`) are archived without notifying.
 - **Editable WiFi** — set two WiFi networks from the dashboard; saved to SPIFFS and tried before the `secrets.h` networks on next boot, then AP fallback. No reflash needed to change networks.
-- **Runtime settings sync** — `jobLogs`, push-log toggles, DHT interval, SMS limits, and ntfy URL live in RTDB `/ttgo_tcall/settings/runtime`; edit them in the dashboard and the device re-reads on startup, every 10 min, or on demand via the **Sync** button / serial `sync`.
+- **Runtime settings sync** — `jobLogs`, push-log toggles, DHT interval, SMS limits, and ntfy URL live in RTDB `/ttgo_tcall/settings/runtime`; edit them in the dashboard and the device re-reads on startup, every 5 min, or on demand via the **Sync** button / serial `sync`. Telemetry is pushed at most once per minute.
+- **SIM package tracking** — auto-detects the operator's subscription SMS (configurable token match), records expiry in RTDB `/ttgo_tcall/package`, blocks outgoing SMS once the bundle lapses (`failed`/`package_expired`), and ntfy-reminds ~1 day before expiry. Fails open when the package state is unknown. See [`v8/docs/14-PACKAGE-SUBSCRIPTION.md`](v8/docs/14-PACKAGE-SUBSCRIPTION.md).
+- **Self-healing connectivity** — retries STA WiFi every 5 min in AP/OFFLINE mode, and re-initializes **Firebase + ThingSpeak** (rate-limited to every 90 s, and re-checked right before each telemetry push) whenever WiFi is up but a cloud service never came online (router up but uplink not ready at boot).
+- **Responsive dashboard (FreeRTOS)** — the web server runs on its own task pinned to core 0, so pages load instantly even while the main loop is blocked in long TLS or modem operations. Shared config/WiFi state is mutex-guarded.
 - **Serial `[JOB]` logs** — see every claim, validation, quota check, send/dial, and final status (toggle with the `jobLogs` flag).
 - **Telemetry** — temperature/humidity to Firebase RTDB and ThingSpeak; device heartbeat (battery, signal, operator) to Firestore.
+- **ntfy channels** — three topics, real URLs configured only via the gitignored `secrets.h` / RTDB runtime, never hardcoded or committed (an ntfy topic name is itself a bearer credential — whoever knows it can publish to or subscribe to the channel):
+  - **user-facing** (`ntfyUrl`) — incoming SMS/calls, package subscription + expiry reminders, WiFi-config-via-SMS confirmations (includes the saved WiFi password).
+  - **operational log/error** (`ntfyLogUrl`) — job lifecycle (pending → processing → sent/failed), rate-limit and rescue alerts, boot line. Chatty by design — subscribe and mute it.
+  - **muted/blocked SMS** (`ntfyMuteUrl`) — incoming SMS from a sender on `blockedIncomingSms`; fires here instead of the user-facing channel.
 - **No MQTT.** SPIFFS is the local config fallback. AP fallback is intentional.
 
 ## Documentation
@@ -53,3 +60,16 @@ Specs live in [`v8/docs/`](v8/docs) — implementation checklist, feature invent
 ## Roadmap
 
 A Rails backend (and, later, a mobile front-end) will enqueue SMS/call jobs into the same Firestore collections the dashboard uses, so the device stays a thin executor.
+
+## Future Ideas
+
+### Over-the-Air (OTA) Firmware Updates — esp32FOTA
+
+[`chrisjoyce911/esp32FOTA`](https://github.com/chrisjoyce911/esp32FOTA) is the recommended approach for wireless firmware updates:
+
+- **Unattended**: polls a JSON manifest URL, compares semver, downloads and self-flashes with no serial cable.
+- **Verified**: supports RSA signature verification so only your signed binaries can be applied.
+- **HTTPS out of the box**: works against GitHub Releases, S3, or Firebase Storage; Arduino 3.x bundles root CAs, no manual certificate embedding needed.
+- Install via Arduino Library Manager: search `esp32FOTA`.
+
+The manifest JSON specifies the firmware version, type, and binary URL. The device checks it periodically and applies the update if the remote version is newer. This would eliminate the need to physically access the device for firmware upgrades.

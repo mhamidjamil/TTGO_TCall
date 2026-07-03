@@ -2,6 +2,15 @@
 #define V8_CONFIG_MANAGER_H
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+struct WifiNetwork {
+  char ssid[64];
+  char pass[64];
+};
+
+static const int kMaxWifiNetworks = 8;
 
 struct V8Config {
   bool wifiEnabled;
@@ -12,7 +21,7 @@ struct V8Config {
   char wifiPass[64];
   char wifiSsidBackup[64];
   char wifiPassBackup[64];
-  // User-editable WiFi pairs saved in SPIFFS from the dashboard. Empty by
+  // User-editable WiFi pairs saved in LittleFS from the dashboard. Empty by
   // default. Tried BEFORE the secrets.h networks above so a new workplace can be
   // configured without reflashing; if both fail the device falls back to the
   // secrets networks and then AP mode.
@@ -47,6 +56,8 @@ struct V8Config {
   char firebaseStatusPath[96];
   char firebaseTelemetryPath[96];
   char ntfyUrl[160];
+  char ntfyLogUrl[160];
+  char ntfyMuteUrl[160];
   unsigned long thingSpeakChannelId;
   char thingSpeakWriteApiKey[64];
 };
@@ -56,18 +67,36 @@ public:
   void begin();
   bool save();
   const V8Config &get() const;
-  // Persist the dashboard-entered WiFi pairs to SPIFFS. Applied on next reboot.
+  // Persist the dashboard-entered WiFi pairs to LittleFS (legacy two-slot API).
   bool updateUserWifi(const String &ssid1, const String &pass1,
                       const String &ssid2, const String &pass2);
 
+  // Dynamic WiFi network list (stored in /wifi_nets.json).
+  // Tried in order before the secrets.h networks on every connect attempt.
+  bool addWifiNetwork(const String &ssid, const String &pass);
+  bool removeWifiNetwork(const String &ssid);
+  bool clearWifiNetworks();
+  int getWifiNetworkCount() const;
+  WifiNetwork getWifiNetwork(int index) const;
+  // Returns a JSON array of {ssid} objects (no passwords) for the API.
+  String getWifiNetworksJson() const;
+
 private:
   void loadDefaults();
-  bool loadFromSPIFFS();
-  bool saveToSPIFFS();
+  bool loadFromLittleFS();
+  bool saveToLittleFS();
   void readJsonConfig(const String &jsonText);
   String writeJsonConfig() const;
+  void loadWifiNetworks();
+  bool saveWifiNetworks();
 
   V8Config config;
+  WifiNetwork wifiNetworks[kMaxWifiNetworks];
+  int wifiNetworkCount = 0;
+  // Guards wifiNetworks[]/wifiNetworkCount and LittleFS config writes. The web
+  // dashboard mutates the network list from its own FreeRTOS task while the main
+  // loop reads it during (re)connects — public entry points take this lock.
+  SemaphoreHandle_t lock = nullptr;
 };
 
 #endif

@@ -9,8 +9,13 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 ## Runtime Variables
 - `intervalOfDhtSeconds` (number)
   - Meaning: telemetry push interval in seconds.
-  - Default: `15`
-  - Guardrail: clamp or heal invalid values to safe default.
+  - Default: `60`
+  - Guardrail: clamp or heal invalid values to safe default. A hard **60 s floor**
+    is enforced in firmware (`kMinTelemetryIntervalMs`) — telemetry/ThingSpeak are
+    never pushed more often than once per minute, regardless of a lower value here.
+- `connectedSsid` (string, device-written)
+  - Meaning: the SSID the device is currently connected to (STA). Written by the
+    device on each sync; empty/absent when in AP/OFFLINE mode. Read-only for operators.
 - `showFirebasePushLogs` (boolean)
   - Meaning: controls periodic serial info logs for telemetry and landing snapshot push success.
   - Default: `true`
@@ -27,17 +32,28 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Meaning: monthly SMS cap used by the rate limiter.
   - Default: `4900`
 - `ntfyUrl` (string)
-  - Meaning: ntfy topic URL used for call/SMS notifications.
-  - Default: `https://ntfy.innovorix.com/oracle_ntfy`
+  - Meaning: ntfy topic URL for user-facing notifications (incoming SMS/calls, package events).
+  - Default: from `secrets.h` `NTFY_URL_DEFAULT`. Real topic URL lives only in the gitignored `secrets.h` — never commit it, since an ntfy topic name is a bearer credential (anyone who knows it can publish to or subscribe to the channel), and this channel carries WiFi passwords on save.
+- `ntfyLogUrl` (string)
+  - Meaning: ntfy topic URL for the operational log/error channel (job lifecycle, rate-limit/rescue alerts, boot). Chatty — subscribe + mute.
+  - Default: from `secrets.h` `NTFY_LOG_URL_DEFAULT`. Real topic URL lives only in `secrets.h`.
+- `ntfyMuteUrl` (string)
+  - Meaning: ntfy topic URL for incoming SMS from a sender on `blockedIncomingSms`. Fires instead of `ntfyUrl` so blocked/muted traffic stays visible on its own channel rather than being silently dropped. The SMS is still archived to Firestore and deleted from the SIM as usual.
+  - Default: from `secrets.h` `NTFY_MUTE_URL_DEFAULT`. Real topic URL lives only in `secrets.h`.
 
 ## Firestore Block Lists
 - Stored on `sim_module/device`: `blockedIncomingCallers`, `blockedIncomingSms`, `blockedOutgoingCallers`, `blockedOutgoingSms`.
 - Refreshed on startup, on every settings `sync`, and automatically about once a minute, so changes apply without a reboot.
 
+## Package State
+- Stored at `/ttgo_tcall/package` (separate node). Holds subscription expiry plus
+  the detection `matchTokens` and `safetyMarginDays`, both cloud-tunable.
+- See `v8/docs/14-PACKAGE-SUBSCRIPTION.md` for the full contract.
+
 ## Sync Strategy
 1. Startup: device fetches runtime settings and uses the Firebase value when it already exists.
 2. If missing/invalid: device creates or heals only the missing key in Firebase using the default.
-3. Periodic: device refreshes runtime settings every 10 minutes.
+3. Periodic: device refreshes runtime settings every 5 minutes.
 4. Manual: serial command `sync` forces immediate refresh, including Firestore block lists.
 
 ## Operator Visibility

@@ -2,12 +2,17 @@
 
 #include <WiFi.h>
 
-bool WiFiManager::begin(const V8Config &config) {
+bool WiFiManager::begin(const ConfigManager &configManager) {
+  if (ssidLock == nullptr) {
+    ssidLock = xSemaphoreCreateMutex();
+  }
+  const V8Config &config = configManager.get();
   stationConnected = false;
   accessPointActive = false;
+  setConnectedSsid(String());
 
   if (config.wifiEnabled) {
-    stationConnected = connectStation(config);
+    stationConnected = connectStation(config, configManager);
   }
 
   if (!stationConnected && config.apFallbackEnabled) {
@@ -17,7 +22,7 @@ bool WiFiManager::begin(const V8Config &config) {
   return stationConnected || accessPointActive;
 }
 
-bool WiFiManager::connectStation(const V8Config &config) {
+bool WiFiManager::connectStation(const V8Config &config, const ConfigManager &cm) {
   auto attempt = [&](const char *ssid, const char *pass, const char *origin) -> bool {
     if (ssid == nullptr || strlen(ssid) == 0) {
       return false;
@@ -41,6 +46,7 @@ bool WiFiManager::connectStation(const V8Config &config) {
       Serial.print(origin);
       Serial.print(" ssid=");
       Serial.println(ssid);
+      setConnectedSsid(String(ssid));
       return true;
     }
 
@@ -49,13 +55,24 @@ bool WiFiManager::connectStation(const V8Config &config) {
     return false;
   };
 
-  // SPIFFS user-entered pairs first, then the secrets.h networks, then AP.
-  if (attempt(config.userWifiSsid1, config.userWifiPass1, "saved pair 1")) {
+  // Dynamic LittleFS networks first (managed via dashboard/SMS/serial).
+  for (int i = 0; i < cm.getWifiNetworkCount(); i++) {
+    WifiNetwork net = cm.getWifiNetwork(i);
+    String label = String("saved[") + String(i) + String("]");
+    if (attempt(net.ssid, net.pass, label.c_str())) {
+      return true;
+    }
+  }
+
+  // Legacy fixed slots (backward-compat with older dashboard WiFi pairs).
+  if (attempt(config.userWifiSsid1, config.userWifiPass1, "legacy slot 1")) {
     return true;
   }
-  if (attempt(config.userWifiSsid2, config.userWifiPass2, "saved pair 2")) {
+  if (attempt(config.userWifiSsid2, config.userWifiPass2, "legacy slot 2")) {
     return true;
   }
+
+  // Compile-time secrets.h networks.
   if (attempt(config.wifiSsid, config.wifiPass, "secrets primary")) {
     return true;
   }
@@ -64,12 +81,36 @@ bool WiFiManager::connectStation(const V8Config &config) {
   }
 
   Serial.println("[WIFI] all station networks failed");
+  setConnectedSsid(String());
   return false;
 }
 
 void WiFiManager::startAccessPoint(const V8Config &config) {
   WiFi.mode(WIFI_AP);
   accessPointActive = WiFi.softAP(config.apSsid, config.apPass);
+}
+
+bool WiFiManager::tryReconnect(const ConfigManager &configManager) {
+  if (stationConnected) {
+    return true;
+  }
+  const V8Config &config = configManager.get();
+  Serial.println("[WIFI] reconnect attempt (STA only)");
+  if (accessPointActive) {
+    WiFi.softAPdisconnect(true);
+    accessPointActive = false;
+    delay(200);
+  }
+  stationConnected = connectStation(config, configManager);
+  if (stationConnected) {
+    Serial.println("[WIFI] reconnected as STA");
+  } else {
+    if (config.apFallbackEnabled) {
+      startAccessPoint(config);
+    }
+    Serial.println("[WIFI] reconnect failed; AP restored");
+  }
+  return stationConnected;
 }
 
 bool WiFiManager::isStationConnected() const {
@@ -98,4 +139,28 @@ IPAddress WiFiManager::localIp() const {
     return WiFi.softAPIP();
   }
   return IPAddress(0, 0, 0, 0);
+}
+
+void WiFiManager::setConnectedSsid(const String &ssid) {
+  if (ssidLock != nullptr) {
+    xSemaphoreTake(ssidLock, portMAX_DELAY);
+  }
+  connectedSsid = ssid;
+  if (ssidLock != nullptr) {
+    xSemaphoreGive(ssidLock);
+  }
+}
+
+String WiFiManager::getConnectedSsid() const {
+  if (!stationConnected) {
+    return String();
+  }
+  if (ssidLock != nullptr) {
+    xSemaphoreTake(ssidLock, portMAX_DELAY);
+  }
+  String copy = connectedSsid;
+  if (ssidLock != nullptr) {
+    xSemaphoreGive(ssidLock);
+  }
+  return copy;
 }

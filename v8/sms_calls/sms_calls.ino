@@ -8,6 +8,7 @@
 #include "secrets.example.h"
 #endif
 
+#include "SmsTypes.h"
 #include "ConfigManager.h"
 #include "WiFiManager.h"
 #include "FirebaseManager.h"
@@ -20,6 +21,7 @@
 #include "WebDashboard.h"
 #include "Logger.h"
 #include "NtfyManager.h"
+#include "PackageManager.h"
 
 static ConfigManager configManager;
 static WiFiManager wifiManager;
@@ -31,7 +33,10 @@ static DisplayManager displayManager;
 static DHTManager dhtManager;
 static ThingSpeakManager thingSpeakManager;
 static WebDashboard webDashboard;
-static NtfyManager ntfyManager;
+static NtfyManager ntfyManager;      // user-facing notifications (ntfyUrl)
+static NtfyManager logNtfy;          // operational job/error log channel (ntfyLogUrl)
+static NtfyManager muteNtfy;         // muted/blocked incoming SMS channel (ntfyMuteUrl)
+static PackageManager packageManager;
 
 static unsigned long lastUiRefresh = 0;
 static unsigned long lastCloudPoll = 0;
@@ -41,14 +46,34 @@ static unsigned long lastRuntimeSettingsSync = 0;
 static unsigned long lastHeartbeatPush = 0;
 static unsigned long lastRecoveryRun = 0;
 static unsigned long pendingPollStartMs = 0;
+static unsigned long lastWifiReconnect = 0;
+// Retry STA every 5 minutes when in AP/OFFLINE mode (e.g. router was slow to
+// boot after a power outage). 5 min gives routers plenty of warm-up time and
+// means the first retry fires ~5 min after boot, matching the user's expectation
+// of "wait 5 minutes then try all saved networks again".
+static const unsigned long wifiReconnectIntervalMs = 5UL * 60UL * 1000UL;
+static unsigned long lastFirebaseRetry = 0;
+// Retry Firebase init every 90 s when WiFi is connected but Firebase is not ready.
+// Covers the "router up but uplink/DNS not ready yet at boot" case: WiFi connects,
+// but firebaseManager.begin() failed for lack of internet, so the device stays
+// online yet never reaches Firebase/ThingSpeak until this retry succeeds.
+static const unsigned long firebaseRetryIntervalMs = 90UL * 1000UL;
 static V8Config runtimeConfig;
 static String startupBootTime;
 static String startupIp;
 static bool lastTelemetryPushOk = false;
 static String lastTelemetryPushMessage = "not_attempted";
-static unsigned long telemetryIntervalMs = 15000UL;
-static unsigned long thingSpeakIntervalMs = 15000UL;
-static const unsigned long runtimeSettingsSyncIntervalMs = 10UL * 60UL * 1000UL;
+// Minimum gap between telemetry/ThingSpeak pushes. We never push more often than
+// this, no matter how low intervalOfDhtSeconds is set — avoids spamming Firebase
+// and ThingSpeak every few seconds. Adjust here if a faster cadence is ever needed.
+static const unsigned long kMinTelemetryIntervalMs = 60UL * 1000UL;
+static unsigned long telemetryIntervalMs = kMinTelemetryIntervalMs;
+static unsigned long thingSpeakIntervalMs = kMinTelemetryIntervalMs;
+// Re-sync runtime settings from Firebase every 5 minutes, so dashboard/cloud
+// edits (limits, intervals, ntfy, tokens) take effect within 5 min without a
+// reboot. (There is no 30 s sync job; polling for SMS/call JOBS is separate and
+// runs on pollingIntervalSeconds.)
+static const unsigned long runtimeSettingsSyncIntervalMs = 5UL * 60UL * 1000UL;
 static const unsigned long heartbeatIntervalMs = 60UL * 1000UL;
 static const unsigned long recoveryIntervalMs = 60UL * 1000UL;
 static const unsigned long stuckJobAgeSeconds = 5UL * 60UL;
@@ -60,6 +85,29 @@ static bool jobLogs = true;
 static BlockLists blockLists;
 static unsigned long lastBlockListSync = 0;
 static const unsigned long blockListSyncIntervalMs = 60UL * 1000UL;
+// SMS batch processing: grab up to 5 pending jobs, then send one at a time with a
+// random 5–30 s anti-SIM-ban gap. The next batch is not fetched until this one is
+// drained. A stuck batch is abandoned (rescue) after smsBatchRescueMs.
+static const int kSmsBatchMax = 5;
+static FirestoreJob smsBatch[kSmsBatchMax];
+static int smsBatchCount = 0;
+static int smsBatchIndex = 0;
+static unsigned long nextSmsSendAtMs = 0;
+static unsigned long smsBatchStartedMs = 0;
+static const unsigned long smsBatchRescueMs = 5UL * 60UL * 1000UL;
+static bool rateLimitAlerted = false;
+// Endless-loop guard: remember the last sends (job id + message hash). If a job
+// we already sent reappears as pending with the SAME text within the window, its
+// status update must have failed to land — mark it failed instead of re-sending,
+// so a broken write path can never blast the same SMS in a loop again.
+struct RecentSend {
+  unsigned long hash;
+  unsigned long sentAtMs;
+};
+static const int kRecentSendMax = 10;
+static RecentSend recentSends[kRecentSendMax];
+static int recentSendNext = 0;
+static const unsigned long duplicateSendWindowMs = 15UL * 60UL * 1000UL;
 static String modemLineBuffer;
 static bool awaitingSmsBody = false;
 static String pendingSmsNumber;
@@ -213,14 +261,9 @@ static bool decodeUcs2Hex(const String &hex, String &out) {
   return (printable * 100) >= (units * 80);
 }
 
-struct SmsNormalization {
-  String text;
-  String original;
-  bool wasDecoded;
-};
-
 // If the body looks like UCS2 (hex, length %4, starts 00xx, decodes to text),
 // return the decoded text; otherwise return the original unchanged.
+// (SmsNormalization is defined in SmsTypes.h so it precedes auto-prototypes.)
 static SmsNormalization normalizeSmsBody(const String &raw) {
   SmsNormalization result;
   result.original = raw;
@@ -244,6 +287,18 @@ static void logJob(const String &message) {
     Serial.print("[JOB] ");
     Serial.println(message);
   }
+}
+
+// Push an operational log/status/error line to the ntfyLogUrl ntfy channel (and
+// always to serial). Best-effort: silently no-ops if the log URL is unset or
+// WiFi is down. Use for job lifecycle (pending/processing/sent/failed) and any
+// bad event the operator should see instantly.
+static void pushLog(const String &title, const String &message) {
+  Serial.print("[LOG] ");
+  Serial.print(title);
+  Serial.print(": ");
+  Serial.println(message);
+  logNtfy.notify(title, message);
 }
 
 static unsigned long currentEpochSeconds() {
@@ -406,6 +461,75 @@ static void processIncomingCall(const String &rawNumber) {
   }
 }
 
+// Returns true if `number` is in the comma-separated list (phone-aware matching).
+static bool isNumberInList(const String &number, const char *commaSeparatedList) {
+  if (!commaSeparatedList || strlen(commaSeparatedList) == 0) {
+    return false;
+  }
+  String list = String(commaSeparatedList);
+  int start = 0;
+  while (start < (int)list.length()) {
+    int comma = list.indexOf(',', start);
+    String entry;
+    if (comma < 0) {
+      entry = list.substring(start);
+      start = list.length();
+    } else {
+      entry = list.substring(start, comma);
+      start = comma + 1;
+    }
+    entry.trim();
+    if (entry.length() > 0 && numbersMatch(number, entry)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool isAdminOrAuthentic(const String &number) {
+  return isNumberInList(number, runtimeConfig.adminNumbers) ||
+         isNumberInList(number, runtimeConfig.authenticNumbers);
+}
+
+// Parse [newwifi: 'ssid', password: 'pass'] or [..., reboot: true].
+// Returns true and populates out-params when the pattern matches.
+static bool parseWifiConfigSms(const String &text, String &outSsid, String &outPass, bool &outReboot) {
+  String lower = text;
+  lower.toLowerCase();
+
+  int start = lower.indexOf("[newwifi:");
+  if (start < 0) {
+    return false;
+  }
+
+  int q1 = text.indexOf('\'', start + 9);
+  if (q1 < 0) {
+    return false;
+  }
+  int q2 = text.indexOf('\'', q1 + 1);
+  if (q2 <= q1) {
+    return false;
+  }
+  outSsid = text.substring(q1 + 1, q2);
+
+  int passKey = lower.indexOf("password:", q2);
+  if (passKey < 0) {
+    return false;
+  }
+  int q3 = text.indexOf('\'', passKey + 9);
+  if (q3 < 0) {
+    return false;
+  }
+  int q4 = text.indexOf('\'', q3 + 1);
+  if (q4 <= q3) {
+    return false;
+  }
+  outPass = text.substring(q3 + 1, q4);
+
+  outReboot = lower.indexOf("reboot: true", q4) >= 0 || lower.indexOf("reboot:true", q4) >= 0;
+  return outSsid.length() > 0;
+}
+
 static void processIncomingSms(const String &rawNumber, const String &rawMessage, int smsIndex) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
@@ -413,6 +537,42 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
 
   // Normalize UCS2/UTF-16BE payloads before storing or notifying.
   SmsNormalization norm = normalizeSmsBody(rawMessage);
+
+  // WiFi config command — intercept BEFORE Firestore push so the password is
+  // never stored in the cloud. Only admin/authentic senders are honoured.
+  if (isAdminOrAuthentic(number)) {
+    String wifiSsid, wifiPass;
+    bool doReboot = false;
+    if (parseWifiConfigSms(norm.text, wifiSsid, wifiPass, doReboot)) {
+      bool saved = configManager.addWifiNetwork(wifiSsid, wifiPass);
+      // Confirm over ntfy (free, uses data), NOT via SMS — an SMS reply would
+      // fail or waste balance when the SIM has no package. Also log to serial.
+      String confirm = saved
+          ? (String("WiFi '") + wifiSsid + "' saved" + (doReboot ? " — rebooting now" : " — reboot to apply"))
+          : (String("WiFi '") + wifiSsid + "' save FAILED (list full max 8, or empty SSID)");
+      Serial.print("[WIFI] config via SMS ssid=");
+      Serial.print(wifiSsid);
+      Serial.print(" saved=");
+      Serial.println(saved ? "yes" : "no");
+      ntfyManager.notify(String("wifi config from ") + number, confirm);
+      if (smsIndex > 0) {
+        smsManager.deleteMessage(smsIndex);
+      }
+      if (saved && doReboot) {
+        delay(1500);
+        ESP.restart();
+      }
+      return;
+    }
+  }
+
+  // Package subscription detection (content-based, ANY sender — the operator's
+  // confirmation comes from a short code / alphanumeric ID, not an admin number).
+  // PackageManager persists the new expiry and sends its own detailed ntfy, so we
+  // suppress the generic ntfy below when it handles the message. The SMS is still
+  // archived to Firestore and cleared from the SIM by the normal flow.
+  bool isPackageMsg = packageManager.handleIncomingSms(norm.text, epochSeconds);
+
   bool blocked = isBlockedNumber(number, blockLists.incomingSms, blockLists.incomingSmsCount);
 
   bool firebaseOk = false;
@@ -443,7 +603,16 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
   Serial.println(norm.text);
 
   if (blocked) {
-    Logger::info("SMS", "Blocked SMS sender logged without ntfy");
+    if (muteNtfy.notify(String("muted sms from ") + number, norm.text)) {
+      Serial.print("[NTFY] muted sms notification sent number=");
+      Serial.print(number);
+      Serial.print(" message=");
+      Serial.println(norm.text);
+    } else {
+      Logger::warn("NTFY", muteNtfy.lastError().c_str());
+    }
+  } else if (isPackageMsg) {
+    Logger::info("PACKAGE", "Subscription SMS detected; package notification sent");
   } else {
     if (ntfyManager.notify(String("sms from ") + number, norm.text)) {
       Serial.print("[NTFY] sms notification sent number=");
@@ -532,96 +701,285 @@ static void handleModemEvents() {
   }
 }
 
-static bool processPendingCommand() {
-  bool claimedAny = false;
+// Random anti-SIM-ban gap between actual GSM sends (5–30 s).
+static unsigned long randomSendDelayMs() {
+  return 5000UL + (unsigned long)random(0, 25001);
+}
 
-  FirestoreJob smsJob;
-  if (firebaseManager.fetchNextSmsJob(smsJob)) {
-    claimedAny = true;
-    logJob(String("sms claimed id=") + smsJob.id + " enque_by=" + smsJob.enqueBy);
-    String normalizedNumber = normalizePhoneNumber(smsJob.phoneNumber);
-    bool active = true;
-    String limitReason;
-    if (normalizedNumber.length() == 0) {
-      logJob(String("sms failed id=") + smsJob.id + " reason=number_invalid");
-      firebaseManager.updateSmsJobStatus(smsJob, "failed", "number_invalid");
-    } else if (!firebaseManager.fetchGatewayActive(active)) {
-      logJob(String("sms failed id=") + smsJob.id + " reason=device_status_unavailable");
-      firebaseManager.updateSmsJobStatus(smsJob, "failed", "device_status_unavailable");
-    } else if (!active) {
-      logJob(String("sms blocked id=") + smsJob.id + " reason=device_inactive");
-      firebaseManager.updateSmsJobStatus(smsJob, "blocked", "device_inactive");
-    } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingSms, blockLists.outgoingSmsCount)) {
-      logJob(String("sms blocked id=") + smsJob.id + " number=" + normalizedNumber + " reason=blocked_outgoing");
-      firebaseManager.updateSmsJobStatus(smsJob, "blocked", "blocked_outgoing");
-      firebaseManager.incrementDeviceCounter("totalSmsBlockedOutgoing");
-    } else if (!rateLimitManager.canSend(limitReason)) {
-      logJob(String("sms failed id=") + smsJob.id + " reason=" + limitReason);
-      firebaseManager.updateSmsJobStatus(smsJob, "failed", limitReason);
-    } else {
-      logJob(String("sms sending id=") + smsJob.id + " number=" + normalizedNumber);
-      bool sent = smsManager.sendMessage(normalizedNumber, smsJob.message);
-      if (sent) {
-        rateLimitManager.recordSend();
-        firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
-        firebaseManager.updateSmsJobStatus(smsJob, "sent", String());
-        firebaseManager.incrementDeviceCounter("totalSmsSent");
-        logJob(String("sms sent id=") + smsJob.id + " number=" + normalizedNumber);
-      } else {
-        firebaseManager.updateSmsJobStatus(smsJob, "failed", "send_failed");
-        logJob(String("sms failed id=") + smsJob.id + " reason=send_failed");
-      }
+// djb2 over "id|message" — cheap fingerprint for the duplicate-send guard.
+static unsigned long sendFingerprint(const String &id, const String &message) {
+  unsigned long hash = 5381UL;
+  for (size_t i = 0; i < id.length(); ++i) {
+    hash = ((hash << 5) + hash) + (unsigned char)id.charAt(i);
+  }
+  hash = ((hash << 5) + hash) + (unsigned char)'|';
+  for (size_t i = 0; i < message.length(); ++i) {
+    hash = ((hash << 5) + hash) + (unsigned char)message.charAt(i);
+  }
+  return hash;
+}
+
+static bool wasRecentlySent(unsigned long fingerprint) {
+  for (int i = 0; i < kRecentSendMax; ++i) {
+    if (recentSends[i].hash == fingerprint && recentSends[i].sentAtMs != 0 &&
+        millis() - recentSends[i].sentAtMs < duplicateSendWindowMs) {
+      return true;
     }
   }
+  return false;
+}
 
+static void recordSent(unsigned long fingerprint) {
+  recentSends[recentSendNext].hash = fingerprint;
+  recentSends[recentSendNext].sentAtMs = millis();
+  recentSendNext = (recentSendNext + 1) % kRecentSendMax;
+}
+
+// Fetch + process one pending CALL job per poll (calls are low volume and don't
+// need the anti-ban pacing that bulk SMS does).
+static bool processCallJob() {
   FirestoreJob callJob;
-  if (firebaseManager.fetchNextCallJob(callJob)) {
-    claimedAny = true;
-    logJob(String("call claimed id=") + callJob.id + " enque_by=" + callJob.enqueBy);
-    String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
-    bool active = true;
-    if (normalizedNumber.length() == 0) {
-      logJob(String("call failed id=") + callJob.id + " reason=number_invalid");
-      firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "number_invalid");
-    } else if (!firebaseManager.fetchGatewayActive(active)) {
-      logJob(String("call failed id=") + callJob.id + " reason=device_status_unavailable");
-      firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
-    } else if (!active) {
-      logJob(String("call blocked id=") + callJob.id + " reason=device_inactive");
-      firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
-    } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingCallers, blockLists.outgoingCallerCount)) {
-      logJob(String("call blocked id=") + callJob.id + " number=" + normalizedNumber + " reason=blocked_outgoing");
-      firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "blocked_outgoing");
-      firebaseManager.incrementDeviceCounter("totalCallsBlockedOutgoing");
-    } else {
-      logJob(String("call dialing id=") + callJob.id + " number=" + normalizedNumber);
-      bool userPicked = false;
-      int durationSeconds = 0;
-      bool completed = callManager.placeMissedCall(normalizedNumber, missedCallRingMs, userPicked, durationSeconds);
-      firebaseManager.updateCallJobStatus(
-          callJob,
-          completed ? "called" : "failed",
-          userPicked,
-          durationSeconds,
-          completed ? String() : String("call_failed"));
-      if (completed) {
-        firebaseManager.incrementDeviceCounter("totalCallsMade");
+  if (!firebaseManager.fetchNextCallJob(callJob)) {
+    return false;
+  }
+  pushLog("call processing", String("dialing ") + displayPhoneNumber(callJob.phoneNumber));
+  String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
+  bool active = true;
+  if (normalizedNumber.length() == 0) {
+    pushLog("call failed", String(callJob.id) + " invalid number");
+    firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "number_invalid");
+  } else if (!firebaseManager.fetchGatewayActive(active)) {
+    pushLog("call failed", normalizedNumber + " device status unavailable");
+    firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
+  } else if (!active) {
+    pushLog("call blocked", normalizedNumber + " device inactive");
+    firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
+  } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingCallers, blockLists.outgoingCallerCount)) {
+    pushLog("call blocked", normalizedNumber + " blocked_outgoing");
+    firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "blocked_outgoing");
+    firebaseManager.incrementDeviceCounter("totalCallsBlockedOutgoing");
+  } else {
+    bool userPicked = false;
+    int durationSeconds = 0;
+    bool completed = callManager.placeMissedCall(normalizedNumber, missedCallRingMs, userPicked, durationSeconds);
+    firebaseManager.updateCallJobStatus(
+        callJob,
+        completed ? "called" : "failed",
+        userPicked,
+        durationSeconds,
+        completed ? String() : String("call_failed"));
+    if (completed) {
+      firebaseManager.incrementDeviceCounter("totalCallsMade");
+    }
+    pushLog(completed ? "call done" : "call failed",
+            normalizedNumber + (completed ? String(" called (picked=") + (userPicked ? "yes" : "no") + ")"
+                                          : String(" call_failed")));
+  }
+  return true;
+}
+
+// Highest-priority path: verification codes. Runs BEFORE calls and the regular
+// batch on every poll. OTPs are sent immediately (no 5–30 s anti-ban gap — they
+// are rare and time-critical) and BYPASS the package-expired gate: if the SIM
+// truly cannot send, the job simply fails, but an expired *tracked* package must
+// never silently break phone verification. Rate limits still apply.
+static bool processOtpJob() {
+  FirestoreJob otpJob;
+  int count = 0;
+  if (!firebaseManager.fetchPendingOtpJobs(&otpJob, 1, count) || count == 0) {
+    return false;
+  }
+
+  String normalizedNumber = normalizePhoneNumber(otpJob.phoneNumber);
+  bool active = true;
+  String limitReason;
+  if (normalizedNumber.length() == 0) {
+    pushLog("otp failed", String(otpJob.id) + " invalid number");
+    firebaseManager.updateSmsJobStatus(otpJob, "failed", "number_invalid");
+  } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingSms, blockLists.outgoingSmsCount)) {
+    pushLog("otp blocked", normalizedNumber + " blocked_outgoing");
+    firebaseManager.updateSmsJobStatus(otpJob, "blocked", "blocked_outgoing");
+  } else if (wasRecentlySent(sendFingerprint(otpJob.id, otpJob.message))) {
+    pushLog("otp loop guard", normalizedNumber + " duplicate within 15min — marked failed");
+    firebaseManager.updateSmsJobStatus(otpJob, "failed", "duplicate_guard");
+  } else if (!rateLimitManager.canSend(limitReason)) {
+    pushLog("otp failed", normalizedNumber + " rate limit (" + limitReason + ")");
+    firebaseManager.updateSmsJobStatus(otpJob, "failed", limitReason);
+  } else {
+    firebaseManager.claimSmsJob(otpJob);
+    pushLog("otp processing", String("sending verification code to ") + normalizedNumber);
+    bool sent = smsManager.sendMessage(normalizedNumber, otpJob.message);
+    if (sent) {
+      recordSent(sendFingerprint(otpJob.id, otpJob.message));
+      rateLimitManager.recordSend();
+      firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+      if (!firebaseManager.updateSmsJobStatus(otpJob, "sent", String())) {
+        pushLog("otp error", String("status write FAILED for ") + otpJob.id + ": " + firebaseManager.lastError());
       }
-      logJob(String("call ") + (completed ? "called" : "failed") + " id=" + callJob.id + " picked=" + (userPicked ? "true" : "false") + " duration=" + String(durationSeconds));
+      firebaseManager.incrementDeviceCounter("totalSmsSent");
+      pushLog("otp sent", String("verification code delivered to modem for ") + normalizedNumber);
+    } else {
+      firebaseManager.updateSmsJobStatus(otpJob, "failed", "send_failed");
+      pushLog("otp failed", normalizedNumber + " send_failed");
+    }
+  }
+  return true;
+}
+
+// Grab up to kSmsBatchMax PENDING SMS jobs (server-side query) into the batch.
+// Called only when the batch is empty, so the next 5 are not fetched until the
+// current batch is fully drained (as requested). Skips fetching while rate-
+// limited so we never pull jobs we cannot send.
+static void fetchSmsBatch() {
+  String reason;
+  if (!rateLimitManager.canSend(reason)) {
+    if (!rateLimitAlerted) {
+      rateLimitAlerted = true;
+      ntfyManager.notify("sms limit reached",
+                         String("SMS rate limit hit (") + reason + "). Sending paused until the window resets.");
+      logJob(String("sms fetch paused reason=") + reason);
+    }
+    return;
+  }
+  rateLimitAlerted = false;
+
+  int count = 0;
+  if (!firebaseManager.fetchPendingSmsJobs(smsBatch, kSmsBatchMax, count)) {
+    // Usually a transient HTTPClient read timeout (code=-11): the request went
+    // out but Firestore's response didn't arrive within the read window. It is
+    // self-recovering — the job stays pending and is retried next loop — so log
+    // to serial only and do NOT ntfy, to keep the operator channel unspammed.
+    Serial.print("[LOG] sms error: pending-jobs query failed: ");
+    Serial.println(firebaseManager.lastError());
+    return;
+  }
+  // OTP jobs are handled by the priority path (processOtpJob) — drop them here
+  // so they are never queued behind the 5–30 s anti-ban pacing.
+  int kept = 0;
+  for (int i = 0; i < count; ++i) {
+    if (smsBatch[i].kind != "otp") {
+      if (kept != i) {
+        smsBatch[kept] = smsBatch[i];
+      }
+      kept++;
+    }
+  }
+  count = kept;
+  if (count == 0) {
+    static unsigned long lastIdlePollLogMs = 0;
+    if (millis() - lastIdlePollLogMs >= 30000UL) {
+      lastIdlePollLogMs = millis();
+      logJob("poll idle: no pending sms jobs");
+    }
+    return;
+  }
+  smsBatchCount = count;
+  smsBatchIndex = 0;
+  smsBatchStartedMs = millis();
+  nextSmsSendAtMs = millis();  // first send fires immediately; gap applies after
+  pushLog("sms pending", String("received ") + String(count) + " pending SMS job(s); processing one by one");
+}
+
+// Drive the active SMS batch: process at most ONE job per call, and only once the
+// random anti-ban gap since the previous send has elapsed. Non-blocking, so the
+// modem/dashboard/heartbeat keep running between sends. A batch that cannot finish
+// within smsBatchRescueMs (e.g. a wedged send) is abandoned with an ntfy alert so
+// the device never gets stuck on the first 5 messages.
+static void driveSmsBatch() {
+  if (smsBatchCount == 0) {
+    return;
+  }
+
+  if (millis() - smsBatchStartedMs > smsBatchRescueMs) {
+    int remaining = smsBatchCount - smsBatchIndex;
+    pushLog("sms rescue job",
+            String("Rescue took over: SMS batch stuck ~5 min (last error: ") +
+                firebaseManager.lastError() + "). Abandoning " + String(remaining) +
+                " unprocessed job(s); they stay pending for re-fetch.");
+    smsBatchCount = 0;
+    smsBatchIndex = 0;
+    return;
+  }
+
+  if (smsBatchIndex >= smsBatchCount) {
+    logJob("sms batch complete");
+    smsBatchCount = 0;
+    smsBatchIndex = 0;
+    return;
+  }
+
+  if (millis() < nextSmsSendAtMs) {
+    return;  // waiting on the anti-ban gap
+  }
+
+  FirestoreJob &job = smsBatch[smsBatchIndex];
+  String normalizedNumber = normalizePhoneNumber(job.phoneNumber);
+  String progress = String(smsBatchIndex + 1) + "/" + String(smsBatchCount);
+  bool active = true;
+  bool didSend = false;
+  if (normalizedNumber.length() == 0) {
+    pushLog("sms failed", String("[") + progress + "] " + job.id + " invalid number");
+    firebaseManager.updateSmsJobStatus(job, "failed", "number_invalid");
+  } else if (!firebaseManager.fetchGatewayActive(active)) {
+    pushLog("sms failed", String("[") + progress + "] " + normalizedNumber + " device status unavailable");
+    firebaseManager.updateSmsJobStatus(job, "failed", "device_status_unavailable");
+  } else if (!active) {
+    pushLog("sms blocked", String("[") + progress + "] " + normalizedNumber + " device inactive");
+    firebaseManager.updateSmsJobStatus(job, "blocked", "device_inactive");
+  } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingSms, blockLists.outgoingSmsCount)) {
+    pushLog("sms blocked", String("[") + progress + "] " + normalizedNumber + " blocked_outgoing");
+    firebaseManager.updateSmsJobStatus(job, "blocked", "blocked_outgoing");
+    firebaseManager.incrementDeviceCounter("totalSmsBlockedOutgoing");
+  } else if (!packageManager.isSmsAllowed(currentEpochSeconds())) {
+    pushLog("sms failed", String("[") + progress + "] " + normalizedNumber + " package expired");
+    firebaseManager.updateSmsJobStatus(job, "failed", "package_expired");
+  } else if (wasRecentlySent(sendFingerprint(job.id, job.message))) {
+    // We already sent this exact job recently, yet it is pending again — its
+    // status update must have failed to land (e.g. mis-routed doc id). Fail it
+    // instead of re-sending so a broken write path can never loop the same SMS.
+    pushLog("sms loop guard", String("[") + progress + "] " + normalizedNumber +
+                                  " already sent <15min ago but still pending — marked failed (duplicate_guard)");
+    firebaseManager.updateSmsJobStatus(job, "failed", "duplicate_guard");
+  } else {
+    String reason;
+    if (!rateLimitManager.canSend(reason)) {
+      // Limit reached mid-batch: alert once, stop, leave the rest PENDING (not
+      // claimed) so they are retried automatically once the window resets.
+      if (!rateLimitAlerted) {
+        rateLimitAlerted = true;
+        ntfyManager.notify("sms limit reached",
+                           String("SMS rate limit hit (") + reason + "). " +
+                               String(smsBatchCount - smsBatchIndex) + " job(s) left pending.");
+      }
+      pushLog("sms limit reached", String("rate limit (") + reason + "); " +
+                                       String(smsBatchCount - smsBatchIndex) + " job(s) left pending");
+      smsBatchCount = 0;
+      smsBatchIndex = 0;
+      return;
+    }
+    firebaseManager.claimSmsJob(job);
+    pushLog("sms processing", String("[") + progress + "] sending to " + normalizedNumber);
+    bool sent = smsManager.sendMessage(normalizedNumber, job.message);
+    if (sent) {
+      didSend = true;
+      recordSent(sendFingerprint(job.id, job.message));
+      rateLimitManager.recordSend();
+      firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+      if (!firebaseManager.updateSmsJobStatus(job, "sent", String())) {
+        pushLog("sms error", String("status write FAILED for ") + job.id + ": " + firebaseManager.lastError());
+      }
+      firebaseManager.incrementDeviceCounter("totalSmsSent");
+      pushLog("sms sent", String("[") + progress + "] sent to " + normalizedNumber);
+    } else {
+      firebaseManager.updateSmsJobStatus(job, "failed", "send_failed");
+      pushLog("sms failed", String("[") + progress + "] " + normalizedNumber + " send_failed");
     }
   }
 
-  // Surface liveness on serial: when nothing was claimed, print an idle line
-  // at most once per idle window so the operator can see polling is running
-  // without flooding the terminal on every 3s poll.
-  static unsigned long lastIdlePollLogMs = 0;
-  const unsigned long idlePollLogIntervalMs = 30000UL;
-  if (!claimedAny && millis() - lastIdlePollLogMs >= idlePollLogIntervalMs) {
-    lastIdlePollLogMs = millis();
-    logJob("poll idle: no pending sms/call jobs");
-  }
-
-  return claimedAny;
+  smsBatchIndex++;
+  // Only pace with the random gap after an actual GSM send; terminal outcomes
+  // (invalid/blocked/expired) advance promptly.
+  nextSmsSendAtMs = didSend ? millis() + randomSendDelayMs() : millis() + 500UL;
 }
 
 static void syncCountersFromCloud() {
@@ -664,6 +1022,13 @@ static void printCommandHelp() {
   Serial.println(" - show sms : list all SMS messages with SIM indexes");
   Serial.println(" - delete sms <index> : delete one SMS by SIM index");
   Serial.println(" - delete all sms : delete every SMS from SIM memory");
+  Serial.println(" - wifi list : list saved WiFi networks");
+  Serial.println(" - wifi add <ssid> <pass> : save a new WiFi network (no spaces in ssid)");
+  Serial.println(" - wifi delete <ssid> : remove a saved WiFi network");
+  Serial.println(" - wifi clear : remove all saved WiFi networks");
+  Serial.println(" - package status : show SIM package validity/expiry");
+  Serial.println(" - package set <days> : manually set package validity from today");
+  Serial.println(" - package clear : clear package state (sending allowed again)");
   Serial.println(" - help   : show this command list");
 }
 
@@ -714,7 +1079,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
     return false;
   }
 
-  const uint32_t defaultIntervalOfDhtSeconds = 15;
+  const uint32_t defaultIntervalOfDhtSeconds = 60;
   const bool defaultShowFirebasePushLogs = true;
   const bool defaultShowThingSpeakPushLogs = true;
 
@@ -732,9 +1097,15 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   int oldWeeklyLimit = runtimeConfig.weeklySmsLimit;
   int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
   String oldNtfyUrl = runtimeConfig.ntfyUrl;
+  String oldNtfyLogUrl = runtimeConfig.ntfyLogUrl;
+  String oldNtfyMuteUrl = runtimeConfig.ntfyMuteUrl;
 
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
-  thingSpeakIntervalMs = telemetryIntervalMs < 15000UL ? 15000UL : telemetryIntervalMs;
+  // Enforce the 1-minute floor so we never push telemetry every few seconds.
+  if (telemetryIntervalMs < kMinTelemetryIntervalMs) {
+    telemetryIntervalMs = kMinTelemetryIntervalMs;
+  }
+  thingSpeakIntervalMs = telemetryIntervalMs;
   showFirebasePushLogs = settings.showFirebasePushLogs;
   showThingSpeakPushLogs = settings.showThingSpeakPushLogs;
   jobLogs = settings.jobLogs;
@@ -743,6 +1114,10 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   runtimeConfig.monthlySmsLimit = settings.monthlySmsLimit;
   strlcpy(runtimeConfig.ntfyUrl, settings.ntfyUrl.c_str(), sizeof(runtimeConfig.ntfyUrl));
   ntfyManager.setUrl(settings.ntfyUrl);
+  strlcpy(runtimeConfig.ntfyLogUrl, settings.ntfyLogUrl.c_str(), sizeof(runtimeConfig.ntfyLogUrl));
+  logNtfy.setUrl(settings.ntfyLogUrl);
+  strlcpy(runtimeConfig.ntfyMuteUrl, settings.ntfyMuteUrl.c_str(), sizeof(runtimeConfig.ntfyMuteUrl));
+  muteNtfy.setUrl(settings.ntfyMuteUrl);
   rateLimitManager.setLimits(runtimeConfig.dailySmsLimit, runtimeConfig.weeklySmsLimit, runtimeConfig.monthlySmsLimit);
 
   if (settings.createdIntervalOfDht) {
@@ -769,6 +1144,12 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (settings.createdNtfyUrl) {
     Serial.println("[SYNC] created or healed Firebase variable: ntfyUrl");
   }
+  if (settings.createdNtfyLogUrl) {
+    Serial.println("[SYNC] created or healed Firebase variable: ntfyLogUrl");
+  }
+  if (settings.createdNtfyMuteUrl) {
+    Serial.println("[SYNC] created or healed Firebase variable: ntfyMuteUrl");
+  }
 
   if (oldIntervalSeconds != settings.intervalOfDhtSeconds) {
     printRuntimeSettingChange("intervalOfDhtSeconds", String(oldIntervalSeconds), String(settings.intervalOfDhtSeconds));
@@ -794,11 +1175,22 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (oldNtfyUrl != String(runtimeConfig.ntfyUrl)) {
     printRuntimeSettingChange("ntfyUrl", oldNtfyUrl, String(runtimeConfig.ntfyUrl));
   }
+  if (oldNtfyLogUrl != String(runtimeConfig.ntfyLogUrl)) {
+    printRuntimeSettingChange("ntfyLogUrl", oldNtfyLogUrl, String(runtimeConfig.ntfyLogUrl));
+  }
+  if (oldNtfyMuteUrl != String(runtimeConfig.ntfyMuteUrl)) {
+    printRuntimeSettingChange("ntfyMuteUrl", oldNtfyMuteUrl, String(runtimeConfig.ntfyMuteUrl));
+  }
 
   refreshBlockLists();
 
+  // Re-read the package node too, so manual RTDB edits (e.g. setting
+  // expiryEpoch by hand) apply within one sync cycle instead of on reboot.
+  // No-op before packageManager.begin() has run (null firebase pointer inside).
+  packageManager.refreshFromCloud(currentEpochSeconds());
+
   // Apply dashboard-managed WiFi pairs. Treat the cloud values as the desired
-  // state; persist to SPIFFS only when something actually changed and at least
+  // state; persist to LittleFS only when something actually changed and at least
   // one SSID is set, so the empty default never wipes locally stored networks.
   bool anyWifiProvided = settings.wifiSsid1.length() > 0 || settings.wifiSsid2.length() > 0;
   bool wifiChanged =
@@ -814,7 +1206,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
       strlcpy(runtimeConfig.userWifiPass2, settings.wifiPass2.c_str(), sizeof(runtimeConfig.userWifiPass2));
       Serial.println("[SYNC] WiFi credentials updated from cloud; reboot to connect with the new network");
     } else {
-      Serial.println("[SYNC] WiFi credentials update failed to save to SPIFFS");
+      Serial.println("[SYNC] WiFi credentials update failed to save to LittleFS");
     }
   }
 
@@ -828,6 +1220,20 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   Serial.print(showThingSpeakPushLogs ? "true" : "false");
   Serial.print(" jobLogs=");
   Serial.println(jobLogs ? "true" : "false");
+
+  // Report the currently connected SSID to RTDB so it's visible in the dashboard.
+  if (wifiManager.isStationConnected()) {
+    String ssid = wifiManager.getConnectedSsid();
+    if (ssid.length() > 0) {
+      if (!firebaseManager.pushConnectedSsid(ssid)) {
+        Serial.print("[SYNC] connectedSsid push failed: ");
+        Serial.println(firebaseManager.lastError());
+      } else {
+        Serial.print("[SYNC] connectedSsid=");
+        Serial.println(ssid);
+      }
+    }
+  }
 
   lastRuntimeSettingsSync = millis();
   return true;
@@ -900,6 +1306,98 @@ static void handleSerialCommand(String command) {
     }
     return;
   }
+  if (command.startsWith("wifi ")) {
+    String sub = command.substring(5);
+    sub.trim();
+    if (sub == "list") {
+      int count = configManager.getWifiNetworkCount();
+      Serial.print("[WIFI] saved networks: ");
+      Serial.println(count);
+      for (int i = 0; i < count; i++) {
+        WifiNetwork net = configManager.getWifiNetwork(i);
+        Serial.print("  [");
+        Serial.print(i);
+        Serial.print("] ssid=");
+        Serial.println(net.ssid);
+      }
+      return;
+    }
+    if (sub == "clear") {
+      configManager.clearWifiNetworks();
+      Serial.println("[WIFI] all saved networks cleared");
+      return;
+    }
+    if (sub.startsWith("delete ")) {
+      // command was lowercased; match case-insensitively and remove by original SSID.
+      String targetLower = sub.substring(7);
+      targetLower.trim();
+      bool removed = false;
+      int count = configManager.getWifiNetworkCount();
+      for (int i = 0; i < count; i++) {
+        WifiNetwork net = configManager.getWifiNetwork(i);
+        String netLower = String(net.ssid);
+        netLower.toLowerCase();
+        if (netLower == targetLower) {
+          removed = configManager.removeWifiNetwork(String(net.ssid));
+          break;
+        }
+      }
+      if (removed) {
+        Serial.println("[WIFI] network removed");
+      } else {
+        Serial.println("[WIFI] network not found");
+      }
+      return;
+    }
+    if (sub.startsWith("add ")) {
+      String rest = sub.substring(4);
+      rest.trim();
+      int spaceIdx = rest.indexOf(' ');
+      if (spaceIdx < 0) {
+        Serial.println("[WIFI] usage: wifi add <ssid> <pass>");
+        Serial.println("[WIFI] note: SSIDs with spaces must be configured via dashboard or SMS");
+        return;
+      }
+      String ssid = rest.substring(0, spaceIdx);
+      String pass = rest.substring(spaceIdx + 1);
+      pass.trim();
+      if (configManager.addWifiNetwork(ssid, pass)) {
+        Serial.print("[WIFI] saved ssid=");
+        Serial.println(ssid);
+      } else {
+        Serial.println("[WIFI] save failed (list full — max 8 networks)");
+      }
+      return;
+    }
+    Serial.println("[WIFI] commands: wifi list | wifi add <ssid> <pass> | wifi delete <ssid> | wifi clear");
+    return;
+  }
+  if (command.startsWith("package")) {
+    String sub = command.substring(7);
+    sub.trim();
+    if (sub == "status" || sub.length() == 0) {
+      Serial.print("[PACKAGE] ");
+      Serial.println(packageManager.statusLine(currentEpochSeconds()));
+      return;
+    }
+    if (sub == "clear") {
+      packageManager.clear();
+      Serial.println("[PACKAGE] cleared; sending allowed (unknown state)");
+      return;
+    }
+    if (sub.startsWith("set ")) {
+      int days = sub.substring(4).toInt();
+      if (packageManager.setManual(days, currentEpochSeconds())) {
+        Serial.print("[PACKAGE] manual set ");
+        Serial.println(packageManager.statusLine(currentEpochSeconds()));
+      } else {
+        Serial.println("[PACKAGE] usage: package set <days> (days must be > 0)");
+      }
+      return;
+    }
+    Serial.println("[PACKAGE] commands: package status | package set <days> | package clear");
+    return;
+  }
   printCommandHelp();
 }
 
@@ -912,15 +1410,20 @@ void setup() {
 
   configManager.begin();
   runtimeConfig = configManager.get();
-  if (runtimeConfig.pollingIntervalSeconds < 3) {
-    runtimeConfig.pollingIntervalSeconds = 3;
+  // Poll the job queue no faster than every 10 s (was 3 s). Batches of 5 SMS are
+  // then paced out with a random 5–30 s gap between sends for SIM-ban safety.
+  if (runtimeConfig.pollingIntervalSeconds < 10) {
+    runtimeConfig.pollingIntervalSeconds = 10;
   }
+  randomSeed(esp_random());
   ntfyManager.begin(runtimeConfig.ntfyUrl);
+  logNtfy.begin(runtimeConfig.ntfyLogUrl);
+  muteNtfy.begin(runtimeConfig.ntfyMuteUrl);
 
   initializeModemHardware();
   Logger::info("MODEM", "Hardware initialized");
 
-  wifiManager.begin(runtimeConfig);
+  wifiManager.begin(configManager);
   Logger::info("WIFI", wifiManager.modeName().c_str());
   if (wifiManager.isStationConnected()) {
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
@@ -950,18 +1453,24 @@ void setup() {
     Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
   }
 
+  packageManager.begin(&firebaseManager, &ntfyManager);
+
   if (!smsManager.begin()) {
     Logger::warn("SMS", "SMS manager init failed");
   }
   callManager.begin();
   displayManager.begin();
   dhtManager.begin();
-  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager, ntfyManager);
+  webDashboard.begin(runtimeConfig, wifiManager, firebaseManager, ntfyManager, configManager);
 
   startupIp = wifiManager.localIp().toString();
   Logger::info("BOOT", startupIp.c_str());
   Logger::info("API", webDashboard.docsUrl().c_str());
   pendingPollStartMs = millis();
+
+  pushLog("device boot", String("v8 online — wifi=") + wifiManager.modeName() +
+                             " ip=" + startupIp +
+                             " firebase=" + (firebaseManager.isReady() ? "ready" : "down"));
 
   if (firebaseManager.isReady()) {
     if (firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), startupIp, true)) {
@@ -980,7 +1489,70 @@ void setup() {
   }
 }
 
+// Make sure Firebase AND ThingSpeak are initialized whenever WiFi is connected.
+// Covers the "router up at boot but uplink/DNS not ready yet" case where begin()
+// failed for lack of internet: without this the device stays online forever with
+// no Firebase and (because ThingSpeak pushes are gated behind firebase-ready) no
+// telemetry, even though ntfy still works. Rate-limited to firebaseRetryIntervalMs
+// so we never hammer auth. Called from loop() and again right before each
+// telemetry push so the cloud is guaranteed live at push time.
+static void ensureCloudServices() {
+  if (!wifiManager.isStationConnected()) {
+    return;
+  }
+  if (firebaseManager.isReady() && thingSpeakManager.isReady()) {
+    return;
+  }
+  if (millis() - lastFirebaseRetry < firebaseRetryIntervalMs) {
+    return;
+  }
+  lastFirebaseRetry = millis();
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
+  if (!firebaseManager.isReady()) {
+    Serial.println("[FIREBASE] ensure: init retry (wifi up, not ready)");
+    firebaseManager.begin(runtimeConfig);
+    if (firebaseManager.isReady()) {
+      Logger::info("FIREBASE", "Init succeeded; gateway + telemetry now live");
+      firebaseManager.bootstrapGateway(runtimeConfig.deviceName, runtimeConfig.pollingIntervalSeconds, missedCallMode);
+      syncCountersFromCloud();
+      syncRuntimeSettingsFromCloud("ensure_cloud");
+      firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), wifiManager.localIp().toString(), true);
+      pendingPollStartMs = millis();
+    } else {
+      Serial.print("[FIREBASE] ensure: still failing: ");
+      Serial.println(firebaseManager.lastError());
+    }
+  }
+
+  if (!thingSpeakManager.isReady()) {
+    if (thingSpeakManager.begin(runtimeConfig)) {
+      Logger::info("THINGSPEAK", "Init succeeded");
+    } else {
+      Serial.print("[THINGSPEAK] ensure: still failing: ");
+      Serial.println(thingSpeakManager.lastError());
+    }
+  }
+}
+
 void loop() {
+  // ── WiFi self-healing ─────────────────────────────────────────────────────
+  // If we booted before the router was up (power outage, cold start) we end up
+  // in AP/OFFLINE mode. Retry STA every wifiReconnectIntervalMs so the device
+  // reconnects automatically once the router is ready — no manual reboot needed.
+  if (!wifiManager.isStationConnected() &&
+      millis() - lastWifiReconnect >= wifiReconnectIntervalMs) {
+    lastWifiReconnect = millis();
+    if (wifiManager.tryReconnect(configManager)) {
+      // Reconnected — force an immediate cloud (re)init on the next line.
+      lastFirebaseRetry = 0;
+      pendingPollStartMs = millis();
+    }
+  }
+  // Ensure Firebase + ThingSpeak are up whenever WiFi is connected (handles the
+  // "router up but internet not ready at boot" cold start). Rate-limited inside.
+  ensureCloudServices();
+
   firebaseManager.pollCommands();
 
   if (firebaseManager.isReady() && millis() - lastRuntimeSettingsSync >= runtimeSettingsSyncIntervalMs) {
@@ -1021,17 +1593,24 @@ void loop() {
   if (firebaseManager.isReady() && millis() >= pendingPollStartMs &&
       millis() - lastCloudPoll >= (unsigned long)runtimeConfig.pollingIntervalSeconds * 1000UL) {
     lastCloudPoll = millis();
-    // If we just drained a job there may be more queued behind it. Re-arm the
-    // poll timer so the next loop iteration polls again immediately and the
-    // queue empties quickly, instead of waiting a full interval per job.
-    if (processPendingCommand()) {
-      lastCloudPoll = 0;
+    processOtpJob();                // verification codes first, sent immediately
+    processCallJob();               // one call per poll
+    if (smsBatchCount == 0) {
+      fetchSmsBatch();              // grab up to 5 pending SMS only when idle
     }
+  }
+  // Drive the active SMS batch every loop (non-blocking, anti-ban paced). While a
+  // batch is in flight (smsBatchCount > 0) the fetch above is skipped, so the next
+  // 5 are not pulled until the current batch is fully drained.
+  if (firebaseManager.isReady()) {
+    driveSmsBatch();
   }
 
   callManager.loop();
   handleModemEvents();
-  webDashboard.loop();
+  packageManager.loop(currentEpochSeconds());
+  // Web server runs on its own FreeRTOS task (started in webDashboard.begin());
+  // only the runtime-sync request flag is consumed from this loop.
   if (webDashboard.consumeRuntimeSyncRequest()) {
     syncRuntimeSettingsFromCloud("dashboard");
   }
@@ -1055,6 +1634,10 @@ void loop() {
         rateLimitManager.dailyCount(),
         rateLimitManager.weeklyCount(),
         rateLimitManager.monthlyCount());
+
+    // Before pushing, make sure both cloud services are live (inits them if the
+    // uplink came up late). Rate-limited, so this is cheap when already ready.
+    ensureCloudServices();
 
     if (firebaseManager.isReady() && millis() - lastTelemetryPush > telemetryIntervalMs) {
       lastTelemetryPush = millis();

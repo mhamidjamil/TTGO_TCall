@@ -109,7 +109,7 @@ async function loadVersionMeta() {
     state.buildVersion = 'unknown';
     state.buildDate = 'unknown';
   }
-  $('#buildMeta').textContent = `SPIFFS ${state.buildVersion} | ${state.buildDate}`;
+  $('#buildMeta').textContent = `LittleFS ${state.buildVersion} | ${state.buildDate}`;
 }
 
 async function loadFirebase() {

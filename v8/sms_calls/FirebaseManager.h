@@ -23,8 +23,12 @@ struct FirestoreJob {
   String status;
   String error;
   String enqueBy;
+  // Job class set by the writer. "otp" = verification code — processed before
+  // regular jobs, sent without the anti-ban gap, bypasses the package gate.
+  String kind;
   bool userPicked = false;
   int durationSeconds = 0;
+  unsigned long processingStartedEpoch = 0;
 };
 
 // The four editable block lists stored on the sim_module/device document.
@@ -49,8 +53,10 @@ struct FirebaseRuntimeSettings {
   int weeklySmsLimit = 950;
   int monthlySmsLimit = 4900;
   String ntfyUrl;
+  String ntfyLogUrl;
+  String ntfyMuteUrl;
   // Desired WiFi pairs, managed from the dashboard via the RTDB runtime node.
-  // The device persists them to SPIFFS on sync; they apply on next reboot.
+  // The device persists them to LittleFS on sync; they apply on next reboot.
   String wifiSsid1;
   String wifiPass1;
   String wifiSsid2;
@@ -63,6 +69,24 @@ struct FirebaseRuntimeSettings {
   bool createdWeeklySmsLimit = false;
   bool createdMonthlySmsLimit = false;
   bool createdNtfyUrl = false;
+  bool createdNtfyLogUrl = false;
+  bool createdNtfyMuteUrl = false;
+};
+
+// SIM package/subscription state, persisted at RTDB /ttgo_tcall/package and
+// mirrored to LittleFS. Detection tokens and the safety margin live here too so
+// they can be tuned from the cloud without reflashing (e.g. when the operator
+// changes the SMS count or the message wording).
+struct PackageState {
+  bool known = false;              // have we ever recorded a subscription?
+  unsigned long subscribedEpoch = 0;
+  unsigned long expiryEpoch = 0;
+  int validityDays = 0;
+  long smsAllowance = 0;
+  int safetyMarginDays = 1;        // subtract from validity to be safe (Jazz expires early)
+  String matchTokens;              // comma-separated: ALL must appear to count as a subscription SMS
+  String lastMessage;
+  bool createdNode = false;        // set true when we had to create/heal the node
 };
 
 class FirebaseManager {
@@ -97,7 +121,14 @@ public:
   bool bootstrapGateway(const String &deviceName,
                         int pollIntervalSeconds,
                         bool missedCallMode);
-  bool fetchNextSmsJob(FirestoreJob &outJob);
+  // Fetch up to maxJobs PENDING sms jobs via a server-side query (status ==
+  // pending), so finished jobs are never downloaded. Does NOT claim them.
+  bool fetchPendingSmsJobs(FirestoreJob *outJobs, int maxJobs, int &outCount);
+  // Fetch pending OTP jobs only (status == pending AND kind == "otp").
+  bool fetchPendingOtpJobs(FirestoreJob *outJobs, int maxJobs, int &outCount);
+  // Mark an sms job in_progress (call right before sending).
+  bool claimSmsJob(const FirestoreJob &job);
+  // Fetch + claim the next pending call job (server-side query, limit 1).
   bool fetchNextCallJob(FirestoreJob &outJob);
   bool fetchGatewayActive(bool &outActive);
   bool updateSmsJobStatus(const FirestoreJob &job, const String &status, const String &errorReason = String());
@@ -130,6 +161,12 @@ public:
                            bool missedCallMode);
   bool recoverStuckJobs(unsigned long cutoffEpochSeconds);
   bool fetchBlockLists(BlockLists &out);
+  // Write connectedSsid to /ttgo_tcall/settings/runtime in RTDB.
+  bool pushConnectedSsid(const String &ssid);
+  // Package/subscription state at RTDB /ttgo_tcall/package. fetch heals defaults
+  // (createdNode=true) when the node is missing; push persists the given state.
+  bool fetchPackageState(PackageState &outState, const String &defaultTokens, int defaultSafetyMarginDays);
+  bool pushPackageState(const PackageState &state);
   String lastError() const;
 
 private:
@@ -147,6 +184,10 @@ private:
   bool httpGetBearer(const String &url, String &responseBody, int &statusCode);
   bool httpPostBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
   bool httpPatchBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
+  // Server-side query for jobs with the given status under parentPath's collectionId.
+  bool queryJobsByStatus(const String &parentPath, const char *collectionId, const char *statusValue,
+                         int limit, FirestoreJob *outJobs, int maxJobs, int &outCount);
+  bool claimJob(const String &collectionPath, const FirestoreJob &job);
   bool ensureDeviceDocument();
   bool ensureFirestoreDocument(const String &documentPath);
 

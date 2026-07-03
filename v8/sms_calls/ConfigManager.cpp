@@ -1,8 +1,7 @@
 #include "ConfigManager.h"
 
 #include <ArduinoJson.h>
-#include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -10,8 +9,20 @@
 #include "secrets.example.h"
 #endif
 
+// Fallback placeholders only — used if neither secrets.h nor secrets.example.h
+// defines these. Never put a real ntfy topic URL here: this file is committed,
+// and an ntfy topic name is a bearer credential (whoever knows it can publish to
+// or subscribe to the channel). Set real topic URLs in the gitignored secrets.h.
 #ifndef NTFY_URL_DEFAULT
-#define NTFY_URL_DEFAULT "https://ntfy.innovorix.com/oracle_ntfy"
+#define NTFY_URL_DEFAULT "https://ntfy.sh/YOUR_NTFY_TOPIC"
+#endif
+
+#ifndef NTFY_LOG_URL_DEFAULT
+#define NTFY_LOG_URL_DEFAULT "https://ntfy.sh/YOUR_NTFY_LOG_TOPIC"
+#endif
+
+#ifndef NTFY_MUTE_URL_DEFAULT
+#define NTFY_MUTE_URL_DEFAULT "https://ntfy.sh/YOUR_NTFY_MUTE_TOPIC"
 #endif
 
 #ifndef DEVICE_ID_DEFAULT
@@ -20,6 +31,7 @@
 
 namespace {
 constexpr const char *kConfigPath = "/v8_config.json";
+constexpr const char *kWifiNetPath = "/wifi_nets.json";
 }
 
 static void copyText(char *target, size_t targetSize, const char *source) {
@@ -34,19 +46,26 @@ static void copyText(char *target, size_t targetSize, const char *source) {
 }
 
 void ConfigManager::begin() {
-  if (!SPIFFS.begin(true)) {
-    SPIFFS.format();
-    SPIFFS.begin(true);
+  if (lock == nullptr) {
+    lock = xSemaphoreCreateMutex();
+  }
+  if (!LittleFS.begin(true)) {
+    LittleFS.format();
+    LittleFS.begin(true);
   }
 
   loadDefaults();
-  if (!loadFromSPIFFS()) {
-    saveToSPIFFS();
+  if (!loadFromLittleFS()) {
+    saveToLittleFS();
   }
+  loadWifiNetworks();
 }
 
 bool ConfigManager::save() {
-  return saveToSPIFFS();
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = saveToLittleFS();
+  xSemaphoreGive(lock);
+  return ok;
 }
 
 const V8Config &ConfigManager::get() const {
@@ -55,11 +74,14 @@ const V8Config &ConfigManager::get() const {
 
 bool ConfigManager::updateUserWifi(const String &ssid1, const String &pass1,
                                    const String &ssid2, const String &pass2) {
+  xSemaphoreTake(lock, portMAX_DELAY);
   copyText(config.userWifiSsid1, sizeof(config.userWifiSsid1), ssid1.c_str());
   copyText(config.userWifiPass1, sizeof(config.userWifiPass1), pass1.c_str());
   copyText(config.userWifiSsid2, sizeof(config.userWifiSsid2), ssid2.c_str());
   copyText(config.userWifiPass2, sizeof(config.userWifiPass2), pass2.c_str());
-  return saveToSPIFFS();
+  bool ok = saveToLittleFS();
+  xSemaphoreGive(lock);
+  return ok;
 }
 
 void ConfigManager::loadDefaults() {
@@ -103,16 +125,18 @@ void ConfigManager::loadDefaults() {
   copyText(config.firebaseStatusPath, sizeof(config.firebaseStatusPath), FIREBASE_STATUS_PATH_DEFAULT);
   copyText(config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath), FIREBASE_TELEMETRY_PATH_DEFAULT);
   copyText(config.ntfyUrl, sizeof(config.ntfyUrl), NTFY_URL_DEFAULT);
+  copyText(config.ntfyLogUrl, sizeof(config.ntfyLogUrl), NTFY_LOG_URL_DEFAULT);
+  copyText(config.ntfyMuteUrl, sizeof(config.ntfyMuteUrl), NTFY_MUTE_URL_DEFAULT);
   config.thingSpeakChannelId = THINGSPEAK_CHANNEL_ID_DEFAULT;
   copyText(config.thingSpeakWriteApiKey, sizeof(config.thingSpeakWriteApiKey), THINGSPEAK_WRITE_API_KEY_DEFAULT);
 }
 
-bool ConfigManager::loadFromSPIFFS() {
-  if (!SPIFFS.exists(kConfigPath)) {
+bool ConfigManager::loadFromLittleFS() {
+  if (!LittleFS.exists(kConfigPath)) {
     return false;
   }
 
-  File file = SPIFFS.open(kConfigPath, "r");
+  File file = LittleFS.open(kConfigPath, "r");
   if (!file) {
     return false;
   }
@@ -127,8 +151,8 @@ bool ConfigManager::loadFromSPIFFS() {
   return true;
 }
 
-bool ConfigManager::saveToSPIFFS() {
-  File file = SPIFFS.open(kConfigPath, "w");
+bool ConfigManager::saveToLittleFS() {
+  File file = LittleFS.open(kConfigPath, "w");
   if (!file) {
     return false;
   }
@@ -184,6 +208,8 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   strlcpy(config.firebaseStatusPath, doc["firebaseStatusPath"] | config.firebaseStatusPath, sizeof(config.firebaseStatusPath));
   strlcpy(config.firebaseTelemetryPath, doc["firebaseTelemetryPath"] | config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath));
   strlcpy(config.ntfyUrl, doc["ntfyUrl"] | config.ntfyUrl, sizeof(config.ntfyUrl));
+  strlcpy(config.ntfyLogUrl, doc["ntfyLogUrl"] | config.ntfyLogUrl, sizeof(config.ntfyLogUrl));
+  strlcpy(config.ntfyMuteUrl, doc["ntfyMuteUrl"] | config.ntfyMuteUrl, sizeof(config.ntfyMuteUrl));
   config.thingSpeakChannelId = doc["thingSpeakChannelId"] | config.thingSpeakChannelId;
   strlcpy(config.thingSpeakWriteApiKey, doc["thingSpeakWriteApiKey"] | config.thingSpeakWriteApiKey, sizeof(config.thingSpeakWriteApiKey));
 }
@@ -229,10 +255,152 @@ String ConfigManager::writeJsonConfig() const {
   doc["firebaseStatusPath"] = config.firebaseStatusPath;
   doc["firebaseTelemetryPath"] = config.firebaseTelemetryPath;
   doc["ntfyUrl"] = config.ntfyUrl;
+  doc["ntfyLogUrl"] = config.ntfyLogUrl;
+  doc["ntfyMuteUrl"] = config.ntfyMuteUrl;
   doc["thingSpeakChannelId"] = config.thingSpeakChannelId;
   doc["thingSpeakWriteApiKey"] = config.thingSpeakWriteApiKey;
 
   String jsonText;
   serializeJsonPretty(doc, jsonText);
   return jsonText;
+}
+
+void ConfigManager::loadWifiNetworks() {
+  wifiNetworkCount = 0;
+  if (!LittleFS.exists(kWifiNetPath)) {
+    return;
+  }
+  File f = LittleFS.open(kWifiNetPath, "r");
+  if (!f) {
+    return;
+  }
+  String json = f.readString();
+  f.close();
+  if (json.isEmpty()) {
+    return;
+  }
+  DynamicJsonDocument doc(1024);
+  if (deserializeJson(doc, json)) {
+    Serial.println("[WIFI_NET] failed to parse wifi_nets.json");
+    return;
+  }
+  JsonArray arr = doc.as<JsonArray>();
+  for (JsonObject entry : arr) {
+    if (wifiNetworkCount >= kMaxWifiNetworks) {
+      break;
+    }
+    const char *ssid = entry["ssid"] | "";
+    const char *pass = entry["pass"] | "";
+    if (strlen(ssid) == 0) {
+      continue;
+    }
+    strlcpy(wifiNetworks[wifiNetworkCount].ssid, ssid, sizeof(wifiNetworks[wifiNetworkCount].ssid));
+    strlcpy(wifiNetworks[wifiNetworkCount].pass, pass, sizeof(wifiNetworks[wifiNetworkCount].pass));
+    wifiNetworkCount++;
+  }
+  Serial.print("[WIFI_NET] loaded ");
+  Serial.print(wifiNetworkCount);
+  Serial.println(" saved network(s)");
+}
+
+bool ConfigManager::saveWifiNetworks() {
+  DynamicJsonDocument doc(1024);
+  JsonArray arr = doc.to<JsonArray>();
+  for (int i = 0; i < wifiNetworkCount; i++) {
+    JsonObject entry = arr.createNestedObject();
+    entry["ssid"] = wifiNetworks[i].ssid;
+    entry["pass"] = wifiNetworks[i].pass;
+  }
+  String json;
+  serializeJson(doc, json);
+  File f = LittleFS.open(kWifiNetPath, "w");
+  if (!f) {
+    return false;
+  }
+  bool ok = f.print(json) > 0;
+  f.close();
+  return ok;
+}
+
+bool ConfigManager::addWifiNetwork(const String &ssid, const String &pass) {
+  if (ssid.length() == 0) {
+    return false;
+  }
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = false;
+  bool updated = false;
+  for (int i = 0; i < wifiNetworkCount; i++) {
+    if (String(wifiNetworks[i].ssid) == ssid) {
+      strlcpy(wifiNetworks[i].pass, pass.c_str(), sizeof(wifiNetworks[i].pass));
+      ok = saveWifiNetworks();
+      updated = true;
+      break;
+    }
+  }
+  if (!updated && wifiNetworkCount < kMaxWifiNetworks) {
+    strlcpy(wifiNetworks[wifiNetworkCount].ssid, ssid.c_str(), sizeof(wifiNetworks[wifiNetworkCount].ssid));
+    strlcpy(wifiNetworks[wifiNetworkCount].pass, pass.c_str(), sizeof(wifiNetworks[wifiNetworkCount].pass));
+    wifiNetworkCount++;
+    ok = saveWifiNetworks();
+  }
+  xSemaphoreGive(lock);
+  return ok;
+}
+
+bool ConfigManager::removeWifiNetwork(const String &ssid) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = false;
+  for (int i = 0; i < wifiNetworkCount; i++) {
+    if (String(wifiNetworks[i].ssid) == ssid) {
+      for (int j = i; j < wifiNetworkCount - 1; j++) {
+        wifiNetworks[j] = wifiNetworks[j + 1];
+      }
+      wifiNetworkCount--;
+      ok = saveWifiNetworks();
+      break;
+    }
+  }
+  xSemaphoreGive(lock);
+  return ok;
+}
+
+bool ConfigManager::clearWifiNetworks() {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  wifiNetworkCount = 0;
+  if (LittleFS.exists(kWifiNetPath)) {
+    LittleFS.remove(kWifiNetPath);
+  }
+  xSemaphoreGive(lock);
+  return true;
+}
+
+int ConfigManager::getWifiNetworkCount() const {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  int count = wifiNetworkCount;
+  xSemaphoreGive(lock);
+  return count;
+}
+
+WifiNetwork ConfigManager::getWifiNetwork(int index) const {
+  WifiNetwork result = {};
+  xSemaphoreTake(lock, portMAX_DELAY);
+  if (index >= 0 && index < wifiNetworkCount) {
+    result = wifiNetworks[index];
+  }
+  xSemaphoreGive(lock);
+  return result;
+}
+
+String ConfigManager::getWifiNetworksJson() const {
+  DynamicJsonDocument doc(1024);
+  JsonArray arr = doc.to<JsonArray>();
+  xSemaphoreTake(lock, portMAX_DELAY);
+  for (int i = 0; i < wifiNetworkCount; i++) {
+    JsonObject entry = arr.createNestedObject();
+    entry["ssid"] = wifiNetworks[i].ssid;
+  }
+  xSemaphoreGive(lock);
+  String json;
+  serializeJson(doc, json);
+  return json;
 }

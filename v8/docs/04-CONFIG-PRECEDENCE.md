@@ -2,7 +2,7 @@
 
 ## Order of Truth
 1. Compile-time defaults.
-2. SPIFFS persisted config.
+2. LittleFS persisted config.
 3. Runtime cloud settings from Firebase (`/ttgo_tcall/settings/runtime`).
 4. Firestore gateway data under `sim_module/device` (active switch + block lists) for control-plane decisions.
 5. Runtime changes from dashboard or cloud sync.
@@ -10,7 +10,7 @@
 
 ## WiFi Credentials (v8.3.1)
 - Managed from the dashboard WiFi tab like any other runtime setting: the four fields `wifiSsid1`/`wifiPass1`/`wifiSsid2`/`wifiPass2` are written to RTDB `/ttgo_tcall/settings/runtime`. There is no device-side WiFi API.
-- On sync the device reads them and, when they differ from what is stored, persists them to SPIFFS (`userWifiSsid1/2`, `userWifiPass1/2`). Empty cloud values are ignored so they never wipe locally stored networks.
+- On sync the device reads them and, when they differ from what is stored, persists them to LittleFS (`userWifiSsid1/2`, `userWifiPass1/2`). Empty cloud values are ignored so they never wipe locally stored networks.
 - Boot connect order: saved pair 1, then saved pair 2, then the `secrets.h` networks (`wifiSsid`/`wifiSsidBackup`), then AP fallback. The `secrets.h` networks are a pristine final fallback and are never overwritten.
 - Set the new network while the device is still online, then reboot (dashboard Reboot Device button or power-cycle) to connect. Serial prints which network it connected through.
 
@@ -27,8 +27,8 @@
 - If a key is missing or invalid, firmware creates/heals it with default and logs that event on serial.
 - Runtime settings sync runs at startup, every 10 minutes, and on manual `sync` serial command.
 
-## SPIFFS Dashboard Metadata
-- The SPIFFS asset folder contains `dashboard.html`, `dashboard.css`, `dashboard.js`, and `version.txt`.
+## LittleFS Dashboard Metadata
+- The LittleFS asset folder contains `dashboard.html`, `dashboard.css`, `dashboard.js`, and `version.txt`.
 - Any change to those files should bump the version/date in `version.txt`.
 - The dashboard reads `version.txt` and displays it in the header and About tab so operators can verify the deployed asset set.
 
