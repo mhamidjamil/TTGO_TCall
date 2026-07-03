@@ -837,7 +837,12 @@ static void fetchSmsBatch() {
 
   int count = 0;
   if (!firebaseManager.fetchPendingSmsJobs(smsBatch, kSmsBatchMax, count)) {
-    pushLog("sms error", String("pending-jobs query failed: ") + firebaseManager.lastError());
+    // Usually a transient HTTPClient read timeout (code=-11): the request went
+    // out but Firestore's response didn't arrive within the read window. It is
+    // self-recovering — the job stays pending and is retried next loop — so log
+    // to serial only and do NOT ntfy, to keep the operator channel unspammed.
+    Serial.print("[LOG] sms error: pending-jobs query failed: ");
+    Serial.println(firebaseManager.lastError());
     return;
   }
   // OTP jobs are handled by the priority path (processOtpJob) — drop them here
