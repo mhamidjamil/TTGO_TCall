@@ -317,6 +317,7 @@ void parseFirestoreJob(const JsonObjectConst &document, FirestoreJob &outJob) {
   outJob.enqueBy = firestoreStringField(fields, "enque_by");
   outJob.userPicked = firestoreBoolField(fields, "user_picked", false);
   outJob.durationSeconds = firestoreIntField(fields, "duration_seconds", 0);
+  outJob.processingStartedEpoch = firestoreEpochField(fields, "processing_started_epoch", 0);
 }
 }
 
@@ -1079,11 +1080,11 @@ bool FirebaseManager::bootstrapGateway(const String &deviceName,
   return true;
 }
 
-// Run a structured query for PENDING jobs. Only actionable docs are returned by
-// the server, so finished (sent/failed/blocked) jobs never reach the device and
-// the response stays tiny regardless of how large the collection grows.
-bool FirebaseManager::queryPendingJobs(const String &parentPath, const char *collectionId, int limit,
-                                       FirestoreJob *outJobs, int maxJobs, int &outCount) {
+// Run a structured query for jobs with the given status. Only matching docs are
+// returned by the server, so finished (sent/failed/blocked) jobs never reach the
+// device and the response stays tiny regardless of how large the collection grows.
+bool FirebaseManager::queryJobsByStatus(const String &parentPath, const char *collectionId, const char *statusValue,
+                                        int limit, FirestoreJob *outJobs, int maxJobs, int &outCount) {
   outCount = 0;
   if (!ensureAuthenticated()) {
     return false;
@@ -1091,7 +1092,7 @@ bool FirebaseManager::queryPendingJobs(const String &parentPath, const char *col
 
   String payload = String("{\"structuredQuery\":{\"from\":[{\"collectionId\":\"") + collectionId +
                    "\"}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"status\"},"
-                   "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"pending\"}}},\"limit\":" +
+                   "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + statusValue + "\"}}},\"limit\":" +
                    String(limit) + "}}";
 
   String url = buildFirestoreUrl(parentPath) + ":runQuery";
@@ -1121,7 +1122,7 @@ bool FirebaseManager::queryPendingJobs(const String &parentPath, const char *col
     }
     FirestoreJob job;
     parseFirestoreJob(element["document"].as<JsonObjectConst>(), job);
-    if (job.status != "pending") {
+    if (job.status != statusValue) {
       continue;
     }
     outJobs[outCount++] = job;
@@ -1165,7 +1166,7 @@ bool FirebaseManager::claimJob(const String &collectionPath, const FirestoreJob 
 }
 
 bool FirebaseManager::fetchPendingSmsJobs(FirestoreJob *outJobs, int maxJobs, int &outCount) {
-  return queryPendingJobs(kSmsDocPath, "sms_jobs", maxJobs, outJobs, maxJobs, outCount);
+  return queryJobsByStatus(kSmsDocPath, "sms_jobs", "pending", maxJobs, outJobs, maxJobs, outCount);
 }
 
 bool FirebaseManager::claimSmsJob(const FirestoreJob &job) {
@@ -1174,7 +1175,7 @@ bool FirebaseManager::claimSmsJob(const FirestoreJob &job) {
 
 bool FirebaseManager::fetchNextCallJob(FirestoreJob &outJob) {
   int count = 0;
-  if (!queryPendingJobs(kCallsDocPath, "call_jobs", 1, &outJob, 1, count) || count == 0) {
+  if (!queryJobsByStatus(kCallsDocPath, "call_jobs", "pending", 1, &outJob, 1, count) || count == 0) {
     return false;
   }
   if (!claimJob(kCallJobsPath, outJob)) {
@@ -1470,37 +1471,34 @@ bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
     return false;
   }
 
-  const char *collections[] = {kSmsJobsPath, kCallJobsPath};
-  for (size_t i = 0; i < sizeof(collections) / sizeof(collections[0]); ++i) {
-    String response;
-    int statusCode = 0;
-    if (!httpGetBearer(buildFirestoreUrl(collections[i]), response, statusCode)) {
-      return false;
-    }
-    if (statusCode == 404) {
-      continue;
-    }
-    if (statusCode < 200 || statusCode >= 300) {
-      setHttpStatusError(error, "stuck job fetch", statusCode, response);
+  // Server-side query for in_progress jobs only — the old full-collection GET
+  // parsed into a fixed 16 KB buffer and silently failed once the collection
+  // grew, which disabled recovery exactly when it mattered.
+  struct QueryTarget {
+    const char *parentPath;
+    const char *collectionId;
+    const char *jobsPath;
+  };
+  const QueryTarget targets[] = {
+      {kSmsDocPath, "sms_jobs", kSmsJobsPath},
+      {kCallsDocPath, "call_jobs", kCallJobsPath},
+  };
+
+  const int kMaxStuck = 10;
+  FirestoreJob stuck[kMaxStuck];
+  for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); ++i) {
+    int count = 0;
+    if (!queryJobsByStatus(targets[i].parentPath, targets[i].collectionId, "in_progress",
+                           kMaxStuck, stuck, kMaxStuck, count)) {
       return false;
     }
 
-    DynamicJsonDocument readDoc(16384);
-    if (deserializeJson(readDoc, response)) {
-      error = String("stuck job parse failed body=") + response;
-      return false;
-    }
-
-    JsonArray documents = readDoc["documents"].as<JsonArray>();
-    for (JsonVariant item : documents) {
-      JsonObjectConst fields = item["fields"].as<JsonObjectConst>();
-      String status = firestoreStringField(fields, "status");
-      unsigned long started = firestoreEpochField(fields, "processing_started_epoch", 0);
-      if (status != "in_progress" || started == 0 || started >= cutoffEpochSeconds) {
-        continue;
+    for (int j = 0; j < count; ++j) {
+      unsigned long started = stuck[j].processingStartedEpoch;
+      if (started == 0 || started >= cutoffEpochSeconds) {
+        continue;  // fresh claim still being worked — leave it alone
       }
 
-      String jobId = firestoreDocumentId(item["name"] | "");
       DynamicJsonDocument writeDoc(512);
       JsonObject writeFields = writeDoc.createNestedObject("fields");
       setStringField(writeFields, "status", "pending");
@@ -1510,7 +1508,7 @@ bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
 
       String writeResponse;
       int writeStatus = 0;
-      String url = buildFirestoreUrl(String(collections[i]) + "/" + urlEncodeDocId(jobId)) +
+      String url = buildFirestoreUrl(String(targets[i].jobsPath) + "/" + urlEncodeDocId(stuck[j].id)) +
                    "?currentDocument.exists=true"
                    "&updateMask.fieldPaths=status"
                    "&updateMask.fieldPaths=error";

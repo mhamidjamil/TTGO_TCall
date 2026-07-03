@@ -25,6 +25,7 @@ struct FirestoreJob {
   String enqueBy;
   bool userPicked = false;
   int durationSeconds = 0;
+  unsigned long processingStartedEpoch = 0;
 };
 
 // The four editable block lists stored on the sim_module/device document.
@@ -176,9 +177,9 @@ private:
   bool httpGetBearer(const String &url, String &responseBody, int &statusCode);
   bool httpPostBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
   bool httpPatchBearerJson(const String &url, const String &payload, String &responseBody, int &statusCode);
-  // Server-side query for pending jobs under parentPath's collectionId.
-  bool queryPendingJobs(const String &parentPath, const char *collectionId, int limit,
-                        FirestoreJob *outJobs, int maxJobs, int &outCount);
+  // Server-side query for jobs with the given status under parentPath's collectionId.
+  bool queryJobsByStatus(const String &parentPath, const char *collectionId, const char *statusValue,
+                         int limit, FirestoreJob *outJobs, int maxJobs, int &outCount);
   bool claimJob(const String &collectionPath, const FirestoreJob &job);
   bool ensureDeviceDocument();
   bool ensureFirestoreDocument(const String &documentPath);
