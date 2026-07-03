@@ -9,6 +9,13 @@ How a backend (Rails, etc.) or the dashboard enqueues SMS and calls, and reads r
 - Each send is gated by the global rate limit and the SIM package validity; when the daily/weekly/monthly limit is hit, the remaining jobs are left `pending` (for the next window) and an ntfy alert is sent.
 - If a batch cannot finish within **5 minutes** (e.g. a wedged send), it is abandoned ("rescue") with an ntfy alert and the unprocessed jobs stay `pending` for re-fetch — the device never gets stuck on one batch.
 - Calls are processed one per poll (no anti-ban delay needed for low-volume missed calls).
+- **OTP priority**: a job written with `kind: "otp"` is processed BEFORE calls and the
+  regular batch on every poll, is sent immediately (no 5–30 s gap), and **bypasses the
+  package-expired gate** (verification must never silently break because the tracked
+  package lapsed; a truly unable SIM just fails the job). Rate limits and block lists
+  still apply. OTP jobs are excluded from the regular batch so they can't be queued
+  behind paced sends. The mobile app writes `kind: "otp"` when enqueueing verification
+  codes.
 
 ## Firestore layout (single device)
 

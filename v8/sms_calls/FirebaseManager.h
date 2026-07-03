@@ -23,6 +23,9 @@ struct FirestoreJob {
   String status;
   String error;
   String enqueBy;
+  // Job class set by the writer. "otp" = verification code — processed before
+  // regular jobs, sent without the anti-ban gap, bypasses the package gate.
+  String kind;
   bool userPicked = false;
   int durationSeconds = 0;
   unsigned long processingStartedEpoch = 0;
@@ -119,6 +122,8 @@ public:
   // Fetch up to maxJobs PENDING sms jobs via a server-side query (status ==
   // pending), so finished jobs are never downloaded. Does NOT claim them.
   bool fetchPendingSmsJobs(FirestoreJob *outJobs, int maxJobs, int &outCount);
+  // Fetch pending OTP jobs only (status == pending AND kind == "otp").
+  bool fetchPendingOtpJobs(FirestoreJob *outJobs, int maxJobs, int &outCount);
   // Mark an sms job in_progress (call right before sending).
   bool claimSmsJob(const FirestoreJob &job);
   // Fetch + claim the next pending call job (server-side query, limit 1).

@@ -770,6 +770,54 @@ static bool processCallJob() {
   return true;
 }
 
+// Highest-priority path: verification codes. Runs BEFORE calls and the regular
+// batch on every poll. OTPs are sent immediately (no 5–30 s anti-ban gap — they
+// are rare and time-critical) and BYPASS the package-expired gate: if the SIM
+// truly cannot send, the job simply fails, but an expired *tracked* package must
+// never silently break phone verification. Rate limits still apply.
+static bool processOtpJob() {
+  FirestoreJob otpJob;
+  int count = 0;
+  if (!firebaseManager.fetchPendingOtpJobs(&otpJob, 1, count) || count == 0) {
+    return false;
+  }
+
+  String normalizedNumber = normalizePhoneNumber(otpJob.phoneNumber);
+  bool active = true;
+  String limitReason;
+  if (normalizedNumber.length() == 0) {
+    pushLog("otp failed", String(otpJob.id) + " invalid number");
+    firebaseManager.updateSmsJobStatus(otpJob, "failed", "number_invalid");
+  } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingSms, blockLists.outgoingSmsCount)) {
+    pushLog("otp blocked", normalizedNumber + " blocked_outgoing");
+    firebaseManager.updateSmsJobStatus(otpJob, "blocked", "blocked_outgoing");
+  } else if (wasRecentlySent(sendFingerprint(otpJob.id, otpJob.message))) {
+    pushLog("otp loop guard", normalizedNumber + " duplicate within 15min — marked failed");
+    firebaseManager.updateSmsJobStatus(otpJob, "failed", "duplicate_guard");
+  } else if (!rateLimitManager.canSend(limitReason)) {
+    pushLog("otp failed", normalizedNumber + " rate limit (" + limitReason + ")");
+    firebaseManager.updateSmsJobStatus(otpJob, "failed", limitReason);
+  } else {
+    firebaseManager.claimSmsJob(otpJob);
+    pushLog("otp processing", String("sending verification code to ") + normalizedNumber);
+    bool sent = smsManager.sendMessage(normalizedNumber, otpJob.message);
+    if (sent) {
+      recordSent(sendFingerprint(otpJob.id, otpJob.message));
+      rateLimitManager.recordSend();
+      firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+      if (!firebaseManager.updateSmsJobStatus(otpJob, "sent", String())) {
+        pushLog("otp error", String("status write FAILED for ") + otpJob.id + ": " + firebaseManager.lastError());
+      }
+      firebaseManager.incrementDeviceCounter("totalSmsSent");
+      pushLog("otp sent", String("verification code delivered to modem for ") + normalizedNumber);
+    } else {
+      firebaseManager.updateSmsJobStatus(otpJob, "failed", "send_failed");
+      pushLog("otp failed", normalizedNumber + " send_failed");
+    }
+  }
+  return true;
+}
+
 // Grab up to kSmsBatchMax PENDING SMS jobs (server-side query) into the batch.
 // Called only when the batch is empty, so the next 5 are not fetched until the
 // current batch is fully drained (as requested). Skips fetching while rate-
@@ -792,6 +840,18 @@ static void fetchSmsBatch() {
     pushLog("sms error", String("pending-jobs query failed: ") + firebaseManager.lastError());
     return;
   }
+  // OTP jobs are handled by the priority path (processOtpJob) — drop them here
+  // so they are never queued behind the 5–30 s anti-ban pacing.
+  int kept = 0;
+  for (int i = 0; i < count; ++i) {
+    if (smsBatch[i].kind != "otp") {
+      if (kept != i) {
+        smsBatch[kept] = smsBatch[i];
+      }
+      kept++;
+    }
+  }
+  count = kept;
   if (count == 0) {
     static unsigned long lastIdlePollLogMs = 0;
     if (millis() - lastIdlePollLogMs >= 30000UL) {
@@ -1510,6 +1570,7 @@ void loop() {
   if (firebaseManager.isReady() && millis() >= pendingPollStartMs &&
       millis() - lastCloudPoll >= (unsigned long)runtimeConfig.pollingIntervalSeconds * 1000UL) {
     lastCloudPoll = millis();
+    processOtpJob();                // verification codes first, sent immediately
     processCallJob();               // one call per poll
     if (smsBatchCount == 0) {
       fetchSmsBatch();              // grab up to 5 pending SMS only when idle

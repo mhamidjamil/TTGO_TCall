@@ -315,6 +315,7 @@ void parseFirestoreJob(const JsonObjectConst &document, FirestoreJob &outJob) {
   outJob.status = firestoreStringField(fields, "status");
   outJob.error = firestoreStringField(fields, "error");
   outJob.enqueBy = firestoreStringField(fields, "enque_by");
+  outJob.kind = firestoreStringField(fields, "kind");
   outJob.userPicked = firestoreBoolField(fields, "user_picked", false);
   outJob.durationSeconds = firestoreIntField(fields, "duration_seconds", 0);
   outJob.processingStartedEpoch = firestoreEpochField(fields, "processing_started_epoch", 0);
@@ -1167,6 +1168,58 @@ bool FirebaseManager::claimJob(const String &collectionPath, const FirestoreJob 
 
 bool FirebaseManager::fetchPendingSmsJobs(FirestoreJob *outJobs, int maxJobs, int &outCount) {
   return queryJobsByStatus(kSmsDocPath, "sms_jobs", "pending", maxJobs, outJobs, maxJobs, outCount);
+}
+
+bool FirebaseManager::fetchPendingOtpJobs(FirestoreJob *outJobs, int maxJobs, int &outCount) {
+  outCount = 0;
+  if (!ensureAuthenticated()) {
+    return false;
+  }
+
+  // Composite equality filter (status==pending AND kind==otp) — equality-only,
+  // so Firestore serves it without a manual composite index.
+  String payload =
+      "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"sms_jobs\"}],"
+      "\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":["
+      "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"status\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"pending\"}}},"
+      "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"kind\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"otp\"}}}"
+      "]}},\"limit\":" + String(maxJobs) + "}}";
+
+  String url = buildFirestoreUrl(kSmsDocPath) + ":runQuery";
+  String response;
+  int statusCode = 0;
+  if (!httpPostBearerJson(url, payload, response, statusCode)) {
+    return false;
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    setHttpStatusError(error, "otp jobs query", statusCode, response);
+    return false;
+  }
+
+  DynamicJsonDocument doc(8192);
+  if (deserializeJson(doc, response)) {
+    error = String("otp jobs parse failed body=") + response;
+    return false;
+  }
+
+  JsonArray results = doc.as<JsonArray>();
+  for (JsonVariant element : results) {
+    if (outCount >= maxJobs) {
+      break;
+    }
+    if (!element.containsKey("document")) {
+      continue;
+    }
+    FirestoreJob job;
+    parseFirestoreJob(element["document"].as<JsonObjectConst>(), job);
+    if (job.status != "pending" || job.kind != "otp") {
+      continue;
+    }
+    outJobs[outCount++] = job;
+  }
+
+  error = String();
+  return true;
 }
 
 bool FirebaseManager::claimSmsJob(const FirestoreJob &job) {
