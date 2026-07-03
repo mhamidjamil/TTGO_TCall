@@ -194,6 +194,22 @@ String safeFirestoreDocumentId(const String &value) {
   return id;
 }
 
+// Render an epoch as a human-readable Pakistan-time string, or "" for 0.
+// Written next to the *Epoch fields in RTDB so the operator can read them.
+String formatPktHuman(unsigned long epochSeconds) {
+  if (epochSeconds < 1000000000UL) {
+    return String("");
+  }
+  time_t pkt = (time_t)epochSeconds + 5 * 60 * 60;
+  struct tm timeInfo;
+  if (!gmtime_r(&pkt, &timeInfo)) {
+    return String("");
+  }
+  char buffer[28];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M PKT", &timeInfo);
+  return String(buffer);
+}
+
 // Percent-encode a document ID for use as a URL path segment. Google's HTTP
 // front-end decodes a raw '+' in the path as a SPACE, so an unencoded
 // PATCH .../sms_jobs/+923001234567 writes to a DIFFERENT (auto-created)
@@ -830,6 +846,10 @@ bool FirebaseManager::pushPackageState(const PackageState &state) {
   doc["safetyMarginDays"] = state.safetyMarginDays;
   doc["matchTokens"] = state.matchTokens;
   doc["lastMessage"] = state.lastMessage;
+  // Human-readable mirrors of the *Epoch fields (PKT) — display only, the device
+  // reads back only the epochs. Edit expiryEpoch (seconds) to change the expiry.
+  doc["subscribedHuman"] = formatPktHuman(state.subscribedEpoch);
+  doc["expiryHuman"] = formatPktHuman(state.expiryEpoch);
   doc["updatedAtMs"] = millis();
 
   String payload;

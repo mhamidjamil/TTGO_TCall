@@ -1102,6 +1102,11 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
 
   refreshBlockLists();
 
+  // Re-read the package node too, so manual RTDB edits (e.g. setting
+  // expiryEpoch by hand) apply within one sync cycle instead of on reboot.
+  // No-op before packageManager.begin() has run (null firebase pointer inside).
+  packageManager.refreshFromCloud(currentEpochSeconds());
+
   // Apply dashboard-managed WiFi pairs. Treat the cloud values as the desired
   // state; persist to LittleFS only when something actually changed and at least
   // one SSID is set, so the empty default never wipes locally stored networks.

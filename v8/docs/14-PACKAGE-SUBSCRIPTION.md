@@ -101,7 +101,9 @@ problem). Calls are never gated by the package.
 {
   "known": true,
   "subscribedEpoch": 1719792000,
+  "subscribedHuman": "2024-07-01 05:00 PKT",
   "expiryEpoch": 1722297600,
+  "expiryHuman": "2024-07-30 05:00 PKT",
   "validityDays": 30,
   "smsAllowance": 10000,
   "safetyMarginDays": 1,
@@ -110,9 +112,41 @@ problem). Calls are never gated by the package.
 }
 ```
 
+### Field reference (what each field means)
+
+| Field | Meaning | Editable? |
+|---|---|---|
+| `known` | `true` once a subscription has been recorded. `false` = unknown → sending **allowed** (fail-open) | yes |
+| `subscribedEpoch` | When the subscription SMS was detected (epoch **seconds**, UTC) | informational |
+| `subscribedHuman` | Human-readable mirror of `subscribedEpoch` (PKT). Display only — device never reads it | no (auto-written) |
+| `expiryEpoch` | **The blocking deadline** (epoch seconds, UTC). Sending stops once `now > expiryEpoch` | **yes — edit this to set expiry manually** |
+| `expiryHuman` | Human-readable mirror of `expiryEpoch` (PKT). Display only | no (auto-written) |
+| `validityDays` | Days extracted from the subscription SMS (e.g. 30) | informational |
+| `smsAllowance` | SMS count extracted from the SMS (e.g. 10000) | informational |
+| `safetyMarginDays` | Subtracted from validity when computing expiry (default 1) | yes |
+| `matchTokens` | Comma-separated tokens that must ALL appear for an SMS to count as a subscription | yes |
+| `lastMessage` | First 160 chars of the last matched subscription SMS | informational |
+
 On boot the device reads this node; if missing it is **created/healed** with the
-compile-time defaults and a serial log is printed. `matchTokens` and
-`safetyMarginDays` are read from here, so both are tunable from the cloud.
+compile-time defaults and a serial log is printed. The device also **re-reads the
+node on every runtime sync (~5 min)**, so manual edits apply without a reboot —
+and it confirms a changed expiry with an ntfy notification.
+
+### Manually setting the expiry (example: valid until 29 July 2026)
+
+Two ways:
+
+1. **Edit RTDB directly** (applies within ≤5 min, confirmed via ntfy):
+   - `/ttgo_tcall/package/expiryEpoch` → `1785351599` (= 2026-07-29 23:59:59 PKT)
+   - `/ttgo_tcall/package/known` → `true`
+   - The device rewrites `expiryHuman` on its next push so you can double-check the date.
+   - To compute an epoch for any PKT date: epoch = UTC seconds; PKT = UTC+5, so
+     use any epoch converter with the UTC time 5 hours *earlier* than your PKT target.
+2. **Serial command**: `package set <days>` — sets validity `<days>` from *now*
+   (margin subtracted). E.g. on 3 July, `package set 27` → expires 29 July.
+
+When the next subscription SMS arrives and the `matchTokens` match, the device
+**auto-renews**: recomputes `expiryEpoch`/`expiryHuman` and pushes the fresh state.
 
 ---
 

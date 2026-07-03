@@ -12,6 +12,21 @@ bool hasRealTime(unsigned long nowEpoch) {
   return nowEpoch > kRealTimeThreshold;
 }
 
+// Epoch → "YYYY-MM-DD HH:MM PKT" (or "unset" when 0/invalid) for status output.
+String pktDate(unsigned long epochSeconds) {
+  if (epochSeconds < kRealTimeThreshold) {
+    return String("unset");
+  }
+  time_t pkt = (time_t)epochSeconds + 5 * 60 * 60;
+  struct tm timeInfo;
+  if (!gmtime_r(&pkt, &timeInfo)) {
+    return String("unset");
+  }
+  char buffer[28];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M PKT", &timeInfo);
+  return String(buffer);
+}
+
 // Read the integer immediately preceding `keyword` in `lower` (a lowercased
 // copy of the message), skipping spaces. Handles "30day", "30 day", "30days".
 // Returns -1 when the keyword or a preceding number is absent.
@@ -102,6 +117,43 @@ PackageParseResult PackageManager::parse(const String &text) const {
                    (result.tokensMatched == result.tokensTotal) &&
                    (result.validityDays > 0);
   return result;
+}
+
+bool PackageManager::refreshFromCloud(unsigned long nowEpoch) {
+  if (firebaseManager == nullptr || !firebaseManager->isReady()) {
+    return false;
+  }
+  PackageState fresh;
+  if (!firebaseManager->fetchPackageState(fresh, PackageManager::kDefaultTokens, PackageManager::kDefaultSafetyMarginDays)) {
+    Serial.print("[PACKAGE] cloud refresh failed: ");
+    Serial.println(firebaseManager->lastError());
+    return false;
+  }
+
+  bool expiryChanged = fresh.expiryEpoch != state.expiryEpoch;
+  bool tokensChanged = fresh.matchTokens != state.matchTokens;
+  state = fresh;
+  loaded = true;
+
+  if (expiryChanged) {
+    // A different expiry (manual RTDB edit or another writer) — re-arm the
+    // reminder and confirm to the operator that the device picked it up.
+    reminderSentForExpiry = 0;
+    String detail = state.known
+                        ? (String("expiry updated; daysLeft=") + String(daysRemaining(nowEpoch)) +
+                           " allowed=" + (isSmsAllowed(nowEpoch) ? "yes" : "no"))
+                        : String("package state cleared (unknown; sending allowed)");
+    Serial.print("[PACKAGE] ");
+    Serial.println(detail);
+    if (ntfyManager != nullptr) {
+      ntfyManager->notify("package updated", detail);
+    }
+  }
+  if (tokensChanged) {
+    Serial.print("[PACKAGE] matchTokens updated from cloud: ");
+    Serial.println(state.matchTokens);
+  }
+  return true;
 }
 
 bool PackageManager::handleIncomingSms(const String &text, unsigned long nowEpoch) {
@@ -220,6 +272,7 @@ String PackageManager::statusLine(unsigned long nowEpoch) const {
   return String("package: validity=") + String(state.validityDays) + "d" +
          " sms=" + String(state.smsAllowance) +
          " daysLeft=" + leftStr +
+         " expires=" + pktDate(state.expiryEpoch) +
          " allowed=" + (isSmsAllowed(nowEpoch) ? "yes" : "no") +
          " margin=" + String(state.safetyMarginDays) + "d";
 }

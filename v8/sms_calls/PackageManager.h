@@ -41,6 +41,9 @@ public:
   // Inspect an incoming SMS; if it is a subscription confirmation, update state,
   // persist to Firebase, and ntfy the operator. Returns true if handled.
   bool handleIncomingSms(const String &text, unsigned long nowEpoch);
+  // Re-read /ttgo_tcall/package from RTDB so manual cloud edits (e.g. setting
+  // expiryEpoch by hand) apply without a reboot. Call on the periodic sync.
+  bool refreshFromCloud(unsigned long nowEpoch);
   // Periodic tick: sends a one-time ntfy reminder ~reminderDays before expiry.
   void loop(unsigned long nowEpoch);
   // Manual override (serial/dashboard): set validity in days from now.
