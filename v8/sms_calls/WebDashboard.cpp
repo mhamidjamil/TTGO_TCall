@@ -232,12 +232,24 @@ h1,h2{margin-top:24px}
   });
 
   server->begin();
+
+  // Serve HTTP from a dedicated task on core 0 so the dashboard stays instant
+  // while the main loop (core 1) is deep in TLS or modem AT waits. 12 KB stack:
+  // handlers build JSON Strings and /api/notify-test runs a full TLS request.
+  if (taskHandle == nullptr) {
+    xTaskCreatePinnedToCore(WebDashboard::serverTask, "websrv", 12288, this, 2,
+                            reinterpret_cast<TaskHandle_t *>(&taskHandle), 0);
+  }
   return true;
 }
 
-void WebDashboard::loop() {
-  if (server != nullptr) {
-    server->handleClient();
+void WebDashboard::serverTask(void *param) {
+  (void)param;
+  for (;;) {
+    if (server != nullptr) {
+      server->handleClient();
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
 

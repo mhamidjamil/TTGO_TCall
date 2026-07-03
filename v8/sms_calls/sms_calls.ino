@@ -1586,7 +1586,8 @@ void loop() {
   callManager.loop();
   handleModemEvents();
   packageManager.loop(currentEpochSeconds());
-  webDashboard.loop();
+  // Web server runs on its own FreeRTOS task (started in webDashboard.begin());
+  // only the runtime-sync request flag is consumed from this loop.
   if (webDashboard.consumeRuntimeSyncRequest()) {
     syncRuntimeSettingsFromCloud("dashboard");
   }

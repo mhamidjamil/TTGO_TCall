@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include "ConfigManager.h"
 
 class WiFiManager {
@@ -20,10 +22,15 @@ public:
 private:
   bool connectStation(const V8Config &config, const ConfigManager &cm);
   void startAccessPoint(const V8Config &config);
+  void setConnectedSsid(const String &ssid);
 
   bool stationConnected = false;
   bool accessPointActive = false;
+  // connectedSsid is a heap String written during (re)connects on the main loop
+  // and read by the web-server task — guard it so a mid-reallocation read from
+  // the other core can't dereference a freed buffer.
   String connectedSsid;
+  SemaphoreHandle_t ssidLock = nullptr;
 };
 
 #endif

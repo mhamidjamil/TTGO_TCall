@@ -2,6 +2,8 @@
 #define V8_CONFIG_MANAGER_H
 
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 struct WifiNetwork {
   char ssid[64];
@@ -90,6 +92,10 @@ private:
   V8Config config;
   WifiNetwork wifiNetworks[kMaxWifiNetworks];
   int wifiNetworkCount = 0;
+  // Guards wifiNetworks[]/wifiNetworkCount and LittleFS config writes. The web
+  // dashboard mutates the network list from its own FreeRTOS task while the main
+  // loop reads it during (re)connects — public entry points take this lock.
+  SemaphoreHandle_t lock = nullptr;
 };
 
 #endif

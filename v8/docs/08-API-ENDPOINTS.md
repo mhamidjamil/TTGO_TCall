@@ -1,5 +1,15 @@
 # v8 API Endpoints
 
+## Threading
+
+The web server runs on its **own FreeRTOS task** (core 0, spawned by
+`WebDashboard::begin()`), so the dashboard responds instantly even while the
+main loop is blocked in multi-second TLS or modem AT operations. Shared state
+touched by HTTP handlers is mutex-guarded (`ConfigManager` WiFi list + LittleFS
+writes, `WiFiManager::connectedSsid`). `/api/notify-test` performs its TLS
+request on the web task — a second concurrent TLS session is heap-heavy, so it
+is operator-triggered only.
+
 ## Active Surface
 - `GET /` redirects to `/dashboard.html`.
 - `GET /dashboard.html`, `GET /dashboard.css`, `GET /dashboard.js`, `GET /version.txt` serve LittleFS assets.

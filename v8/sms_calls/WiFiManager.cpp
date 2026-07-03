@@ -3,10 +3,13 @@
 #include <WiFi.h>
 
 bool WiFiManager::begin(const ConfigManager &configManager) {
+  if (ssidLock == nullptr) {
+    ssidLock = xSemaphoreCreateMutex();
+  }
   const V8Config &config = configManager.get();
   stationConnected = false;
   accessPointActive = false;
-  connectedSsid = String();
+  setConnectedSsid(String());
 
   if (config.wifiEnabled) {
     stationConnected = connectStation(config, configManager);
@@ -43,7 +46,7 @@ bool WiFiManager::connectStation(const V8Config &config, const ConfigManager &cm
       Serial.print(origin);
       Serial.print(" ssid=");
       Serial.println(ssid);
-      connectedSsid = String(ssid);
+      setConnectedSsid(String(ssid));
       return true;
     }
 
@@ -78,7 +81,7 @@ bool WiFiManager::connectStation(const V8Config &config, const ConfigManager &cm
   }
 
   Serial.println("[WIFI] all station networks failed");
-  connectedSsid = String();
+  setConnectedSsid(String());
   return false;
 }
 
@@ -138,9 +141,26 @@ IPAddress WiFiManager::localIp() const {
   return IPAddress(0, 0, 0, 0);
 }
 
+void WiFiManager::setConnectedSsid(const String &ssid) {
+  if (ssidLock != nullptr) {
+    xSemaphoreTake(ssidLock, portMAX_DELAY);
+  }
+  connectedSsid = ssid;
+  if (ssidLock != nullptr) {
+    xSemaphoreGive(ssidLock);
+  }
+}
+
 String WiFiManager::getConnectedSsid() const {
   if (!stationConnected) {
     return String();
   }
-  return connectedSsid;
+  if (ssidLock != nullptr) {
+    xSemaphoreTake(ssidLock, portMAX_DELAY);
+  }
+  String copy = connectedSsid;
+  if (ssidLock != nullptr) {
+    xSemaphoreGive(ssidLock);
+  }
+  return copy;
 }

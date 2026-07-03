@@ -38,6 +38,9 @@ static void copyText(char *target, size_t targetSize, const char *source) {
 }
 
 void ConfigManager::begin() {
+  if (lock == nullptr) {
+    lock = xSemaphoreCreateMutex();
+  }
   if (!LittleFS.begin(true)) {
     LittleFS.format();
     LittleFS.begin(true);
@@ -51,7 +54,10 @@ void ConfigManager::begin() {
 }
 
 bool ConfigManager::save() {
-  return saveToLittleFS();
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = saveToLittleFS();
+  xSemaphoreGive(lock);
+  return ok;
 }
 
 const V8Config &ConfigManager::get() const {
@@ -60,11 +66,14 @@ const V8Config &ConfigManager::get() const {
 
 bool ConfigManager::updateUserWifi(const String &ssid1, const String &pass1,
                                    const String &ssid2, const String &pass2) {
+  xSemaphoreTake(lock, portMAX_DELAY);
   copyText(config.userWifiSsid1, sizeof(config.userWifiSsid1), ssid1.c_str());
   copyText(config.userWifiPass1, sizeof(config.userWifiPass1), pass1.c_str());
   copyText(config.userWifiSsid2, sizeof(config.userWifiSsid2), ssid2.c_str());
   copyText(config.userWifiPass2, sizeof(config.userWifiPass2), pass2.c_str());
-  return saveToLittleFS();
+  bool ok = saveToLittleFS();
+  xSemaphoreGive(lock);
+  return ok;
 }
 
 void ConfigManager::loadDefaults() {
@@ -306,61 +315,80 @@ bool ConfigManager::addWifiNetwork(const String &ssid, const String &pass) {
   if (ssid.length() == 0) {
     return false;
   }
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = false;
+  bool updated = false;
   for (int i = 0; i < wifiNetworkCount; i++) {
     if (String(wifiNetworks[i].ssid) == ssid) {
       strlcpy(wifiNetworks[i].pass, pass.c_str(), sizeof(wifiNetworks[i].pass));
-      return saveWifiNetworks();
+      ok = saveWifiNetworks();
+      updated = true;
+      break;
     }
   }
-  if (wifiNetworkCount >= kMaxWifiNetworks) {
-    return false;
+  if (!updated && wifiNetworkCount < kMaxWifiNetworks) {
+    strlcpy(wifiNetworks[wifiNetworkCount].ssid, ssid.c_str(), sizeof(wifiNetworks[wifiNetworkCount].ssid));
+    strlcpy(wifiNetworks[wifiNetworkCount].pass, pass.c_str(), sizeof(wifiNetworks[wifiNetworkCount].pass));
+    wifiNetworkCount++;
+    ok = saveWifiNetworks();
   }
-  strlcpy(wifiNetworks[wifiNetworkCount].ssid, ssid.c_str(), sizeof(wifiNetworks[wifiNetworkCount].ssid));
-  strlcpy(wifiNetworks[wifiNetworkCount].pass, pass.c_str(), sizeof(wifiNetworks[wifiNetworkCount].pass));
-  wifiNetworkCount++;
-  return saveWifiNetworks();
+  xSemaphoreGive(lock);
+  return ok;
 }
 
 bool ConfigManager::removeWifiNetwork(const String &ssid) {
+  xSemaphoreTake(lock, portMAX_DELAY);
+  bool ok = false;
   for (int i = 0; i < wifiNetworkCount; i++) {
     if (String(wifiNetworks[i].ssid) == ssid) {
       for (int j = i; j < wifiNetworkCount - 1; j++) {
         wifiNetworks[j] = wifiNetworks[j + 1];
       }
       wifiNetworkCount--;
-      return saveWifiNetworks();
+      ok = saveWifiNetworks();
+      break;
     }
   }
-  return false;
+  xSemaphoreGive(lock);
+  return ok;
 }
 
 bool ConfigManager::clearWifiNetworks() {
+  xSemaphoreTake(lock, portMAX_DELAY);
   wifiNetworkCount = 0;
   if (LittleFS.exists(kWifiNetPath)) {
     LittleFS.remove(kWifiNetPath);
   }
+  xSemaphoreGive(lock);
   return true;
 }
 
 int ConfigManager::getWifiNetworkCount() const {
-  return wifiNetworkCount;
+  xSemaphoreTake(lock, portMAX_DELAY);
+  int count = wifiNetworkCount;
+  xSemaphoreGive(lock);
+  return count;
 }
 
 WifiNetwork ConfigManager::getWifiNetwork(int index) const {
-  if (index < 0 || index >= wifiNetworkCount) {
-    WifiNetwork empty = {};
-    return empty;
+  WifiNetwork result = {};
+  xSemaphoreTake(lock, portMAX_DELAY);
+  if (index >= 0 && index < wifiNetworkCount) {
+    result = wifiNetworks[index];
   }
-  return wifiNetworks[index];
+  xSemaphoreGive(lock);
+  return result;
 }
 
 String ConfigManager::getWifiNetworksJson() const {
   DynamicJsonDocument doc(1024);
   JsonArray arr = doc.to<JsonArray>();
+  xSemaphoreTake(lock, portMAX_DELAY);
   for (int i = 0; i < wifiNetworkCount; i++) {
     JsonObject entry = arr.createNestedObject();
     entry["ssid"] = wifiNetworks[i].ssid;
   }
+  xSemaphoreGive(lock);
   String json;
   serializeJson(doc, json);
   return json;
