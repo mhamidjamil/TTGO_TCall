@@ -95,6 +95,18 @@ static unsigned long nextSmsSendAtMs = 0;
 static unsigned long smsBatchStartedMs = 0;
 static const unsigned long smsBatchRescueMs = 5UL * 60UL * 1000UL;
 static bool rateLimitAlerted = false;
+// Endless-loop guard: remember the last sends (job id + message hash). If a job
+// we already sent reappears as pending with the SAME text within the window, its
+// status update must have failed to land — mark it failed instead of re-sending,
+// so a broken write path can never blast the same SMS in a loop again.
+struct RecentSend {
+  unsigned long hash;
+  unsigned long sentAtMs;
+};
+static const int kRecentSendMax = 10;
+static RecentSend recentSends[kRecentSendMax];
+static int recentSendNext = 0;
+static const unsigned long duplicateSendWindowMs = 15UL * 60UL * 1000UL;
 static String modemLineBuffer;
 static bool awaitingSmsBody = false;
 static String pendingSmsNumber;
@@ -686,6 +698,35 @@ static unsigned long randomSendDelayMs() {
   return 5000UL + (unsigned long)random(0, 25001);
 }
 
+// djb2 over "id|message" — cheap fingerprint for the duplicate-send guard.
+static unsigned long sendFingerprint(const String &id, const String &message) {
+  unsigned long hash = 5381UL;
+  for (size_t i = 0; i < id.length(); ++i) {
+    hash = ((hash << 5) + hash) + (unsigned char)id.charAt(i);
+  }
+  hash = ((hash << 5) + hash) + (unsigned char)'|';
+  for (size_t i = 0; i < message.length(); ++i) {
+    hash = ((hash << 5) + hash) + (unsigned char)message.charAt(i);
+  }
+  return hash;
+}
+
+static bool wasRecentlySent(unsigned long fingerprint) {
+  for (int i = 0; i < kRecentSendMax; ++i) {
+    if (recentSends[i].hash == fingerprint && recentSends[i].sentAtMs != 0 &&
+        millis() - recentSends[i].sentAtMs < duplicateSendWindowMs) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static void recordSent(unsigned long fingerprint) {
+  recentSends[recentSendNext].hash = fingerprint;
+  recentSends[recentSendNext].sentAtMs = millis();
+  recentSendNext = (recentSendNext + 1) % kRecentSendMax;
+}
+
 // Fetch + process one pending CALL job per poll (calls are low volume and don't
 // need the anti-ban pacing that bulk SMS does).
 static bool processCallJob() {
@@ -819,6 +860,13 @@ static void driveSmsBatch() {
   } else if (!packageManager.isSmsAllowed(currentEpochSeconds())) {
     pushLog("sms failed", String("[") + progress + "] " + normalizedNumber + " package expired");
     firebaseManager.updateSmsJobStatus(job, "failed", "package_expired");
+  } else if (wasRecentlySent(sendFingerprint(job.id, job.message))) {
+    // We already sent this exact job recently, yet it is pending again — its
+    // status update must have failed to land (e.g. mis-routed doc id). Fail it
+    // instead of re-sending so a broken write path can never loop the same SMS.
+    pushLog("sms loop guard", String("[") + progress + "] " + normalizedNumber +
+                                  " already sent <15min ago but still pending — marked failed (duplicate_guard)");
+    firebaseManager.updateSmsJobStatus(job, "failed", "duplicate_guard");
   } else {
     String reason;
     if (!rateLimitManager.canSend(reason)) {
@@ -841,9 +889,12 @@ static void driveSmsBatch() {
     bool sent = smsManager.sendMessage(normalizedNumber, job.message);
     if (sent) {
       didSend = true;
+      recordSent(sendFingerprint(job.id, job.message));
       rateLimitManager.recordSend();
       firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
-      firebaseManager.updateSmsJobStatus(job, "sent", String());
+      if (!firebaseManager.updateSmsJobStatus(job, "sent", String())) {
+        pushLog("sms error", String("status write FAILED for ") + job.id + ": " + firebaseManager.lastError());
+      }
       firebaseManager.incrementDeviceCounter("totalSmsSent");
       pushLog("sms sent", String("[") + progress + "] sent to " + normalizedNumber);
     } else {

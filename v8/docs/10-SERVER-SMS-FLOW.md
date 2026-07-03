@@ -38,6 +38,8 @@ Create/overwrite `sim_module/sms/sms_jobs/{number}`:
 ```
 
 - `phone_number` should be canonical `+<countrycode><number>`. The device normalizes anyway, but the **document id must match** what the device looks up, so use the canonical number as the id.
+- **Canonical format is E.164 WITH the leading `+`** (`+923001234567`) for both the doc id and `phone_number` — the app and the device must agree on this. The device percent-encodes the `+` (`%2B`) in every REST URL; an unencoded `+` is decoded as a *space* by Google's front-end, which used to route status updates to a ghost document and left the real job `pending` forever (endless resend loop — fixed).
+- Device write-safety: all job claims/status updates carry a `currentDocument.exists=true` precondition (the device can never accidentally *create* a job doc), and a device-side loop guard marks a job `failed`/`duplicate_guard` if the exact same id+message was already sent within the last 15 minutes but reappears as pending.
 - `enque_by` is free-form and preserved untouched — use it to link a future reply back to the originating app/user.
 - Required: `message`, `status: "pending"`.
 

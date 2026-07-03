@@ -194,6 +194,31 @@ String safeFirestoreDocumentId(const String &value) {
   return id;
 }
 
+// Percent-encode a document ID for use as a URL path segment. Google's HTTP
+// front-end decodes a raw '+' in the path as a SPACE, so an unencoded
+// PATCH .../sms_jobs/+923001234567 writes to a DIFFERENT (auto-created)
+// document " 923001234567" — the original job then stays pending forever and
+// the device re-sends it in an endless loop. Encoding '+' as %2B routes every
+// claim/update to the real document.
+String urlEncodeDocId(const String &raw) {
+  static const char *hexDigits = "0123456789ABCDEF";
+  String out;
+  out.reserve(raw.length() + 4);
+  for (size_t i = 0; i < raw.length(); ++i) {
+    char c = raw.charAt(i);
+    bool unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                      (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
+    if (unreserved) {
+      out += c;
+    } else {
+      out += '%';
+      out += hexDigits[((unsigned char)c >> 4) & 0xF];
+      out += hexDigits[(unsigned char)c & 0xF];
+    }
+  }
+  return out;
+}
+
 void appendFirestoreArrayStrings(const JsonVariantConst &field, String *numbers, size_t maxNumbers, size_t &numberCount) {
   JsonArrayConst values = field["arrayValue"]["values"].as<JsonArrayConst>();
   for (JsonVariantConst value : values) {
@@ -1102,8 +1127,12 @@ bool FirebaseManager::claimJob(const String &collectionPath, const FirestoreJob 
 
   String claimResponse;
   int claimStatus = 0;
-  String claimUrl = buildFirestoreUrl(collectionPath + "/" + job.id) +
-                    "?updateMask.fieldPaths=status"
+  // exists=true precondition: a claim must UPDATE the queued job, never create a
+  // new document. If the id were ever mis-routed again, Firestore now rejects the
+  // write (409) instead of silently spawning a ghost job.
+  String claimUrl = buildFirestoreUrl(collectionPath + "/" + urlEncodeDocId(job.id)) +
+                    "?currentDocument.exists=true"
+                    "&updateMask.fieldPaths=status"
                     "&updateMask.fieldPaths=processing_started_at"
                     "&updateMask.fieldPaths=processing_started_epoch";
   if (!httpPatchBearerJson(claimUrl, payload, claimResponse, claimStatus) ||
@@ -1186,8 +1215,9 @@ bool FirebaseManager::updateSmsJobStatus(const FirestoreJob &job, const String &
 
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(String(kSmsJobsPath) + "/" + job.id) +
-               "?updateMask.fieldPaths=status"
+  String url = buildFirestoreUrl(String(kSmsJobsPath) + "/" + urlEncodeDocId(job.id)) +
+               "?currentDocument.exists=true"
+               "&updateMask.fieldPaths=status"
                "&updateMask.fieldPaths=completed_at"
                "&updateMask.fieldPaths=completed_epoch"
                "&updateMask.fieldPaths=error";
@@ -1227,8 +1257,9 @@ bool FirebaseManager::updateCallJobStatus(const FirestoreJob &job,
 
   String response;
   int statusCode = 0;
-  String url = buildFirestoreUrl(String(kCallJobsPath) + "/" + job.id) +
-               "?updateMask.fieldPaths=status"
+  String url = buildFirestoreUrl(String(kCallJobsPath) + "/" + urlEncodeDocId(job.id)) +
+               "?currentDocument.exists=true"
+               "&updateMask.fieldPaths=status"
                "&updateMask.fieldPaths=completed_at"
                "&updateMask.fieldPaths=completed_epoch"
                "&updateMask.fieldPaths=user_picked"
@@ -1259,7 +1290,7 @@ bool FirebaseManager::pushSmsReceived(const String &number,
   }
 
   String documentId = safeFirestoreDocumentId(number);
-  String documentPath = String(kSmsReceivedPath) + "/" + documentId;
+  String documentPath = String(kSmsReceivedPath) + "/" + urlEncodeDocId(documentId);
 
   DynamicJsonDocument doc(1792);
   JsonObject fields = doc.createNestedObject("fields");
@@ -1301,7 +1332,7 @@ bool FirebaseManager::pushCallReceived(const String &number,
   }
 
   String documentId = safeFirestoreDocumentId(number);
-  String documentPath = String(kCallReceivedPath) + "/" + documentId;
+  String documentPath = String(kCallReceivedPath) + "/" + urlEncodeDocId(documentId);
 
   DynamicJsonDocument doc(1024);
   JsonObject fields = doc.createNestedObject("fields");
@@ -1459,8 +1490,9 @@ bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
 
       String writeResponse;
       int writeStatus = 0;
-      String url = buildFirestoreUrl(String(collections[i]) + "/" + jobId) +
-                   "?updateMask.fieldPaths=status"
+      String url = buildFirestoreUrl(String(collections[i]) + "/" + urlEncodeDocId(jobId)) +
+                   "?currentDocument.exists=true"
+                   "&updateMask.fieldPaths=status"
                    "&updateMask.fieldPaths=error";
       if (!httpPatchBearerJson(url, payload, writeResponse, writeStatus)) {
         return false;
