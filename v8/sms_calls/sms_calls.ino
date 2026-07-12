@@ -68,6 +68,8 @@ static String startupBootTime;
 static String startupIp;
 static bool lastTelemetryPushOk = false;
 static String lastTelemetryPushMessage = "not_attempted";
+// wifi mode + IP of the last status we wrote; empty forces the next push.
+static String lastStatusFingerprint;
 // Minimum gap between telemetry/ThingSpeak pushes. We never push more often than
 // this, no matter how low intervalOfDhtSeconds is set — avoids spamming Firebase
 // and ThingSpeak every few seconds. Adjust here if a faster cadence is ever needed.
@@ -79,15 +81,26 @@ static unsigned long thingSpeakIntervalMs = kMinTelemetryIntervalMs;
 // reboot. (There is no 30 s sync job; polling for SMS/call JOBS is separate and
 // runs on pollingIntervalSeconds.)
 static const unsigned long runtimeSettingsSyncIntervalMs = 5UL * 60UL * 1000UL;
-static const unsigned long heartbeatIntervalMs = 60UL * 1000UL;
-static const unsigned long recoveryIntervalMs = 60UL * 1000UL;
+// Heartbeat and stuck-job recovery both ran once a minute, which is 2880 Firestore
+// operations a day for data that barely moves. Five minutes is still well inside
+// the dashboard's online window and the 5-minute stuck-job threshold.
+static const unsigned long heartbeatIntervalMs = 5UL * 60UL * 1000UL;
+static const unsigned long recoveryIntervalMs = 5UL * 60UL * 1000UL;
 static const unsigned long stuckJobAgeSeconds = 5UL * 60UL;
 static const unsigned long missedCallRingMs = 8000UL;
 static const bool missedCallMode = true;
+// Mirror the DHT reading into the Realtime Database. Off unless the operator
+// turns it on: the reading already reaches ThingSpeak, the OLED and the local
+// dashboard, so the per-minute Firebase write bought nothing.
+static bool pushDhtToFirebase = false;
 static bool showFirebasePushLogs = true;
 static bool showThingSpeakPushLogs = true;
 static bool jobLogs = true;
 static BlockLists blockLists;
+// The operator's on/off switch on sim_module/device, cached from the same read
+// that refreshes the block lists. Jobs are refused until it has been read once.
+static bool gatewayActive = true;
+static bool gatewayStatusKnown = false;
 static unsigned long lastBlockListSync = 0;
 static const unsigned long blockListSyncIntervalMs = 60UL * 1000UL;
 // SMS batch processing: grab up to 5 pending jobs, then send one at a time with a
@@ -766,6 +779,28 @@ static void pushCounterSnapshot() {
   }
 }
 
+// Mirror the device status to Firebase only when it actually differs from what
+// we last wrote. Nothing in this node moves between reboots and network changes,
+// so the old once-a-minute rewrite was ~1400 pointless writes a day.
+static void pushStatusIfChanged() {
+  if (!firebaseManager.isReady()) {
+    return;
+  }
+  String ipAddress = wifiManager.localIp().toString();
+  String fingerprint = wifiManager.modeName() + String("|") + ipAddress;
+  if (fingerprint == lastStatusFingerprint) {
+    return;
+  }
+  if (firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), ipAddress, true)) {
+    lastStatusFingerprint = fingerprint;
+    if (showFirebasePushLogs) {
+      Logger::info("FIREBASE", "Status pushed");
+    }
+  } else {
+    Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
+  }
+}
+
 // Fetch + process one pending CALL job per poll (calls are low volume and don't
 // need the anti-ban pacing that bulk SMS does).
 static bool processCallJob() {
@@ -775,14 +810,13 @@ static bool processCallJob() {
   }
   pushLog("call processing", String("dialing ") + displayPhoneNumber(callJob.phoneNumber));
   String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
-  bool active = true;
   if (normalizedNumber.length() == 0) {
     pushLog("call failed", String(callJob.id) + " invalid number");
     firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "number_invalid");
-  } else if (!firebaseManager.fetchGatewayActive(active)) {
+  } else if (!gatewayStatusKnown) {
     pushLog("call failed", normalizedNumber + " device status unavailable");
     firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
-  } else if (!active) {
+  } else if (!gatewayActive) {
     pushLog("call blocked", normalizedNumber + " device inactive");
     firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
   } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingCallers, blockLists.outgoingCallerCount)) {
@@ -946,15 +980,14 @@ static void driveSmsBatch() {
   FirestoreJob &job = smsBatch[smsBatchIndex];
   String normalizedNumber = normalizePhoneNumber(job.phoneNumber);
   String progress = String(smsBatchIndex + 1) + "/" + String(smsBatchCount);
-  bool active = true;
   bool didSend = false;
   if (normalizedNumber.length() == 0) {
     pushLog("sms failed", String("[") + progress + "] " + job.id + " invalid number");
     firebaseManager.updateSmsJobStatus(job, "failed", "number_invalid");
-  } else if (!firebaseManager.fetchGatewayActive(active)) {
+  } else if (!gatewayStatusKnown) {
     pushLog("sms failed", String("[") + progress + "] " + normalizedNumber + " device status unavailable");
     firebaseManager.updateSmsJobStatus(job, "failed", "device_status_unavailable");
-  } else if (!active) {
+  } else if (!gatewayActive) {
     pushLog("sms blocked", String("[") + progress + "] " + normalizedNumber + " device inactive");
     firebaseManager.updateSmsJobStatus(job, "blocked", "device_inactive");
   } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingSms, blockLists.outgoingSmsCount)) {
@@ -1104,16 +1137,19 @@ static void printRuntimeSettingChange(const char *name, const String &oldValue, 
   Serial.println();
 }
 
-// Pull the four block-list arrays from sim_module/device into RAM. Called on a
-// short timer and on every settings sync so blocking a number in Firestore
-// takes effect on the device within ~1 minute (and instantly via Sync).
+// Pull the four block-list arrays AND the gateway active switch from
+// sim_module/device into RAM. Called on a short timer and on every settings sync
+// so blocking a number (or switching the gateway off) in Firestore takes effect
+// on the device within ~1 minute, and instantly via Sync. One read serves both:
+// job processing used to re-read this same document once per job.
 static void refreshBlockLists() {
   if (!firebaseManager.isReady()) {
     return;
   }
   size_t oldIn = blockLists.incomingCallerCount + blockLists.incomingSmsCount;
   size_t oldOut = blockLists.outgoingCallerCount + blockLists.outgoingSmsCount;
-  if (firebaseManager.fetchBlockLists(blockLists)) {
+  bool active = true;
+  if (firebaseManager.fetchBlockLists(blockLists, active)) {
     size_t newIn = blockLists.incomingCallerCount + blockLists.incomingSmsCount;
     size_t newOut = blockLists.outgoingCallerCount + blockLists.outgoingSmsCount;
     if (oldIn != newIn || oldOut != newOut) {
@@ -1126,6 +1162,12 @@ static void refreshBlockLists() {
       Serial.print(" outgoingSms=");
       Serial.println(blockLists.outgoingSmsCount);
     }
+    if (!gatewayStatusKnown || active != gatewayActive) {
+      Serial.print("[BLOCK] gateway active=");
+      Serial.println(active ? "yes" : "no");
+    }
+    gatewayActive = active;
+    gatewayStatusKnown = true;
   } else {
     Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
   }
@@ -1149,6 +1191,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   }
 
   unsigned long oldIntervalSeconds = telemetryIntervalMs / 1000UL;
+  bool oldPushDhtToFirebase = pushDhtToFirebase;
   bool oldShowFirebasePushLogs = showFirebasePushLogs;
   bool oldShowThingSpeakPushLogs = showThingSpeakPushLogs;
   bool oldJobLogs = jobLogs;
@@ -1165,6 +1208,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
     telemetryIntervalMs = kMinTelemetryIntervalMs;
   }
   thingSpeakIntervalMs = telemetryIntervalMs;
+  pushDhtToFirebase = settings.pushDhtToFirebase;
   showFirebasePushLogs = settings.showFirebasePushLogs;
   showThingSpeakPushLogs = settings.showThingSpeakPushLogs;
   jobLogs = settings.jobLogs;
@@ -1181,6 +1225,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
 
   if (settings.createdIntervalOfDht) {
     Serial.println("[SYNC] created or healed Firebase variable: intervalOfDhtSeconds");
+  }
+  if (settings.createdPushDhtToFirebase) {
+    Serial.println("[SYNC] created or healed Firebase variable: pushDhtToFirebase (default false)");
   }
   if (settings.createdShowFirebasePushLogs) {
     Serial.println("[SYNC] created or healed Firebase variable: showFirebasePushLogs");
@@ -1212,6 +1259,9 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
 
   if (oldIntervalSeconds != settings.intervalOfDhtSeconds) {
     printRuntimeSettingChange("intervalOfDhtSeconds", String(oldIntervalSeconds), String(settings.intervalOfDhtSeconds));
+  }
+  if (oldPushDhtToFirebase != pushDhtToFirebase) {
+    printRuntimeSettingChange("pushDhtToFirebase", oldPushDhtToFirebase ? "true" : "false", pushDhtToFirebase ? "true" : "false");
   }
   if (oldShowFirebasePushLogs != showFirebasePushLogs) {
     printRuntimeSettingChange("showFirebasePushLogs", oldShowFirebasePushLogs ? "true" : "false", showFirebasePushLogs ? "true" : "false");
@@ -1532,19 +1582,12 @@ void setup() {
                              " firebase=" + (firebaseManager.isReady() ? "ready" : "down"));
 
   if (firebaseManager.isReady()) {
-    if (firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), startupIp, true)) {
-      Logger::info("FIREBASE", "Startup status pushed");
-    } else {
-      Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
-    }
+    pushStatusIfChanged();
     firebaseManager.pushDeviceHeartbeat(
-        runtimeConfig.deviceName,
         queryBatteryPercent(),
         querySignalStrength(),
         queryNetworkOperator(),
-        currentEpochSeconds(),
-        runtimeConfig.pollingIntervalSeconds,
-        missedCallMode);
+        currentEpochSeconds());
   }
 }
 
@@ -1576,7 +1619,9 @@ static void ensureCloudServices() {
       firebaseManager.bootstrapGateway(runtimeConfig.deviceName, runtimeConfig.pollingIntervalSeconds, missedCallMode);
       syncCountersFromCloud();
       syncRuntimeSettingsFromCloud("ensure_cloud");
-      firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), wifiManager.localIp().toString(), true);
+      // Firebase is new to this status node again — force one write.
+      lastStatusFingerprint = String();
+      pushStatusIfChanged();
       pendingPollStartMs = millis();
     } else {
       Serial.print("[FIREBASE] ensure: still failing: ");
@@ -1643,13 +1688,10 @@ void loop() {
   if (firebaseManager.isReady() && millis() - lastHeartbeatPush >= heartbeatIntervalMs) {
     lastHeartbeatPush = millis();
     if (!firebaseManager.pushDeviceHeartbeat(
-            runtimeConfig.deviceName,
             queryBatteryPercent(),
             querySignalStrength(),
             queryNetworkOperator(),
-            currentEpochSeconds(),
-            runtimeConfig.pollingIntervalSeconds,
-            missedCallMode)) {
+            currentEpochSeconds())) {
       Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
     }
   }
@@ -1695,12 +1737,15 @@ void loop() {
     float temperature = dhtManager.readTemperature();
     float humidity = dhtManager.readHumidity();
 
-    String telemetryState = lastTelemetryPushOk ? "ok" : "fail";
+    const char *cloudState = "LOCAL";
+    if (firebaseManager.isReady()) {
+      cloudState = (!pushDhtToFirebase || lastTelemetryPushOk) ? "ok" : "fail";
+    }
     displayManager.update(
         temperature,
         humidity,
         wifiManager.modeName().c_str(),
-        firebaseManager.isReady() ? telemetryState.c_str() : "LOCAL",
+        cloudState,
         rateLimitManager.dailyCount(),
         rateLimitManager.weeklyCount(),
         rateLimitManager.monthlyCount());
@@ -1708,22 +1753,23 @@ void loop() {
     // Before pushing, make sure both cloud services are live (inits them if the
     // uplink came up late). Rate-limited, so this is cheap when already ready.
     ensureCloudServices();
+    pushStatusIfChanged();
 
     if (firebaseManager.isReady() && millis() - lastTelemetryPush > telemetryIntervalMs) {
       lastTelemetryPush = millis();
-      time_t now = time(nullptr);
-      unsigned long epochSeconds = (now > 1000) ? (unsigned long)now : (millis() / 1000UL);
-      lastTelemetryPushOk = firebaseManager.pushTelemetry(
-          temperature,
-          humidity,
-          epochSeconds);
-      lastTelemetryPushMessage = lastTelemetryPushOk ? "Telemetry pushed" : firebaseManager.lastError();
-      if (lastTelemetryPushOk) {
-        if (showFirebasePushLogs) {
-          Logger::info("FIREBASE", lastTelemetryPushMessage.c_str());
+
+      // The Realtime Database copy of the reading is opt-in. ThingSpeak, the OLED
+      // and the local dashboard always get it; Firebase only when asked.
+      if (pushDhtToFirebase) {
+        lastTelemetryPushOk = firebaseManager.pushTelemetry(temperature, humidity, currentEpochSeconds());
+        lastTelemetryPushMessage = lastTelemetryPushOk ? "Telemetry pushed" : firebaseManager.lastError();
+        if (lastTelemetryPushOk) {
+          if (showFirebasePushLogs) {
+            Logger::info("FIREBASE", lastTelemetryPushMessage.c_str());
+          }
+        } else {
+          Logger::warn("FIREBASE", lastTelemetryPushMessage.c_str());
         }
-      } else {
-        Logger::warn("FIREBASE", lastTelemetryPushMessage.c_str());
       }
 
       if (thingSpeakManager.isReady() && millis() - lastThingSpeakPush > thingSpeakIntervalMs) {
@@ -1736,26 +1782,6 @@ void loop() {
         } else {
           Logger::warn("THINGSPEAK", thingSpeakManager.lastError().c_str());
         }
-      }
-
-      bool landingOk = firebaseManager.pushLandingSnapshot(
-          temperature,
-          humidity,
-          rateLimitManager.dailyCount(),
-          rateLimitManager.weeklyCount(),
-          rateLimitManager.monthlyCount(),
-          wifiManager.modeName(),
-          startupIp,
-          firebaseManager.isReady(),
-          lastTelemetryPushOk,
-          lastTelemetryPushMessage,
-          epochSeconds);
-      if (landingOk) {
-        if (showFirebasePushLogs) {
-          Logger::info("FIREBASE", "Landing snapshot pushed");
-        }
-      } else {
-        Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
       }
     }
   }

@@ -37,6 +37,27 @@ There is no allow-list and no per-number quota: outgoing control is by block lis
 ## Folder-Only Shape
 The root `ttgo_tcall` node is now treated as a container for folders only. Leaf variables should live under their parent folders.
 
+## Write Budget
+Every device write is event-driven. Nothing is written on a timer just to look
+fresh, and no node is written by more than one code path.
+
+| Node | Written when | Roughly |
+|---|---|---|
+| `counters` | an SMS is sent, and on window rollover | per SMS |
+| `status` | boot, and when wifi mode or IP changes | a handful a day |
+| `telemetry` | only while `pushDhtToFirebase` is true | none by default |
+| `settings/runtime` | only when a key is missing or invalid and has to be healed | rare |
+| `package` | only when the subscription state changes | rare |
+| `sim_module/device` health fields | heartbeat, every 5 minutes | 288 a day |
+
+The device no longer writes `updatedAtMs`. It was `millis()` since boot, not a
+timestamp, and on the runtime node it overwrote the real epoch millis the
+dashboard writes.
+
+Reads follow the same rule: `sim_module/device` is fetched once a minute for the
+block lists, and the `active` switch is taken from that same read instead of
+re-fetching the document for every job.
+
 ### Counters
 `dayKey` / `weekKey` / `monthKey` record the calendar window each count belongs
 to (Pakistan local time), so a reboot can tell a current total apart from a stale
@@ -49,31 +70,32 @@ one. See [06-RATE-LIMIT-DESIGN.md](06-RATE-LIMIT-DESIGN.md).
 	"sentMonth": 101,
 	"dayKey": "2026-07-12",
 	"weekKey": "2026-07-06",
-	"monthKey": "2026-07",
-	"updatedAtMs": 1712345678000
+	"monthKey": "2026-07"
 }
 ```
 
 ### Status
+Written on boot and whenever the wifi mode or IP changes, not on a timer.
+
 ```json
 {
 	"bootTime": "12345ms",
 	"wifiMode": "STA",
 	"ipAddress": "192.168.0.106",
-	"firebaseReady": true,
-	"telemetryPushOk": true,
-	"telemetryMessage": "Telemetry pushed",
-	"updatedAtMs": 1712345678000
+	"firebaseReady": true
 }
 ```
 
 ### Telemetry
+Written only while `pushDhtToFirebase` is true. It defaults to false, so this node
+is normally untouched and the reading is read from ThingSpeak, the OLED or the
+local dashboard instead.
+
 ```json
 {
 	"temperature": 29.4,
 	"humidity": 61.2,
-	"timestamp": 1712345678,
-	"updatedAtMs": 1712345678000
+	"timestamp": 1712345678
 }
 ```
 
@@ -81,6 +103,7 @@ one. See [06-RATE-LIMIT-DESIGN.md](06-RATE-LIMIT-DESIGN.md).
 ```json
 {
 	"intervalOfDhtSeconds": 15,
+	"pushDhtToFirebase": false,
 	"showFirebasePushLogs": true,
 	"jobLogs": true,
 	"dailySmsLimit": 200,
@@ -92,8 +115,7 @@ one. See [06-RATE-LIMIT-DESIGN.md](06-RATE-LIMIT-DESIGN.md).
 	"wifiSsid1": "",
 	"wifiPass1": "",
 	"wifiSsid2": "",
-	"wifiPass2": "",
-	"updatedAtMs": 1712345678000
+	"wifiPass2": ""
 }
 ```
 
@@ -104,8 +126,8 @@ WiFi pairs are optional and managed from the dashboard WiFi tab. The device read
 `sim_module` has exactly three children: `device`, `sms`, `calls`.
 
 ### device (doc: `sim_module/device`)
-- Identity/config: `name`, `active` (master send switch), `poll_interval_seconds`, `missed_call_mode`, `source`.
-- Health: `battery_percent`, `signal_strength`, `network_operator`, `last_seen_at`, `last_seen_epoch`.
+- Identity/config: `name`, `active` (master send switch), `poll_interval_seconds`, `missed_call_mode`, `source`. Written once at bootstrap; the heartbeat leaves them alone so it cannot re-assert `active` over an operator who switched the gateway off.
+- Health: `battery_percent`, `signal_strength`, `network_operator`, `last_seen_at`, `last_seen_epoch`. These are the only fields the 5-minute heartbeat writes.
 - Block lists (string arrays, seeded `["JAZZ","000"]` when empty): `blockedIncomingCallers`, `blockedIncomingSms`, `blockedOutgoingCallers`, `blockedOutgoingSms`.
 - Lifetime counters (ints, atomically incremented): `totalSmsSent`, `totalSmsReceived`, `totalSmsBlockedOutgoing`, `totalSmsMutedIncoming`, `totalCallsMade`, `totalCallsReceived`, `totalCallsBlockedOutgoing`, `totalCallsMutedIncoming`.
 - **SMS limits are NOT here** — they live only in RTDB runtime settings.
@@ -148,21 +170,25 @@ Each pending command should look like this:
 New implementations should prefer the Firestore `sim_module/sms/sms_jobs` queue; this RTDB command path is retained only for older tooling.
 
 ### Counters
-Store counters as a single snapshot object:
+Store counters as a single snapshot object, with the calendar window each count
+belongs to:
 ```json
 {
 	"sentToday": 12,
 	"sentWeek": 48,
 	"sentMonth": 101,
-	"updatedAtMs": 1712345678000
+	"dayKey": "2026-07-12",
+	"weekKey": "2026-07-06",
+	"monthKey": "2026-07"
 }
 ```
 
 ### Telemetry
-Telemetry should contain sensor values and a timestamp.
+Telemetry should contain sensor values and a timestamp, and is written only while
+`pushDhtToFirebase` is true.
 
 ### Runtime Settings
-Runtime settings should contain telemetry interval, log verbosity, SMS limit controls, and `ntfyUrl`.
+Runtime settings should contain telemetry interval, the `pushDhtToFirebase` switch, log verbosity, SMS limit controls, and `ntfyUrl`.
 
 If runtime keys are missing or invalid, device firmware should create/heal them with safe defaults and print an operator-facing serial log.
 

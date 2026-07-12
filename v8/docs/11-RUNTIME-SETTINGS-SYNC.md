@@ -13,6 +13,13 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Guardrail: clamp or heal invalid values to safe default. A hard **60 s floor**
     is enforced in firmware (`kMinTelemetryIntervalMs`) — telemetry/ThingSpeak are
     never pushed more often than once per minute, regardless of a lower value here.
+- `pushDhtToFirebase` (boolean)
+  - Meaning: mirror the DHT reading into RTDB `/ttgo_tcall/telemetry`. When false
+    the device writes nothing to that node; the reading still goes to the OLED,
+    the local dashboard and ThingSpeak.
+  - Default: `false`. It is off by default because a per-minute write of a value
+    that is already published elsewhere was the largest single source of Realtime
+    Database traffic. See [05-FIREBASE-DESIGN.md](05-FIREBASE-DESIGN.md).
 - `connectedSsid` (string, device-written)
   - Meaning: the SSID the device is currently connected to (STA). Written by the
     device on each sync; empty/absent when in AP/OFFLINE mode. Read-only for operators.
@@ -44,6 +51,9 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 ## Firestore Block Lists
 - Stored on `sim_module/device`: `blockedIncomingCallers`, `blockedIncomingSms`, `blockedOutgoingCallers`, `blockedOutgoingSms`.
 - Refreshed on startup, on every settings `sync`, and automatically about once a minute, so changes apply without a reboot.
+- The same read also caches the `active` switch. Job processing uses that cached
+  value instead of re-reading the device document once per job, so switching the
+  gateway off applies within about a minute rather than instantly.
 
 ## Package State
 - Stored at `/ttgo_tcall/package` (separate node). Holds subscription expiry plus
@@ -65,6 +75,8 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 ## Acceptance Criteria
 - Existing runtime variables are never overwritten by startup defaults.
 - Missing runtime variables are auto-created.
+- `pushDhtToFirebase` is created as `false` when absent, and no telemetry is
+  written while it is false.
 - Invalid runtime variables are auto-healed.
 - `ntfyUrl` can be changed without reflashing.
 - Firestore block lists sync on startup, periodically, and through `sync`.

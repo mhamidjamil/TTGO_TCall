@@ -1,7 +1,12 @@
 # v8 ThingSpeak Upload
 
 ## Purpose
-Upload temperature and humidity readings from the TTGO T-Call to ThingSpeak alongside the existing Firebase flow.
+Upload temperature and humidity readings from the TTGO T-Call to ThingSpeak.
+
+ThingSpeak is the default home for sensor history. The Realtime Database copy is
+opt-in (`pushDhtToFirebase`, default false), so unless that is switched on this is
+the only place the reading is archived. See
+[11-RUNTIME-SETTINGS-SYNC.md](11-RUNTIME-SETTINGS-SYNC.md).
 
 ## Data Posted
 - `field1`: temperature
@@ -27,5 +32,5 @@ These values are loaded from the normal v8 config path and/or local secrets defa
 ## Acceptance Criteria
 - Temperature is written to field 1.
 - Humidity is written to field 2.
-- The feature does not interfere with Firebase telemetry.
+- Uploads keep running when `pushDhtToFirebase` is false.
 - Errors are logged clearly on the serial terminal.
