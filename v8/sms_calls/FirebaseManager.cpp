@@ -478,15 +478,23 @@ bool FirebaseManager::updateCommandStatus(const FirebaseCommand &command, const 
   return true;
 }
 
-bool FirebaseManager::updateCounterSnapshot(int dailyCount, int weeklyCount, int monthlyCount) {
+bool FirebaseManager::updateCounterSnapshot(int dailyCount,
+                                            int weeklyCount,
+                                            int monthlyCount,
+                                            const String &dayKey,
+                                            const String &weekKey,
+                                            const String &monthKey) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  DynamicJsonDocument doc(256);
+  DynamicJsonDocument doc(384);
   doc["sentToday"] = dailyCount;
   doc["sentWeek"] = weeklyCount;
   doc["sentMonth"] = monthlyCount;
+  doc["dayKey"] = dayKey;
+  doc["weekKey"] = weekKey;
+  doc["monthKey"] = monthKey;
   doc["updatedAtMs"] = millis();
 
   String payload;
@@ -506,10 +514,22 @@ bool FirebaseManager::updateCounterSnapshot(int dailyCount, int weeklyCount, int
   return true;
 }
 
-bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, int &monthlyCount) {
+bool FirebaseManager::fetchCounterSnapshot(int &dailyCount,
+                                          int &weeklyCount,
+                                          int &monthlyCount,
+                                          String &dayKey,
+                                          String &weekKey,
+                                          String &monthKey) {
   if (!ensureAuthenticated()) {
     return false;
   }
+
+  dailyCount = 0;
+  weeklyCount = 0;
+  monthlyCount = 0;
+  dayKey = String();
+  weekKey = String();
+  monthKey = String();
 
   String response;
   int statusCode = 0;
@@ -517,13 +537,10 @@ bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, in
     return false;
   }
 
+  // A missing node is a valid fresh start: report zeros and let the caller seed
+  // the node on its next push, rather than spending a write here.
   if (statusCode == 404 || response == "null") {
-    dailyCount = 0;
-    weeklyCount = 0;
-    monthlyCount = 0;
-    if (!updateCounterSnapshot(0, 0, 0)) {
-      return false;
-    }
+    Serial.println("[RATE_LIMIT] counters node missing — starting from zero");
     error = String();
     return true;
   }
@@ -542,6 +559,12 @@ bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, in
   dailyCount = doc["sentToday"] | 0;
   weeklyCount = doc["sentWeek"] | 0;
   monthlyCount = doc["sentMonth"] | 0;
+  // Counters written by older firmware carry no window keys. Treating them as
+  // "unknown window" is the safe read: the totals restart cleanly instead of a
+  // stale sentMonth being carried into a new month.
+  dayKey = doc["dayKey"] | "";
+  weekKey = doc["weekKey"] | "";
+  monthKey = doc["monthKey"] | "";
   return true;
 }
 

@@ -96,8 +96,20 @@ public:
   bool pollCommands();
   bool fetchNextCommand(FirebaseCommand &outCommand);
   bool updateCommandStatus(const FirebaseCommand &command, const String &status, const String &errorReason = String());
-  bool updateCounterSnapshot(int dailyCount, int weeklyCount, int monthlyCount);
-  bool fetchCounterSnapshot(int &dailyCount, int &weeklyCount, int &monthlyCount);
+  // Counters are stored with the calendar window they belong to, so a reboot can
+  // tell a current total apart from one left over from yesterday or last month.
+  bool updateCounterSnapshot(int dailyCount,
+                             int weeklyCount,
+                             int monthlyCount,
+                             const String &dayKey,
+                             const String &weekKey,
+                             const String &monthKey);
+  bool fetchCounterSnapshot(int &dailyCount,
+                            int &weeklyCount,
+                            int &monthlyCount,
+                            String &dayKey,
+                            String &weekKey,
+                            String &monthKey);
   bool pushTelemetry(float temperature, float humidity, unsigned long epochSeconds);
   bool pushStartupStatus(const String &bootTime, const String &wifiMode, const String &ipAddress, bool firebaseReady);
   bool pushLandingSnapshot(float temperature,

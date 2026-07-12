@@ -38,11 +38,18 @@ There is no allow-list and no per-number quota: outgoing control is by block lis
 The root `ttgo_tcall` node is now treated as a container for folders only. Leaf variables should live under their parent folders.
 
 ### Counters
+`dayKey` / `weekKey` / `monthKey` record the calendar window each count belongs
+to (Pakistan local time), so a reboot can tell a current total apart from a stale
+one. See [06-RATE-LIMIT-DESIGN.md](06-RATE-LIMIT-DESIGN.md).
+
 ```json
 {
 	"sentToday": 12,
 	"sentWeek": 48,
 	"sentMonth": 101,
+	"dayKey": "2026-07-12",
+	"weekKey": "2026-07-06",
+	"monthKey": "2026-07",
 	"updatedAtMs": 1712345678000
 }
 ```

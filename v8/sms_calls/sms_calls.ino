@@ -45,6 +45,11 @@ static unsigned long lastThingSpeakPush = 0;
 static unsigned long lastRuntimeSettingsSync = 0;
 static unsigned long lastHeartbeatPush = 0;
 static unsigned long lastRecoveryRun = 0;
+// Retry the counter restore every minute until it lands. Without a restore the
+// device will not write counters at all, so this must keep trying rather than
+// give up after the one attempt made at boot.
+static unsigned long lastCounterRestoreTry = 0;
+static const unsigned long counterRestoreRetryMs = 60UL * 1000UL;
 static unsigned long pendingPollStartMs = 0;
 static unsigned long lastWifiReconnect = 0;
 // Retry STA every 5 minutes when in AP/OFFLINE mode (e.g. router was slow to
@@ -307,6 +312,14 @@ static unsigned long currentEpochSeconds() {
     return (unsigned long)now;
   }
   return millis() / 1000UL;
+}
+
+// Same clock, but 0 instead of the uptime fallback. Quota windows are calendar
+// windows, and uptime seconds are not a date: feeding them in would put the
+// counters in some 1970 window and reset them the moment NTP finally answered.
+static unsigned long wallClockEpochSeconds() {
+  time_t now = time(nullptr);
+  return now > 1000 ? (unsigned long)now : 0UL;
 }
 
 static String formatEventTime(unsigned long epochSeconds) {
@@ -735,6 +748,24 @@ static void recordSent(unsigned long fingerprint) {
   recentSendNext = (recentSendNext + 1) % kRecentSendMax;
 }
 
+// Write the counters to Firebase, but never before the stored snapshot has been
+// read back: pushing boot-time zeros is what used to wipe the real monthly total
+// and leave the cloud showing 1 after every restart.
+static void pushCounterSnapshot() {
+  if (!rateLimitManager.isRestored()) {
+    return;
+  }
+  if (!firebaseManager.updateCounterSnapshot(
+          rateLimitManager.dailyCount(),
+          rateLimitManager.weeklyCount(),
+          rateLimitManager.monthlyCount(),
+          rateLimitManager.dayKey(),
+          rateLimitManager.weekKey(),
+          rateLimitManager.monthKey())) {
+    Logger::warn("RATE_LIMIT", firebaseManager.lastError().c_str());
+  }
+}
+
 // Fetch + process one pending CALL job per poll (calls are low volume and don't
 // need the anti-ban pacing that bulk SMS does).
 static bool processCallJob() {
@@ -811,8 +842,8 @@ static bool processOtpJob() {
     bool sent = smsManager.sendMessage(normalizedNumber, otpJob.message);
     if (sent) {
       recordSent(sendFingerprint(otpJob.id, otpJob.message));
-      rateLimitManager.recordSend();
-      firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+      rateLimitManager.recordSend(wallClockEpochSeconds());
+      pushCounterSnapshot();
       if (!firebaseManager.updateSmsJobStatus(otpJob, "sent", String())) {
         pushLog("otp error", String("status write FAILED for ") + otpJob.id + ": " + firebaseManager.lastError());
       }
@@ -963,8 +994,8 @@ static void driveSmsBatch() {
     if (sent) {
       didSend = true;
       recordSent(sendFingerprint(job.id, job.message));
-      rateLimitManager.recordSend();
-      firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+      rateLimitManager.recordSend(wallClockEpochSeconds());
+      pushCounterSnapshot();
       if (!firebaseManager.updateSmsJobStatus(job, "sent", String())) {
         pushLog("sms error", String("status write FAILED for ") + job.id + ": " + firebaseManager.lastError());
       }
@@ -982,16 +1013,44 @@ static void driveSmsBatch() {
   nextSmsSendAtMs = didSend ? millis() + randomSendDelayMs() : millis() + 500UL;
 }
 
+// Adopt the stored counters. Until this succeeds the device keeps counting
+// locally and refuses to write anything back, so a boot with Firebase still down
+// can no longer reset the cloud totals to the sends made since that boot.
 static void syncCountersFromCloud() {
+  if (rateLimitManager.isRestored()) {
+    return;
+  }
+  lastCounterRestoreTry = millis();
+  unsigned long epochSeconds = wallClockEpochSeconds();
+  if (epochSeconds == 0) {
+    Logger::warn("RATE_LIMIT", "Counter restore deferred: NTP time not available yet");
+    return;
+  }
+
   int daily = 0;
   int weekly = 0;
   int monthly = 0;
-  if (firebaseManager.fetchCounterSnapshot(daily, weekly, monthly)) {
-    rateLimitManager.loadSnapshot(daily, weekly, monthly);
-    Logger::info("RATE_LIMIT", "Counters restored from Firebase");
-  } else {
+  String storedDayKey;
+  String storedWeekKey;
+  String storedMonthKey;
+  if (!firebaseManager.fetchCounterSnapshot(daily, weekly, monthly, storedDayKey, storedWeekKey, storedMonthKey)) {
     Logger::warn("RATE_LIMIT", firebaseManager.lastError().c_str());
+    return;
   }
+
+  rateLimitManager.loadSnapshot(daily, weekly, monthly, storedDayKey, storedWeekKey, storedMonthKey,
+                                epochSeconds);
+  Serial.print("[RATE_LIMIT] counters restored today=");
+  Serial.print(rateLimitManager.dailyCount());
+  Serial.print(" week=");
+  Serial.print(rateLimitManager.weeklyCount());
+  Serial.print(" month=");
+  Serial.print(rateLimitManager.monthlyCount());
+  Serial.print(" window=");
+  Serial.println(rateLimitManager.monthKey());
+  // Seed the node (and its window keys) right away so a fresh or legacy counters
+  // node is healed without waiting for the next send.
+  pushCounterSnapshot();
 }
 
 static void printDhtStatus(const char *source) {
@@ -1576,6 +1635,11 @@ void loop() {
     }
   }
 
+  if (firebaseManager.isReady() && !rateLimitManager.isRestored() &&
+      millis() - lastCounterRestoreTry >= counterRestoreRetryMs) {
+    syncCountersFromCloud();
+  }
+
   if (firebaseManager.isReady() && millis() - lastHeartbeatPush >= heartbeatIntervalMs) {
     lastHeartbeatPush = millis();
     if (!firebaseManager.pushDeviceHeartbeat(
@@ -1622,6 +1686,12 @@ void loop() {
 
   if (millis() - lastUiRefresh > 3000) {
     lastUiRefresh = millis();
+    // Midnight / Monday / 1st-of-month resets happen here, off the calendar
+    // rather than off uptime, and the reset is mirrored to Firebase at once.
+    if (rateLimitManager.rollover(wallClockEpochSeconds())) {
+      Logger::info("RATE_LIMIT", "Quota window rolled over; counters reset");
+      pushCounterSnapshot();
+    }
     float temperature = dhtManager.readTemperature();
     float humidity = dhtManager.readHumidity();
 
