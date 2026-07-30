@@ -42,11 +42,8 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Meaning: ntfy topic URL for user-facing notifications (incoming SMS/calls, package events).
   - Default: from `secrets.h` `NTFY_URL_DEFAULT`. Real topic URL lives only in the gitignored `secrets.h` — never commit it, since an ntfy topic name is a bearer credential (anyone who knows it can publish to or subscribe to the channel), and this channel carries WiFi passwords on save.
 - `ntfyLogUrl` (string)
-  - Meaning: ntfy topic URL for the operational log/error channel (job lifecycle, rate-limit/rescue alerts, boot). Chatty — subscribe + mute.
+  - Meaning: ntfy topic URL for the operational log/error channel (job lifecycle, rate-limit/rescue alerts, boot) **and** for incoming SMS from a sender on `blockedIncomingSms`. Ignore-listed senders are routed here instead of `ntfyUrl`, never silenced: the message is still decoded, parsed for a package subscription, archived to Firestore and deleted from the SIM. Chatty - subscribe + mute.
   - Default: from `secrets.h` `NTFY_LOG_URL_DEFAULT`. Real topic URL lives only in `secrets.h`.
-- `ntfyMuteUrl` (string)
-  - Meaning: ntfy topic URL for incoming SMS from a sender on `blockedIncomingSms`. Fires instead of `ntfyUrl` so blocked/muted traffic stays visible on its own channel rather than being silently dropped. The SMS is still archived to Firestore and deleted from the SIM as usual.
-  - Default: from `secrets.h` `NTFY_MUTE_URL_DEFAULT`. Real topic URL lives only in `secrets.h`.
 
 ## Firestore Block Lists
 - Stored on `sim_module/device`: `blockedIncomingCallers`, `blockedIncomingSms`, `blockedOutgoingCallers`, `blockedOutgoingSms`.
@@ -82,4 +79,4 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 - Firestore block lists sync on startup, periodically, and through `sync`.
 - Startup and periodic sync both work.
 - Manual `sync` command applies changes immediately.
-- `help` command documents all available serial commands, including `show sms`, `delete sms <index>`, and `delete all sms`.
+- `help` command documents all available serial commands, including `show sms`, `drain sms`, `delete sms <index>`, and `delete all sms`.

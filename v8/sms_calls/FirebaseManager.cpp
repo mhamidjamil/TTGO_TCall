@@ -861,7 +861,6 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
   outSettings.monthlySmsLimit = config.monthlySmsLimit;
   outSettings.ntfyUrl = defaultNtfyUrl.length() > 0 ? defaultNtfyUrl : String(config.ntfyUrl);
   outSettings.ntfyLogUrl = String(config.ntfyLogUrl);
-  outSettings.ntfyMuteUrl = String(config.ntfyMuteUrl);
 
   String runtimePath = rootPathFromConfig() + String("/settings/runtime");
   String response;
@@ -884,7 +883,6 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     outSettings.createdMonthlySmsLimit = true;
     outSettings.createdNtfyUrl = true;
     outSettings.createdNtfyLogUrl = true;
-    outSettings.createdNtfyMuteUrl = true;
     shouldWriteBack = true;
   } else if (statusCode < 200 || statusCode >= 300) {
     setHttpStatusError(error, "runtime settings fetch", statusCode, response);
@@ -977,14 +975,6 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       shouldWriteBack = true;
     }
 
-    String parsedNtfyMuteUrl;
-    if (parseStringVariant(root["ntfyMuteUrl"], parsedNtfyMuteUrl)) {
-      outSettings.ntfyMuteUrl = parsedNtfyMuteUrl;
-    } else {
-      outSettings.createdNtfyMuteUrl = true;
-      shouldWriteBack = true;
-    }
-
     // WiFi pairs are optional and managed from the dashboard. Read them when
     // present; absence just means "no dashboard override set" (we do not heal
     // these keys so the runtime node stays clean until the operator sets them).
@@ -1006,7 +996,6 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     writeDoc["monthlySmsLimit"] = outSettings.monthlySmsLimit;
     writeDoc["ntfyUrl"] = outSettings.ntfyUrl;
     writeDoc["ntfyLogUrl"] = outSettings.ntfyLogUrl;
-    writeDoc["ntfyMuteUrl"] = outSettings.ntfyMuteUrl;
 
     String payload;
     serializeJson(writeDoc, payload);

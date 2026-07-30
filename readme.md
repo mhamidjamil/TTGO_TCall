@@ -47,10 +47,9 @@ The web UI assets in `v8/sms_calls/data/` are flashed **separately** as the SPIF
 - **Responsive dashboard (FreeRTOS)** — the web server runs on its own task pinned to core 0, so pages load instantly even while the main loop is blocked in long TLS or modem operations. Shared config/WiFi state is mutex-guarded.
 - **Serial `[JOB]` logs** — see every claim, validation, quota check, send/dial, and final status (toggle with the `jobLogs` flag).
 - **Telemetry** — temperature/humidity to Firebase RTDB and ThingSpeak; device heartbeat (battery, signal, operator) to Firestore.
-- **ntfy channels** — three topics, real URLs configured only via the gitignored `secrets.h` / RTDB runtime, never hardcoded or committed (an ntfy topic name is itself a bearer credential — whoever knows it can publish to or subscribe to the channel):
+- **ntfy channels** — two topics, real URLs configured only via the gitignored `secrets.h` / RTDB runtime, never hardcoded or committed (an ntfy topic name is itself a bearer credential — whoever knows it can publish to or subscribe to the channel):
   - **user-facing** (`ntfyUrl`) — incoming SMS/calls, package subscription + expiry reminders, WiFi-config-via-SMS confirmations (includes the saved WiFi password).
-  - **operational log/error** (`ntfyLogUrl`) — job lifecycle (pending → processing → sent/failed), rate-limit and rescue alerts, boot line. Chatty by design — subscribe and mute it.
-  - **muted/blocked SMS** (`ntfyMuteUrl`) — incoming SMS from a sender on `blockedIncomingSms`; fires here instead of the user-facing channel.
+  - **operational log/error** (`ntfyLogUrl`) — job lifecycle (pending → processing → sent/failed), rate-limit and rescue alerts, boot line, and incoming SMS from a sender on `blockedIncomingSms`. Chatty by design — subscribe and mute it.
 - **No MQTT.** SPIFFS is the local config fallback. AP fallback is intentional.
 
 ## Documentation

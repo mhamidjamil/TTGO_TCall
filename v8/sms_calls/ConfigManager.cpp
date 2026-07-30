@@ -21,10 +21,6 @@
 #define NTFY_LOG_URL_DEFAULT "https://ntfy.sh/YOUR_NTFY_LOG_TOPIC"
 #endif
 
-#ifndef NTFY_MUTE_URL_DEFAULT
-#define NTFY_MUTE_URL_DEFAULT "https://ntfy.sh/YOUR_NTFY_MUTE_TOPIC"
-#endif
-
 #ifndef DEVICE_ID_DEFAULT
 #define DEVICE_ID_DEFAULT "device_001"
 #endif
@@ -126,7 +122,6 @@ void ConfigManager::loadDefaults() {
   copyText(config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath), FIREBASE_TELEMETRY_PATH_DEFAULT);
   copyText(config.ntfyUrl, sizeof(config.ntfyUrl), NTFY_URL_DEFAULT);
   copyText(config.ntfyLogUrl, sizeof(config.ntfyLogUrl), NTFY_LOG_URL_DEFAULT);
-  copyText(config.ntfyMuteUrl, sizeof(config.ntfyMuteUrl), NTFY_MUTE_URL_DEFAULT);
   config.thingSpeakChannelId = THINGSPEAK_CHANNEL_ID_DEFAULT;
   copyText(config.thingSpeakWriteApiKey, sizeof(config.thingSpeakWriteApiKey), THINGSPEAK_WRITE_API_KEY_DEFAULT);
 }
@@ -209,7 +204,6 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   strlcpy(config.firebaseTelemetryPath, doc["firebaseTelemetryPath"] | config.firebaseTelemetryPath, sizeof(config.firebaseTelemetryPath));
   strlcpy(config.ntfyUrl, doc["ntfyUrl"] | config.ntfyUrl, sizeof(config.ntfyUrl));
   strlcpy(config.ntfyLogUrl, doc["ntfyLogUrl"] | config.ntfyLogUrl, sizeof(config.ntfyLogUrl));
-  strlcpy(config.ntfyMuteUrl, doc["ntfyMuteUrl"] | config.ntfyMuteUrl, sizeof(config.ntfyMuteUrl));
   config.thingSpeakChannelId = doc["thingSpeakChannelId"] | config.thingSpeakChannelId;
   strlcpy(config.thingSpeakWriteApiKey, doc["thingSpeakWriteApiKey"] | config.thingSpeakWriteApiKey, sizeof(config.thingSpeakWriteApiKey));
 }
@@ -256,7 +250,6 @@ String ConfigManager::writeJsonConfig() const {
   doc["firebaseTelemetryPath"] = config.firebaseTelemetryPath;
   doc["ntfyUrl"] = config.ntfyUrl;
   doc["ntfyLogUrl"] = config.ntfyLogUrl;
-  doc["ntfyMuteUrl"] = config.ntfyMuteUrl;
   doc["thingSpeakChannelId"] = config.thingSpeakChannelId;
   doc["thingSpeakWriteApiKey"] = config.thingSpeakWriteApiKey;
 

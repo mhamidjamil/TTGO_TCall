@@ -17,7 +17,8 @@
 | Runtime settings from Firebase | Implemented | Reads telemetry/log/limit settings and `ntfyUrl` from RTDB, with defaults if missing. |
 | Manual runtime sync command | Implemented | `sync` command forces immediate cloud settings and Firestore block-list refresh. |
 | Serial help command | Implemented | `help` command lists supported serial commands, including ntfy test commands. |
-| ntfy notifications | Implemented | Incoming call/SMS notifications use the configured ntfy topic; blocked/muted incoming SMS instead notify a separate `ntfyMuteUrl` channel and are deleted from the SIM once archived. |
+| ntfy notifications | Implemented | Incoming call/SMS notifications use the configured ntfy topic; senders on the incoming ignore list are routed to the operational `ntfyLogUrl` channel instead. Text reconstructed from hex is tagged `(converted-to-english)`. |
+| SIM inbox drain | Implemented | A minute timer clears messages that arrived while the device was off or busy: oldest first, decoded, archived, notified and deleted. Forced with `drain sms`. |
 | ThingSpeak upload | Planned | Post temperature and humidity to ThingSpeak field 1 and field 2. |
 | MQTT | Removed | Not part of v8. |
 

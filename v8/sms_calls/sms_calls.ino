@@ -34,8 +34,7 @@ static DHTManager dhtManager;
 static ThingSpeakManager thingSpeakManager;
 static WebDashboard webDashboard;
 static NtfyManager ntfyManager;      // user-facing notifications (ntfyUrl)
-static NtfyManager logNtfy;          // operational job/error log channel (ntfyLogUrl)
-static NtfyManager muteNtfy;         // muted/blocked incoming SMS channel (ntfyMuteUrl)
+static NtfyManager logNtfy;          // operational log channel (ntfyLogUrl); also carries muted incoming SMS
 static PackageManager packageManager;
 
 static unsigned long lastUiRefresh = 0;
@@ -103,6 +102,13 @@ static bool gatewayActive = true;
 static bool gatewayStatusKnown = false;
 static unsigned long lastBlockListSync = 0;
 static const unsigned long blockListSyncIntervalMs = 60UL * 1000UL;
+// SIM inbox drain: one backlogged message per minute, so a message that arrived
+// while the device was off or busy still gets reported. Backs off to 5 minutes
+// while a message cannot be cleared (Firestore down), so a stuck message is not
+// re-notified once a minute forever.
+static unsigned long nextSimDrainAtMs = 0;
+static const unsigned long simDrainIntervalMs = 60UL * 1000UL;
+static const unsigned long simDrainBackoffMs = 5UL * 60UL * 1000UL;
 // SMS batch processing: grab up to 5 pending jobs, then send one at a time with a
 // random 5–30 s anti-SIM-ban gap. The next batch is not fetched until this one is
 // drained. A stuck batch is abandoned (rescue) after smsBatchRescueMs.
@@ -245,15 +251,16 @@ static int hexNibble(char c) {
   return 0;
 }
 
-// Decode a UTF-16BE hex string to UTF-8. Returns false if it does not decode to
-// mostly-printable text (so non-text hex is left untouched). BMP only.
+// Decode a UTF-16BE hex string to UTF-8. A trailing partial code unit (a message
+// truncated in transit) is dropped rather than failing the whole body: a readable
+// prefix beats dumping raw hex at the operator. Returns false if the result is not
+// mostly printable, so non-text hex is left untouched. BMP only.
 static bool decodeUcs2Hex(const String &hex, String &out) {
   out = "";
-  size_t n = hex.length();
-  if (n == 0 || n % 4 != 0) {
+  size_t units = hex.length() / 4;
+  if (units == 0) {
     return false;
   }
-  size_t units = n / 4;
   size_t printable = 0;
   for (size_t i = 0; i < units; ++i) {
     int hi = (hexNibble(hex.charAt(i * 4)) << 4) | hexNibble(hex.charAt(i * 4 + 1));
@@ -279,8 +286,9 @@ static bool decodeUcs2Hex(const String &hex, String &out) {
   return (printable * 100) >= (units * 80);
 }
 
-// If the body looks like UCS2 (hex, length %4, starts 00xx, decodes to text),
-// return the decoded text; otherwise return the original unchanged.
+// If the body looks like UCS2 (hex, starts 00xx, decodes to text), return the
+// decoded text; otherwise return the original unchanged. The length no longer has
+// to be an exact multiple of 4 so truncated bodies still come out readable.
 // (SmsNormalization is defined in SmsTypes.h so it precedes auto-prototypes.)
 static SmsNormalization normalizeSmsBody(const String &raw) {
   SmsNormalization result;
@@ -288,7 +296,7 @@ static SmsNormalization normalizeSmsBody(const String &raw) {
   result.text = raw;
   result.wasDecoded = false;
 
-  if (raw.length() >= 4 && raw.length() % 4 == 0 && isHexString(raw) && raw.startsWith("00")) {
+  if (raw.length() >= 4 && isHexString(raw) && raw.startsWith("00")) {
     String decoded;
     if (decodeUcs2Hex(raw, decoded)) {
       result.text = decoded;
@@ -556,7 +564,12 @@ static bool parseWifiConfigSms(const String &text, String &outSsid, String &outP
   return outSsid.length() > 0;
 }
 
-static void processIncomingSms(const String &rawNumber, const String &rawMessage, int smsIndex) {
+// Handle one incoming SMS, live from the modem or drained off the SIM. Being on
+// the incoming ignore list never skips any of this — the message is still decoded,
+// parsed for a subscription, archived and deleted; only the notification channel
+// changes. Returns true when the SIM slot is free again (deleted, or nothing to
+// delete), which is what tells the drain job it may move on to the next message.
+static bool processIncomingSms(const String &rawNumber, const String &rawMessage, int smsIndex) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
   String pakistanTimestamp = formatEventTime(epochSeconds);
@@ -588,7 +601,7 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
         delay(1500);
         ESP.restart();
       }
-      return;
+      return true;
     }
   }
 
@@ -628,39 +641,119 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
   Serial.print(" message=");
   Serial.println(norm.text);
 
-  if (blocked) {
-    if (muteNtfy.notify(String("muted sms from ") + number, norm.text)) {
-      Serial.print("[NTFY] muted sms notification sent number=");
-      Serial.print(number);
-      Serial.print(" message=");
-      Serial.println(norm.text);
-    } else {
-      Logger::warn("NTFY", muteNtfy.lastError().c_str());
-    }
-  } else if (isPackageMsg) {
+  // Mark text we reconstructed from hex, so the operator can tell a decoded body
+  // apart from one that arrived readable. Applies on every channel.
+  String body = norm.wasDecoded ? norm.text + "\n\n(converted-to-english)" : norm.text;
+
+  // Ignore-listed senders are routed to the operational channel rather than
+  // silenced, so muted traffic stays visible without mixing into the main one.
+  NtfyManager &channel = blocked ? logNtfy : ntfyManager;
+  const char *channelTitle = blocked ? "muted sms from " : "sms from ";
+  if (isPackageMsg && !blocked) {
     Logger::info("PACKAGE", "Subscription SMS detected; package notification sent");
+  } else if (channel.notify(String(channelTitle) + number, body)) {
+    Serial.print("[NTFY] ");
+    Serial.print(blocked ? "muted" : "sms");
+    Serial.print(" notification sent number=");
+    Serial.print(number);
+    Serial.print(" message=");
+    Serial.println(body);
   } else {
-    if (ntfyManager.notify(String("sms from ") + number, norm.text)) {
-      Serial.print("[NTFY] sms notification sent number=");
-      Serial.print(number);
-      Serial.print(" message=");
-      Serial.println(norm.text);
-    } else {
-      Logger::warn("NTFY", ntfyManager.lastError().c_str());
-    }
+    Logger::warn("NTFY", channel.lastError().c_str());
   }
 
-  if (firebaseOk && smsIndex > 0) {
-    if (smsManager.deleteMessage(smsIndex)) {
-      Serial.print("[SMS] deleted from SIM index=");
-      Serial.println(smsIndex);
-    } else {
-      Serial.print("[SMS] delete failed index=");
-      Serial.println(smsIndex);
-    }
-  } else if (!firebaseOk && smsIndex > 0) {
+  if (smsIndex <= 0) {
+    return true;  // live +CMT delivery, never stored on the SIM
+  }
+  if (!firebaseOk) {
     Serial.print("[SMS] kept on SIM because Firestore upload failed index=");
     Serial.println(smsIndex);
+    return false;
+  }
+  if (smsManager.deleteMessage(smsIndex)) {
+    Serial.print("[SMS] deleted from SIM index=");
+    Serial.println(smsIndex);
+    return true;
+  }
+  Serial.print("[SMS] delete failed index=");
+  Serial.println(smsIndex);
+  return false;
+}
+
+// Drain the SIM inbox one message per tick.
+//
+// The modem only pushes +CMTI/+CMT for a message that arrives while we are
+// listening. Anything delivered while the device was off, rebooting, or busy in a
+// blocking AT sequence just sits in SIM storage, unread, forever — which is how an
+// inbox of ~58 messages built up and how a package subscription confirmation was
+// missed. This is the safety net: list what is on the SIM, take the first entry,
+// run it through the normal incoming path (decode, package detection, archive,
+// notify), and let that path delete it. The next tick picks up the next one until
+// the inbox is empty, at which point the listing is just "OK" and this is cheap.
+static void drainSimInbox() {
+  nextSimDrainAtMs = millis() + simDrainIntervalMs;
+
+  String listing = smsManager.listMessages();
+  int header = listing.indexOf("+CMGL:");
+  if (header < 0) {
+    logJob("sim inbox empty");
+    return;
+  }
+
+  int headerEnd = listing.indexOf('\n', header);
+  if (headerEnd < 0) {
+    return;
+  }
+  String headerLine = listing.substring(header, headerEnd);
+  headerLine.trim();
+
+  // +CMGL: <index>,"<status>","<sender>",...  — sender is the second quoted field.
+  int colon = headerLine.indexOf(':');
+  int comma = headerLine.indexOf(',');
+  if (colon < 0 || comma < 0 || comma < colon) {
+    return;
+  }
+  int smsIndex = headerLine.substring(colon + 1, comma).toInt();
+  String sender = quotedField(headerLine, 1);
+  if (smsIndex <= 0 || sender.length() == 0) {
+    Serial.print("[SMS] drain: unparsable listing header: ");
+    Serial.println(headerLine);
+    return;
+  }
+
+  // Body runs to the next entry, or to the trailing OK. Keep every line: a plain
+  // text SMS can wrap, and the live +CMGR path only ever captured the first line.
+  int bodyEnd = listing.indexOf("+CMGL:", headerEnd);
+  if (bodyEnd < 0) {
+    bodyEnd = listing.length();
+  }
+  String body = listing.substring(headerEnd + 1, bodyEnd);
+  body.replace("\r", "");
+  body.trim();
+  // The last entry is followed by the AT terminator on its own line. Only strip it
+  // when it stands alone, so a message that genuinely ends in "OK" keeps its text.
+  if (body.endsWith("\nOK")) {
+    body.remove(body.length() - 3);
+  } else if (body == "OK") {
+    body = String();
+  }
+  body.trim();
+  if (body.length() == 0) {
+    Serial.print("[SMS] drain: empty body, deleting index=");
+    Serial.println(smsIndex);
+    smsManager.deleteMessage(smsIndex);
+    return;
+  }
+
+  Serial.print("[SMS] drain: processing backlog index=");
+  Serial.print(smsIndex);
+  Serial.print(" from=");
+  Serial.println(sender);
+  if (!processIncomingSms(sender, body, smsIndex)) {
+    // Still on the SIM (Firestore write or the delete failed). Back off instead of
+    // re-notifying the same message every tick.
+    nextSimDrainAtMs = millis() + simDrainBackoffMs;
+    Serial.println("[SMS] drain: message kept on SIM; backing off");
   }
 }
 
@@ -1112,6 +1205,7 @@ static void printCommandHelp() {
   Serial.println(" - sync   : sync runtime settings from Firebase now");
   Serial.println(" - ntfy test | test ntfy : send ntfy test notification");
   Serial.println(" - show sms : list all SMS messages with SIM indexes");
+  Serial.println(" - drain sms : process the oldest backlogged SIM message now (notify + archive + delete)");
   Serial.println(" - delete sms <index> : delete one SMS by SIM index");
   Serial.println(" - delete all sms : delete every SMS from SIM memory");
   Serial.println(" - wifi list : list saved WiFi networks");
@@ -1200,7 +1294,6 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
   String oldNtfyUrl = runtimeConfig.ntfyUrl;
   String oldNtfyLogUrl = runtimeConfig.ntfyLogUrl;
-  String oldNtfyMuteUrl = runtimeConfig.ntfyMuteUrl;
 
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
   // Enforce the 1-minute floor so we never push telemetry every few seconds.
@@ -1219,8 +1312,6 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   ntfyManager.setUrl(settings.ntfyUrl);
   strlcpy(runtimeConfig.ntfyLogUrl, settings.ntfyLogUrl.c_str(), sizeof(runtimeConfig.ntfyLogUrl));
   logNtfy.setUrl(settings.ntfyLogUrl);
-  strlcpy(runtimeConfig.ntfyMuteUrl, settings.ntfyMuteUrl.c_str(), sizeof(runtimeConfig.ntfyMuteUrl));
-  muteNtfy.setUrl(settings.ntfyMuteUrl);
   rateLimitManager.setLimits(runtimeConfig.dailySmsLimit, runtimeConfig.weeklySmsLimit, runtimeConfig.monthlySmsLimit);
 
   if (settings.createdIntervalOfDht) {
@@ -1253,9 +1344,6 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (settings.createdNtfyLogUrl) {
     Serial.println("[SYNC] created or healed Firebase variable: ntfyLogUrl");
   }
-  if (settings.createdNtfyMuteUrl) {
-    Serial.println("[SYNC] created or healed Firebase variable: ntfyMuteUrl");
-  }
 
   if (oldIntervalSeconds != settings.intervalOfDhtSeconds) {
     printRuntimeSettingChange("intervalOfDhtSeconds", String(oldIntervalSeconds), String(settings.intervalOfDhtSeconds));
@@ -1286,9 +1374,6 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   }
   if (oldNtfyLogUrl != String(runtimeConfig.ntfyLogUrl)) {
     printRuntimeSettingChange("ntfyLogUrl", oldNtfyLogUrl, String(runtimeConfig.ntfyLogUrl));
-  }
-  if (oldNtfyMuteUrl != String(runtimeConfig.ntfyMuteUrl)) {
-    printRuntimeSettingChange("ntfyMuteUrl", oldNtfyMuteUrl, String(runtimeConfig.ntfyMuteUrl));
   }
 
   refreshBlockLists();
@@ -1388,6 +1473,11 @@ static void handleSerialCommand(String command) {
   if (command == "show sms") {
     Serial.println("[SMS] listing SIM messages");
     Serial.println(smsManager.listMessages());
+    return;
+  }
+  if (command == "drain sms") {
+    Serial.println("[SMS] draining SIM inbox now");
+    drainSimInbox();
     return;
   }
   if (command == "delete all sms" || command == "delete sms all") {
@@ -1527,7 +1617,6 @@ void setup() {
   randomSeed(esp_random());
   ntfyManager.begin(runtimeConfig.ntfyUrl);
   logNtfy.begin(runtimeConfig.ntfyLogUrl);
-  muteNtfy.begin(runtimeConfig.ntfyMuteUrl);
 
   initializeModemHardware();
   Logger::info("MODEM", "Hardware initialized");
@@ -1714,6 +1803,11 @@ void loop() {
 
   callManager.loop();
   handleModemEvents();
+  // Clear the SIM backlog once the modem is idle. Skipped mid-receive and mid-batch
+  // so the listing never collides with another AT exchange.
+  if (millis() >= nextSimDrainAtMs && !awaitingSmsBody && smsBatchCount == 0) {
+    drainSimInbox();
+  }
   packageManager.loop(currentEpochSeconds());
   // Web server runs on its own FreeRTOS task (started in webDashboard.begin());
   // only the runtime-sync request flag is consumed from this loop.

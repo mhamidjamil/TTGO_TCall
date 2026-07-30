@@ -111,7 +111,6 @@ local dashboard instead.
 	"monthlySmsLimit": 4900,
 	"ntfyUrl": "https://ntfy.sh/YOUR_NTFY_TOPIC",
 	"ntfyLogUrl": "https://ntfy.sh/YOUR_NTFY_LOG_TOPIC",
-	"ntfyMuteUrl": "https://ntfy.sh/YOUR_NTFY_MUTE_TOPIC",
 	"wifiSsid1": "",
 	"wifiPass1": "",
 	"wifiSsid2": "",
