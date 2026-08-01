@@ -57,12 +57,10 @@
 // URLs in your local gitignored secrets.h. Keep these placeholders here.
 // User-facing notifications (incoming SMS/calls, package events).
 #define NTFY_URL_DEFAULT "https://ntfy.sh/YOUR_NTFY_TOPIC"
-// Operational log channel (job status: pending/processing/sent/failed + errors).
-// Subscribe + mute this one; it is chatty by design.
+// Operational log channel: job status (pending/processing/sent/failed), errors,
+// and incoming SMS from a sender on blockedIncomingSms. Subscribe + mute this
+// one; it is chatty by design.
 #define NTFY_LOG_URL_DEFAULT "https://ntfy.sh/YOUR_NTFY_LOG_TOPIC"
-// Muted/blocked incoming SMS channel — fires instead of the user-facing channel
-// when the sender is on blockedIncomingSms, so blocked traffic is still visible.
-#define NTFY_MUTE_URL_DEFAULT "https://ntfy.sh/YOUR_NTFY_MUTE_TOPIC"
 
 // ThingSpeak defaults
 #define THINGSPEAK_CHANNEL_ID_DEFAULT 0UL

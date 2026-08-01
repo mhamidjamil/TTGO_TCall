@@ -478,16 +478,23 @@ bool FirebaseManager::updateCommandStatus(const FirebaseCommand &command, const 
   return true;
 }
 
-bool FirebaseManager::updateCounterSnapshot(int dailyCount, int weeklyCount, int monthlyCount) {
+bool FirebaseManager::updateCounterSnapshot(int dailyCount,
+                                            int weeklyCount,
+                                            int monthlyCount,
+                                            const String &dayKey,
+                                            const String &weekKey,
+                                            const String &monthKey) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  DynamicJsonDocument doc(256);
+  DynamicJsonDocument doc(384);
   doc["sentToday"] = dailyCount;
   doc["sentWeek"] = weeklyCount;
   doc["sentMonth"] = monthlyCount;
-  doc["updatedAtMs"] = millis();
+  doc["dayKey"] = dayKey;
+  doc["weekKey"] = weekKey;
+  doc["monthKey"] = monthKey;
 
   String payload;
   serializeJson(doc, payload);
@@ -506,10 +513,22 @@ bool FirebaseManager::updateCounterSnapshot(int dailyCount, int weeklyCount, int
   return true;
 }
 
-bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, int &monthlyCount) {
+bool FirebaseManager::fetchCounterSnapshot(int &dailyCount,
+                                          int &weeklyCount,
+                                          int &monthlyCount,
+                                          String &dayKey,
+                                          String &weekKey,
+                                          String &monthKey) {
   if (!ensureAuthenticated()) {
     return false;
   }
+
+  dailyCount = 0;
+  weeklyCount = 0;
+  monthlyCount = 0;
+  dayKey = String();
+  weekKey = String();
+  monthKey = String();
 
   String response;
   int statusCode = 0;
@@ -517,13 +536,10 @@ bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, in
     return false;
   }
 
+  // A missing node is a valid fresh start: report zeros and let the caller seed
+  // the node on its next push, rather than spending a write here.
   if (statusCode == 404 || response == "null") {
-    dailyCount = 0;
-    weeklyCount = 0;
-    monthlyCount = 0;
-    if (!updateCounterSnapshot(0, 0, 0)) {
-      return false;
-    }
+    Serial.println("[RATE_LIMIT] counters node missing — starting from zero");
     error = String();
     return true;
   }
@@ -542,6 +558,12 @@ bool FirebaseManager::fetchCounterSnapshot(int &dailyCount, int &weeklyCount, in
   dailyCount = doc["sentToday"] | 0;
   weeklyCount = doc["sentWeek"] | 0;
   monthlyCount = doc["sentMonth"] | 0;
+  // Counters written by older firmware carry no window keys. Treating them as
+  // "unknown window" is the safe read: the totals restart cleanly instead of a
+  // stale sentMonth being carried into a new month.
+  dayKey = doc["dayKey"] | "";
+  weekKey = doc["weekKey"] | "";
+  monthKey = doc["monthKey"] | "";
   return true;
 }
 
@@ -647,7 +669,6 @@ bool FirebaseManager::pushTelemetry(float temperature, float humidity, unsigned 
   doc["temperature"] = temperature;
   doc["humidity"] = humidity;
   doc["timestamp"] = epochSeconds;
-  doc["updatedAtMs"] = millis();
 
   String payload;
   serializeJson(doc, payload);
@@ -676,7 +697,6 @@ bool FirebaseManager::pushStartupStatus(const String &bootTime, const String &wi
   doc["wifiMode"] = wifiMode;
   doc["ipAddress"] = ipAddress;
   doc["firebaseReady"] = firebaseReady;
-  doc["updatedAtMs"] = millis();
 
   String payload;
   serializeJson(doc, payload);
@@ -689,54 +709,6 @@ bool FirebaseManager::pushStartupStatus(const String &bootTime, const String &wi
 
   if (statusCode < 200 || statusCode >= 300) {
     setHttpStatusError(error, "startup status push", statusCode, response);
-    return false;
-  }
-
-  return true;
-}
-
-bool FirebaseManager::pushLandingSnapshot(float temperature,
-                                         float humidity,
-                                         int sentToday,
-                                         int sentWeek,
-                                         int sentMonth,
-                                         const String &wifiMode,
-                                         const String &ipAddress,
-                                         bool firebaseReady,
-                                         bool telemetryPushOk,
-                                         const String &telemetryMessage,
-                                         unsigned long epochSeconds) {
-  if (!ensureAuthenticated()) {
-    return false;
-  }
-
-  DynamicJsonDocument doc(1024);
-  doc["counters"]["sentToday"] = sentToday;
-  doc["counters"]["sentWeek"] = sentWeek;
-  doc["counters"]["sentMonth"] = sentMonth;
-  doc["counters"]["updatedAtMs"] = millis();
-  doc["telemetry"]["temperature"] = temperature;
-  doc["telemetry"]["humidity"] = humidity;
-  doc["telemetry"]["timestamp"] = epochSeconds;
-  doc["telemetry"]["updatedAtMs"] = millis();
-  doc["status"]["wifiMode"] = wifiMode;
-  doc["status"]["ipAddress"] = ipAddress;
-  doc["status"]["firebaseReady"] = firebaseReady;
-  doc["status"]["telemetryPushOk"] = telemetryPushOk;
-  doc["status"]["telemetryMessage"] = telemetryMessage;
-  doc["status"]["updatedAtMs"] = millis();
-
-  String payload;
-  serializeJson(doc, payload);
-
-  String response;
-  int statusCode = 0;
-  if (!httpPatchJson(buildPathUrl(rootPathFromConfig()), payload, response, statusCode)) {
-    return false;
-  }
-
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "landing snapshot push", statusCode, response);
     return false;
   }
 
@@ -852,7 +824,6 @@ bool FirebaseManager::pushPackageState(const PackageState &state) {
   // reads back only the epochs. Edit expiryEpoch (seconds) to change the expiry.
   doc["subscribedHuman"] = formatPktHuman(state.subscribedEpoch);
   doc["expiryHuman"] = formatPktHuman(state.expiryEpoch);
-  doc["updatedAtMs"] = millis();
 
   String payload;
   serializeJson(doc, payload);
@@ -890,7 +861,6 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
   outSettings.monthlySmsLimit = config.monthlySmsLimit;
   outSettings.ntfyUrl = defaultNtfyUrl.length() > 0 ? defaultNtfyUrl : String(config.ntfyUrl);
   outSettings.ntfyLogUrl = String(config.ntfyLogUrl);
-  outSettings.ntfyMuteUrl = String(config.ntfyMuteUrl);
 
   String runtimePath = rootPathFromConfig() + String("/settings/runtime");
   String response;
@@ -904,6 +874,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
 
   if (statusCode == 404 || response == "null") {
     outSettings.createdIntervalOfDht = true;
+    outSettings.createdPushDhtToFirebase = true;
     outSettings.createdShowFirebasePushLogs = true;
     outSettings.createdShowThingSpeakPushLogs = true;
     outSettings.createdJobLogs = true;
@@ -912,7 +883,6 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     outSettings.createdMonthlySmsLimit = true;
     outSettings.createdNtfyUrl = true;
     outSettings.createdNtfyLogUrl = true;
-    outSettings.createdNtfyMuteUrl = true;
     shouldWriteBack = true;
   } else if (statusCode < 200 || statusCode >= 300) {
     setHttpStatusError(error, "runtime settings fetch", statusCode, response);
@@ -930,6 +900,14 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       outSettings.intervalOfDhtSeconds = intervalParsed;
     } else {
       outSettings.createdIntervalOfDht = true;
+      shouldWriteBack = true;
+    }
+
+    bool pushDhtValue = false;
+    if (parseBoolVariant(root["pushDhtToFirebase"], pushDhtValue)) {
+      outSettings.pushDhtToFirebase = pushDhtValue;
+    } else {
+      outSettings.createdPushDhtToFirebase = true;
       shouldWriteBack = true;
     }
 
@@ -997,14 +975,6 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
       shouldWriteBack = true;
     }
 
-    String parsedNtfyMuteUrl;
-    if (parseStringVariant(root["ntfyMuteUrl"], parsedNtfyMuteUrl)) {
-      outSettings.ntfyMuteUrl = parsedNtfyMuteUrl;
-    } else {
-      outSettings.createdNtfyMuteUrl = true;
-      shouldWriteBack = true;
-    }
-
     // WiFi pairs are optional and managed from the dashboard. Read them when
     // present; absence just means "no dashboard override set" (we do not heal
     // these keys so the runtime node stays clean until the operator sets them).
@@ -1017,6 +987,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
 
   if (shouldWriteBack) {
     writeDoc["intervalOfDhtSeconds"] = outSettings.intervalOfDhtSeconds;
+    writeDoc["pushDhtToFirebase"] = outSettings.pushDhtToFirebase;
     writeDoc["showFirebasePushLogs"] = outSettings.showFirebasePushLogs;
     writeDoc["showThingSpeakPushLogs"] = outSettings.showThingSpeakPushLogs;
     writeDoc["jobLogs"] = outSettings.jobLogs;
@@ -1025,8 +996,6 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     writeDoc["monthlySmsLimit"] = outSettings.monthlySmsLimit;
     writeDoc["ntfyUrl"] = outSettings.ntfyUrl;
     writeDoc["ntfyLogUrl"] = outSettings.ntfyLogUrl;
-    writeDoc["ntfyMuteUrl"] = outSettings.ntfyMuteUrl;
-    writeDoc["updatedAtMs"] = millis();
 
     String payload;
     serializeJson(writeDoc, payload);
@@ -1249,39 +1218,6 @@ bool FirebaseManager::fetchNextCallJob(FirestoreJob &outJob) {
   return true;
 }
 
-bool FirebaseManager::fetchGatewayActive(bool &outActive) {
-  if (!ensureAuthenticated()) {
-    return false;
-  }
-
-  outActive = true;
-  String response;
-  int statusCode = 0;
-  if (!httpGetBearer(buildFirestoreUrl(kDevicePath), response, statusCode)) {
-    return false;
-  }
-
-  if (statusCode == 404) {
-    error = String();
-    return true;
-  }
-  if (statusCode < 200 || statusCode >= 300) {
-    setHttpStatusError(error, "device active fetch", statusCode, response);
-    return false;
-  }
-
-  DynamicJsonDocument doc(2048);
-  if (deserializeJson(doc, response)) {
-    error = String("device active parse failed body=") + response;
-    return false;
-  }
-
-  JsonObjectConst fields = doc["fields"].as<JsonObjectConst>();
-  outActive = firestoreBoolField(fields, "active", true);
-  error = String();
-  return true;
-}
-
 bool FirebaseManager::updateSmsJobStatus(const FirestoreJob &job, const String &status, const String &errorReason) {
   if (!ensureAuthenticated()) {
     return false;
@@ -1478,29 +1414,21 @@ bool FirebaseManager::incrementDeviceCounter(const char *field) {
   return true;
 }
 
-bool FirebaseManager::pushDeviceHeartbeat(const String &deviceName,
-                                          int batteryPercent,
+bool FirebaseManager::pushDeviceHeartbeat(int batteryPercent,
                                           int signalStrength,
                                           const String &networkOperator,
-                                          unsigned long epochSeconds,
-                                          int pollIntervalSeconds,
-                                          bool missedCallMode) {
+                                          unsigned long epochSeconds) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
-  DynamicJsonDocument doc(1536);
+  DynamicJsonDocument doc(768);
   JsonObject fields = doc.createNestedObject("fields");
-  setStringField(fields, "name", deviceName);
-  setBoolField(fields, "active", true);
   setTimestampField(fields, "last_seen_at", epochSeconds);
   setIntField(fields, "last_seen_epoch", (int)epochSeconds);
   setIntField(fields, "battery_percent", batteryPercent);
   setIntField(fields, "signal_strength", signalStrength);
   setStringField(fields, "network_operator", networkOperator);
-  setIntField(fields, "poll_interval_seconds", pollIntervalSeconds);
-  setBoolField(fields, "missed_call_mode", missedCallMode);
-  setStringField(fields, "source", "ttgo_tcall_v8");
 
   String payload;
   serializeJson(doc, payload);
@@ -1508,16 +1436,11 @@ bool FirebaseManager::pushDeviceHeartbeat(const String &deviceName,
   String response;
   int statusCode = 0;
   String url = buildFirestoreUrl(kDevicePath) +
-               "?updateMask.fieldPaths=name"
-               "&updateMask.fieldPaths=active"
-               "&updateMask.fieldPaths=last_seen_at"
+               "?updateMask.fieldPaths=last_seen_at"
                "&updateMask.fieldPaths=last_seen_epoch"
                "&updateMask.fieldPaths=battery_percent"
                "&updateMask.fieldPaths=signal_strength"
-               "&updateMask.fieldPaths=network_operator"
-               "&updateMask.fieldPaths=poll_interval_seconds"
-               "&updateMask.fieldPaths=missed_call_mode"
-               "&updateMask.fieldPaths=source";
+               "&updateMask.fieldPaths=network_operator";
   if (!httpPatchBearerJson(url, payload, response, statusCode)) {
     return false;
   }
@@ -1591,12 +1514,13 @@ bool FirebaseManager::recoverStuckJobs(unsigned long cutoffEpochSeconds) {
 }
 
 
-bool FirebaseManager::fetchBlockLists(BlockLists &out) {
+bool FirebaseManager::fetchBlockLists(BlockLists &out, bool &outActive) {
   if (!ensureAuthenticated()) {
     return false;
   }
 
   out = BlockLists();
+  outActive = true;
 
   String response;
   int statusCode = 0;
@@ -1619,6 +1543,7 @@ bool FirebaseManager::fetchBlockLists(BlockLists &out) {
   }
 
   JsonObjectConst fields = doc["fields"].as<JsonObjectConst>();
+  outActive = firestoreBoolField(fields, "active", true);
   appendFirestoreArrayStrings(fields["blockedIncomingCallers"], out.incomingCallers, BlockLists::kMax, out.incomingCallerCount);
   appendFirestoreArrayStrings(fields["blockedIncomingSms"], out.incomingSms, BlockLists::kMax, out.incomingSmsCount);
   appendFirestoreArrayStrings(fields["blockedOutgoingCallers"], out.outgoingCallers, BlockLists::kMax, out.outgoingCallerCount);

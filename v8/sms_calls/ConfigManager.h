@@ -57,7 +57,6 @@ struct V8Config {
   char firebaseTelemetryPath[96];
   char ntfyUrl[160];
   char ntfyLogUrl[160];
-  char ntfyMuteUrl[160];
   unsigned long thingSpeakChannelId;
   char thingSpeakWriteApiKey[64];
 };

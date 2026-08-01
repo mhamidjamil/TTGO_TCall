@@ -34,8 +34,7 @@ static DHTManager dhtManager;
 static ThingSpeakManager thingSpeakManager;
 static WebDashboard webDashboard;
 static NtfyManager ntfyManager;      // user-facing notifications (ntfyUrl)
-static NtfyManager logNtfy;          // operational job/error log channel (ntfyLogUrl)
-static NtfyManager muteNtfy;         // muted/blocked incoming SMS channel (ntfyMuteUrl)
+static NtfyManager logNtfy;          // operational log channel (ntfyLogUrl); also carries muted incoming SMS
 static PackageManager packageManager;
 
 static unsigned long lastUiRefresh = 0;
@@ -45,6 +44,11 @@ static unsigned long lastThingSpeakPush = 0;
 static unsigned long lastRuntimeSettingsSync = 0;
 static unsigned long lastHeartbeatPush = 0;
 static unsigned long lastRecoveryRun = 0;
+// Retry the counter restore every minute until it lands. Without a restore the
+// device will not write counters at all, so this must keep trying rather than
+// give up after the one attempt made at boot.
+static unsigned long lastCounterRestoreTry = 0;
+static const unsigned long counterRestoreRetryMs = 60UL * 1000UL;
 static unsigned long pendingPollStartMs = 0;
 static unsigned long lastWifiReconnect = 0;
 // Retry STA every 5 minutes when in AP/OFFLINE mode (e.g. router was slow to
@@ -63,6 +67,8 @@ static String startupBootTime;
 static String startupIp;
 static bool lastTelemetryPushOk = false;
 static String lastTelemetryPushMessage = "not_attempted";
+// wifi mode + IP of the last status we wrote; empty forces the next push.
+static String lastStatusFingerprint;
 // Minimum gap between telemetry/ThingSpeak pushes. We never push more often than
 // this, no matter how low intervalOfDhtSeconds is set — avoids spamming Firebase
 // and ThingSpeak every few seconds. Adjust here if a faster cadence is ever needed.
@@ -74,17 +80,35 @@ static unsigned long thingSpeakIntervalMs = kMinTelemetryIntervalMs;
 // reboot. (There is no 30 s sync job; polling for SMS/call JOBS is separate and
 // runs on pollingIntervalSeconds.)
 static const unsigned long runtimeSettingsSyncIntervalMs = 5UL * 60UL * 1000UL;
-static const unsigned long heartbeatIntervalMs = 60UL * 1000UL;
-static const unsigned long recoveryIntervalMs = 60UL * 1000UL;
+// Heartbeat and stuck-job recovery both ran once a minute, which is 2880 Firestore
+// operations a day for data that barely moves. Five minutes is still well inside
+// the dashboard's online window and the 5-minute stuck-job threshold.
+static const unsigned long heartbeatIntervalMs = 5UL * 60UL * 1000UL;
+static const unsigned long recoveryIntervalMs = 5UL * 60UL * 1000UL;
 static const unsigned long stuckJobAgeSeconds = 5UL * 60UL;
 static const unsigned long missedCallRingMs = 8000UL;
 static const bool missedCallMode = true;
+// Mirror the DHT reading into the Realtime Database. Off unless the operator
+// turns it on: the reading already reaches ThingSpeak, the OLED and the local
+// dashboard, so the per-minute Firebase write bought nothing.
+static bool pushDhtToFirebase = false;
 static bool showFirebasePushLogs = true;
 static bool showThingSpeakPushLogs = true;
 static bool jobLogs = true;
 static BlockLists blockLists;
+// The operator's on/off switch on sim_module/device, cached from the same read
+// that refreshes the block lists. Jobs are refused until it has been read once.
+static bool gatewayActive = true;
+static bool gatewayStatusKnown = false;
 static unsigned long lastBlockListSync = 0;
 static const unsigned long blockListSyncIntervalMs = 60UL * 1000UL;
+// SIM inbox drain: one backlogged message per minute, so a message that arrived
+// while the device was off or busy still gets reported. Backs off to 5 minutes
+// while a message cannot be cleared (Firestore down), so a stuck message is not
+// re-notified once a minute forever.
+static unsigned long nextSimDrainAtMs = 0;
+static const unsigned long simDrainIntervalMs = 60UL * 1000UL;
+static const unsigned long simDrainBackoffMs = 5UL * 60UL * 1000UL;
 // SMS batch processing: grab up to 5 pending jobs, then send one at a time with a
 // random 5–30 s anti-SIM-ban gap. The next batch is not fetched until this one is
 // drained. A stuck batch is abandoned (rescue) after smsBatchRescueMs.
@@ -227,15 +251,16 @@ static int hexNibble(char c) {
   return 0;
 }
 
-// Decode a UTF-16BE hex string to UTF-8. Returns false if it does not decode to
-// mostly-printable text (so non-text hex is left untouched). BMP only.
+// Decode a UTF-16BE hex string to UTF-8. A trailing partial code unit (a message
+// truncated in transit) is dropped rather than failing the whole body: a readable
+// prefix beats dumping raw hex at the operator. Returns false if the result is not
+// mostly printable, so non-text hex is left untouched. BMP only.
 static bool decodeUcs2Hex(const String &hex, String &out) {
   out = "";
-  size_t n = hex.length();
-  if (n == 0 || n % 4 != 0) {
+  size_t units = hex.length() / 4;
+  if (units == 0) {
     return false;
   }
-  size_t units = n / 4;
   size_t printable = 0;
   for (size_t i = 0; i < units; ++i) {
     int hi = (hexNibble(hex.charAt(i * 4)) << 4) | hexNibble(hex.charAt(i * 4 + 1));
@@ -261,8 +286,9 @@ static bool decodeUcs2Hex(const String &hex, String &out) {
   return (printable * 100) >= (units * 80);
 }
 
-// If the body looks like UCS2 (hex, length %4, starts 00xx, decodes to text),
-// return the decoded text; otherwise return the original unchanged.
+// If the body looks like UCS2 (hex, starts 00xx, decodes to text), return the
+// decoded text; otherwise return the original unchanged. The length no longer has
+// to be an exact multiple of 4 so truncated bodies still come out readable.
 // (SmsNormalization is defined in SmsTypes.h so it precedes auto-prototypes.)
 static SmsNormalization normalizeSmsBody(const String &raw) {
   SmsNormalization result;
@@ -270,7 +296,7 @@ static SmsNormalization normalizeSmsBody(const String &raw) {
   result.text = raw;
   result.wasDecoded = false;
 
-  if (raw.length() >= 4 && raw.length() % 4 == 0 && isHexString(raw) && raw.startsWith("00")) {
+  if (raw.length() >= 4 && isHexString(raw) && raw.startsWith("00")) {
     String decoded;
     if (decodeUcs2Hex(raw, decoded)) {
       result.text = decoded;
@@ -307,6 +333,14 @@ static unsigned long currentEpochSeconds() {
     return (unsigned long)now;
   }
   return millis() / 1000UL;
+}
+
+// Same clock, but 0 instead of the uptime fallback. Quota windows are calendar
+// windows, and uptime seconds are not a date: feeding them in would put the
+// counters in some 1970 window and reset them the moment NTP finally answered.
+static unsigned long wallClockEpochSeconds() {
+  time_t now = time(nullptr);
+  return now > 1000 ? (unsigned long)now : 0UL;
 }
 
 static String formatEventTime(unsigned long epochSeconds) {
@@ -530,7 +564,12 @@ static bool parseWifiConfigSms(const String &text, String &outSsid, String &outP
   return outSsid.length() > 0;
 }
 
-static void processIncomingSms(const String &rawNumber, const String &rawMessage, int smsIndex) {
+// Handle one incoming SMS, live from the modem or drained off the SIM. Being on
+// the incoming ignore list never skips any of this — the message is still decoded,
+// parsed for a subscription, archived and deleted; only the notification channel
+// changes. Returns true when the SIM slot is free again (deleted, or nothing to
+// delete), which is what tells the drain job it may move on to the next message.
+static bool processIncomingSms(const String &rawNumber, const String &rawMessage, int smsIndex) {
   String number = displayPhoneNumber(rawNumber);
   unsigned long epochSeconds = currentEpochSeconds();
   String pakistanTimestamp = formatEventTime(epochSeconds);
@@ -562,7 +601,7 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
         delay(1500);
         ESP.restart();
       }
-      return;
+      return true;
     }
   }
 
@@ -602,39 +641,119 @@ static void processIncomingSms(const String &rawNumber, const String &rawMessage
   Serial.print(" message=");
   Serial.println(norm.text);
 
-  if (blocked) {
-    if (muteNtfy.notify(String("muted sms from ") + number, norm.text)) {
-      Serial.print("[NTFY] muted sms notification sent number=");
-      Serial.print(number);
-      Serial.print(" message=");
-      Serial.println(norm.text);
-    } else {
-      Logger::warn("NTFY", muteNtfy.lastError().c_str());
-    }
-  } else if (isPackageMsg) {
+  // Mark text we reconstructed from hex, so the operator can tell a decoded body
+  // apart from one that arrived readable. Applies on every channel.
+  String body = norm.wasDecoded ? norm.text + "\n\n(converted-to-english)" : norm.text;
+
+  // Ignore-listed senders are routed to the operational channel rather than
+  // silenced, so muted traffic stays visible without mixing into the main one.
+  NtfyManager &channel = blocked ? logNtfy : ntfyManager;
+  const char *channelTitle = blocked ? "muted sms from " : "sms from ";
+  if (isPackageMsg && !blocked) {
     Logger::info("PACKAGE", "Subscription SMS detected; package notification sent");
+  } else if (channel.notify(String(channelTitle) + number, body)) {
+    Serial.print("[NTFY] ");
+    Serial.print(blocked ? "muted" : "sms");
+    Serial.print(" notification sent number=");
+    Serial.print(number);
+    Serial.print(" message=");
+    Serial.println(body);
   } else {
-    if (ntfyManager.notify(String("sms from ") + number, norm.text)) {
-      Serial.print("[NTFY] sms notification sent number=");
-      Serial.print(number);
-      Serial.print(" message=");
-      Serial.println(norm.text);
-    } else {
-      Logger::warn("NTFY", ntfyManager.lastError().c_str());
-    }
+    Logger::warn("NTFY", channel.lastError().c_str());
   }
 
-  if (firebaseOk && smsIndex > 0) {
-    if (smsManager.deleteMessage(smsIndex)) {
-      Serial.print("[SMS] deleted from SIM index=");
-      Serial.println(smsIndex);
-    } else {
-      Serial.print("[SMS] delete failed index=");
-      Serial.println(smsIndex);
-    }
-  } else if (!firebaseOk && smsIndex > 0) {
+  if (smsIndex <= 0) {
+    return true;  // live +CMT delivery, never stored on the SIM
+  }
+  if (!firebaseOk) {
     Serial.print("[SMS] kept on SIM because Firestore upload failed index=");
     Serial.println(smsIndex);
+    return false;
+  }
+  if (smsManager.deleteMessage(smsIndex)) {
+    Serial.print("[SMS] deleted from SIM index=");
+    Serial.println(smsIndex);
+    return true;
+  }
+  Serial.print("[SMS] delete failed index=");
+  Serial.println(smsIndex);
+  return false;
+}
+
+// Drain the SIM inbox one message per tick.
+//
+// The modem only pushes +CMTI/+CMT for a message that arrives while we are
+// listening. Anything delivered while the device was off, rebooting, or busy in a
+// blocking AT sequence just sits in SIM storage, unread, forever — which is how an
+// inbox of ~58 messages built up and how a package subscription confirmation was
+// missed. This is the safety net: list what is on the SIM, take the first entry,
+// run it through the normal incoming path (decode, package detection, archive,
+// notify), and let that path delete it. The next tick picks up the next one until
+// the inbox is empty, at which point the listing is just "OK" and this is cheap.
+static void drainSimInbox() {
+  nextSimDrainAtMs = millis() + simDrainIntervalMs;
+
+  String listing = smsManager.listMessages();
+  int header = listing.indexOf("+CMGL:");
+  if (header < 0) {
+    logJob("sim inbox empty");
+    return;
+  }
+
+  int headerEnd = listing.indexOf('\n', header);
+  if (headerEnd < 0) {
+    return;
+  }
+  String headerLine = listing.substring(header, headerEnd);
+  headerLine.trim();
+
+  // +CMGL: <index>,"<status>","<sender>",...  — sender is the second quoted field.
+  int colon = headerLine.indexOf(':');
+  int comma = headerLine.indexOf(',');
+  if (colon < 0 || comma < 0 || comma < colon) {
+    return;
+  }
+  int smsIndex = headerLine.substring(colon + 1, comma).toInt();
+  String sender = quotedField(headerLine, 1);
+  if (smsIndex <= 0 || sender.length() == 0) {
+    Serial.print("[SMS] drain: unparsable listing header: ");
+    Serial.println(headerLine);
+    return;
+  }
+
+  // Body runs to the next entry, or to the trailing OK. Keep every line: a plain
+  // text SMS can wrap, and the live +CMGR path only ever captured the first line.
+  int bodyEnd = listing.indexOf("+CMGL:", headerEnd);
+  if (bodyEnd < 0) {
+    bodyEnd = listing.length();
+  }
+  String body = listing.substring(headerEnd + 1, bodyEnd);
+  body.replace("\r", "");
+  body.trim();
+  // The last entry is followed by the AT terminator on its own line. Only strip it
+  // when it stands alone, so a message that genuinely ends in "OK" keeps its text.
+  if (body.endsWith("\nOK")) {
+    body.remove(body.length() - 3);
+  } else if (body == "OK") {
+    body = String();
+  }
+  body.trim();
+  if (body.length() == 0) {
+    Serial.print("[SMS] drain: empty body, deleting index=");
+    Serial.println(smsIndex);
+    smsManager.deleteMessage(smsIndex);
+    return;
+  }
+
+  Serial.print("[SMS] drain: processing backlog index=");
+  Serial.print(smsIndex);
+  Serial.print(" from=");
+  Serial.println(sender);
+  if (!processIncomingSms(sender, body, smsIndex)) {
+    // Still on the SIM (Firestore write or the delete failed). Back off instead of
+    // re-notifying the same message every tick.
+    nextSimDrainAtMs = millis() + simDrainBackoffMs;
+    Serial.println("[SMS] drain: message kept on SIM; backing off");
   }
 }
 
@@ -735,6 +854,46 @@ static void recordSent(unsigned long fingerprint) {
   recentSendNext = (recentSendNext + 1) % kRecentSendMax;
 }
 
+// Write the counters to Firebase, but never before the stored snapshot has been
+// read back: pushing boot-time zeros is what used to wipe the real monthly total
+// and leave the cloud showing 1 after every restart.
+static void pushCounterSnapshot() {
+  if (!rateLimitManager.isRestored()) {
+    return;
+  }
+  if (!firebaseManager.updateCounterSnapshot(
+          rateLimitManager.dailyCount(),
+          rateLimitManager.weeklyCount(),
+          rateLimitManager.monthlyCount(),
+          rateLimitManager.dayKey(),
+          rateLimitManager.weekKey(),
+          rateLimitManager.monthKey())) {
+    Logger::warn("RATE_LIMIT", firebaseManager.lastError().c_str());
+  }
+}
+
+// Mirror the device status to Firebase only when it actually differs from what
+// we last wrote. Nothing in this node moves between reboots and network changes,
+// so the old once-a-minute rewrite was ~1400 pointless writes a day.
+static void pushStatusIfChanged() {
+  if (!firebaseManager.isReady()) {
+    return;
+  }
+  String ipAddress = wifiManager.localIp().toString();
+  String fingerprint = wifiManager.modeName() + String("|") + ipAddress;
+  if (fingerprint == lastStatusFingerprint) {
+    return;
+  }
+  if (firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), ipAddress, true)) {
+    lastStatusFingerprint = fingerprint;
+    if (showFirebasePushLogs) {
+      Logger::info("FIREBASE", "Status pushed");
+    }
+  } else {
+    Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
+  }
+}
+
 // Fetch + process one pending CALL job per poll (calls are low volume and don't
 // need the anti-ban pacing that bulk SMS does).
 static bool processCallJob() {
@@ -744,14 +903,13 @@ static bool processCallJob() {
   }
   pushLog("call processing", String("dialing ") + displayPhoneNumber(callJob.phoneNumber));
   String normalizedNumber = normalizePhoneNumber(callJob.phoneNumber);
-  bool active = true;
   if (normalizedNumber.length() == 0) {
     pushLog("call failed", String(callJob.id) + " invalid number");
     firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "number_invalid");
-  } else if (!firebaseManager.fetchGatewayActive(active)) {
+  } else if (!gatewayStatusKnown) {
     pushLog("call failed", normalizedNumber + " device status unavailable");
     firebaseManager.updateCallJobStatus(callJob, "failed", false, 0, "device_status_unavailable");
-  } else if (!active) {
+  } else if (!gatewayActive) {
     pushLog("call blocked", normalizedNumber + " device inactive");
     firebaseManager.updateCallJobStatus(callJob, "blocked", false, 0, "device_inactive");
   } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingCallers, blockLists.outgoingCallerCount)) {
@@ -811,8 +969,8 @@ static bool processOtpJob() {
     bool sent = smsManager.sendMessage(normalizedNumber, otpJob.message);
     if (sent) {
       recordSent(sendFingerprint(otpJob.id, otpJob.message));
-      rateLimitManager.recordSend();
-      firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+      rateLimitManager.recordSend(wallClockEpochSeconds());
+      pushCounterSnapshot();
       if (!firebaseManager.updateSmsJobStatus(otpJob, "sent", String())) {
         pushLog("otp error", String("status write FAILED for ") + otpJob.id + ": " + firebaseManager.lastError());
       }
@@ -915,15 +1073,14 @@ static void driveSmsBatch() {
   FirestoreJob &job = smsBatch[smsBatchIndex];
   String normalizedNumber = normalizePhoneNumber(job.phoneNumber);
   String progress = String(smsBatchIndex + 1) + "/" + String(smsBatchCount);
-  bool active = true;
   bool didSend = false;
   if (normalizedNumber.length() == 0) {
     pushLog("sms failed", String("[") + progress + "] " + job.id + " invalid number");
     firebaseManager.updateSmsJobStatus(job, "failed", "number_invalid");
-  } else if (!firebaseManager.fetchGatewayActive(active)) {
+  } else if (!gatewayStatusKnown) {
     pushLog("sms failed", String("[") + progress + "] " + normalizedNumber + " device status unavailable");
     firebaseManager.updateSmsJobStatus(job, "failed", "device_status_unavailable");
-  } else if (!active) {
+  } else if (!gatewayActive) {
     pushLog("sms blocked", String("[") + progress + "] " + normalizedNumber + " device inactive");
     firebaseManager.updateSmsJobStatus(job, "blocked", "device_inactive");
   } else if (isBlockedNumber(normalizedNumber, blockLists.outgoingSms, blockLists.outgoingSmsCount)) {
@@ -963,8 +1120,8 @@ static void driveSmsBatch() {
     if (sent) {
       didSend = true;
       recordSent(sendFingerprint(job.id, job.message));
-      rateLimitManager.recordSend();
-      firebaseManager.updateCounterSnapshot(rateLimitManager.dailyCount(), rateLimitManager.weeklyCount(), rateLimitManager.monthlyCount());
+      rateLimitManager.recordSend(wallClockEpochSeconds());
+      pushCounterSnapshot();
       if (!firebaseManager.updateSmsJobStatus(job, "sent", String())) {
         pushLog("sms error", String("status write FAILED for ") + job.id + ": " + firebaseManager.lastError());
       }
@@ -982,16 +1139,44 @@ static void driveSmsBatch() {
   nextSmsSendAtMs = didSend ? millis() + randomSendDelayMs() : millis() + 500UL;
 }
 
+// Adopt the stored counters. Until this succeeds the device keeps counting
+// locally and refuses to write anything back, so a boot with Firebase still down
+// can no longer reset the cloud totals to the sends made since that boot.
 static void syncCountersFromCloud() {
+  if (rateLimitManager.isRestored()) {
+    return;
+  }
+  lastCounterRestoreTry = millis();
+  unsigned long epochSeconds = wallClockEpochSeconds();
+  if (epochSeconds == 0) {
+    Logger::warn("RATE_LIMIT", "Counter restore deferred: NTP time not available yet");
+    return;
+  }
+
   int daily = 0;
   int weekly = 0;
   int monthly = 0;
-  if (firebaseManager.fetchCounterSnapshot(daily, weekly, monthly)) {
-    rateLimitManager.loadSnapshot(daily, weekly, monthly);
-    Logger::info("RATE_LIMIT", "Counters restored from Firebase");
-  } else {
+  String storedDayKey;
+  String storedWeekKey;
+  String storedMonthKey;
+  if (!firebaseManager.fetchCounterSnapshot(daily, weekly, monthly, storedDayKey, storedWeekKey, storedMonthKey)) {
     Logger::warn("RATE_LIMIT", firebaseManager.lastError().c_str());
+    return;
   }
+
+  rateLimitManager.loadSnapshot(daily, weekly, monthly, storedDayKey, storedWeekKey, storedMonthKey,
+                                epochSeconds);
+  Serial.print("[RATE_LIMIT] counters restored today=");
+  Serial.print(rateLimitManager.dailyCount());
+  Serial.print(" week=");
+  Serial.print(rateLimitManager.weeklyCount());
+  Serial.print(" month=");
+  Serial.print(rateLimitManager.monthlyCount());
+  Serial.print(" window=");
+  Serial.println(rateLimitManager.monthKey());
+  // Seed the node (and its window keys) right away so a fresh or legacy counters
+  // node is healed without waiting for the next send.
+  pushCounterSnapshot();
 }
 
 static void printDhtStatus(const char *source) {
@@ -1020,6 +1205,7 @@ static void printCommandHelp() {
   Serial.println(" - sync   : sync runtime settings from Firebase now");
   Serial.println(" - ntfy test | test ntfy : send ntfy test notification");
   Serial.println(" - show sms : list all SMS messages with SIM indexes");
+  Serial.println(" - drain sms : process the oldest backlogged SIM message now (notify + archive + delete)");
   Serial.println(" - delete sms <index> : delete one SMS by SIM index");
   Serial.println(" - delete all sms : delete every SMS from SIM memory");
   Serial.println(" - wifi list : list saved WiFi networks");
@@ -1045,16 +1231,19 @@ static void printRuntimeSettingChange(const char *name, const String &oldValue, 
   Serial.println();
 }
 
-// Pull the four block-list arrays from sim_module/device into RAM. Called on a
-// short timer and on every settings sync so blocking a number in Firestore
-// takes effect on the device within ~1 minute (and instantly via Sync).
+// Pull the four block-list arrays AND the gateway active switch from
+// sim_module/device into RAM. Called on a short timer and on every settings sync
+// so blocking a number (or switching the gateway off) in Firestore takes effect
+// on the device within ~1 minute, and instantly via Sync. One read serves both:
+// job processing used to re-read this same document once per job.
 static void refreshBlockLists() {
   if (!firebaseManager.isReady()) {
     return;
   }
   size_t oldIn = blockLists.incomingCallerCount + blockLists.incomingSmsCount;
   size_t oldOut = blockLists.outgoingCallerCount + blockLists.outgoingSmsCount;
-  if (firebaseManager.fetchBlockLists(blockLists)) {
+  bool active = true;
+  if (firebaseManager.fetchBlockLists(blockLists, active)) {
     size_t newIn = blockLists.incomingCallerCount + blockLists.incomingSmsCount;
     size_t newOut = blockLists.outgoingCallerCount + blockLists.outgoingSmsCount;
     if (oldIn != newIn || oldOut != newOut) {
@@ -1067,6 +1256,12 @@ static void refreshBlockLists() {
       Serial.print(" outgoingSms=");
       Serial.println(blockLists.outgoingSmsCount);
     }
+    if (!gatewayStatusKnown || active != gatewayActive) {
+      Serial.print("[BLOCK] gateway active=");
+      Serial.println(active ? "yes" : "no");
+    }
+    gatewayActive = active;
+    gatewayStatusKnown = true;
   } else {
     Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
   }
@@ -1090,6 +1285,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   }
 
   unsigned long oldIntervalSeconds = telemetryIntervalMs / 1000UL;
+  bool oldPushDhtToFirebase = pushDhtToFirebase;
   bool oldShowFirebasePushLogs = showFirebasePushLogs;
   bool oldShowThingSpeakPushLogs = showThingSpeakPushLogs;
   bool oldJobLogs = jobLogs;
@@ -1098,7 +1294,6 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   int oldMonthlyLimit = runtimeConfig.monthlySmsLimit;
   String oldNtfyUrl = runtimeConfig.ntfyUrl;
   String oldNtfyLogUrl = runtimeConfig.ntfyLogUrl;
-  String oldNtfyMuteUrl = runtimeConfig.ntfyMuteUrl;
 
   telemetryIntervalMs = (unsigned long)settings.intervalOfDhtSeconds * 1000UL;
   // Enforce the 1-minute floor so we never push telemetry every few seconds.
@@ -1106,6 +1301,7 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
     telemetryIntervalMs = kMinTelemetryIntervalMs;
   }
   thingSpeakIntervalMs = telemetryIntervalMs;
+  pushDhtToFirebase = settings.pushDhtToFirebase;
   showFirebasePushLogs = settings.showFirebasePushLogs;
   showThingSpeakPushLogs = settings.showThingSpeakPushLogs;
   jobLogs = settings.jobLogs;
@@ -1116,12 +1312,13 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   ntfyManager.setUrl(settings.ntfyUrl);
   strlcpy(runtimeConfig.ntfyLogUrl, settings.ntfyLogUrl.c_str(), sizeof(runtimeConfig.ntfyLogUrl));
   logNtfy.setUrl(settings.ntfyLogUrl);
-  strlcpy(runtimeConfig.ntfyMuteUrl, settings.ntfyMuteUrl.c_str(), sizeof(runtimeConfig.ntfyMuteUrl));
-  muteNtfy.setUrl(settings.ntfyMuteUrl);
   rateLimitManager.setLimits(runtimeConfig.dailySmsLimit, runtimeConfig.weeklySmsLimit, runtimeConfig.monthlySmsLimit);
 
   if (settings.createdIntervalOfDht) {
     Serial.println("[SYNC] created or healed Firebase variable: intervalOfDhtSeconds");
+  }
+  if (settings.createdPushDhtToFirebase) {
+    Serial.println("[SYNC] created or healed Firebase variable: pushDhtToFirebase (default false)");
   }
   if (settings.createdShowFirebasePushLogs) {
     Serial.println("[SYNC] created or healed Firebase variable: showFirebasePushLogs");
@@ -1147,12 +1344,12 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   if (settings.createdNtfyLogUrl) {
     Serial.println("[SYNC] created or healed Firebase variable: ntfyLogUrl");
   }
-  if (settings.createdNtfyMuteUrl) {
-    Serial.println("[SYNC] created or healed Firebase variable: ntfyMuteUrl");
-  }
 
   if (oldIntervalSeconds != settings.intervalOfDhtSeconds) {
     printRuntimeSettingChange("intervalOfDhtSeconds", String(oldIntervalSeconds), String(settings.intervalOfDhtSeconds));
+  }
+  if (oldPushDhtToFirebase != pushDhtToFirebase) {
+    printRuntimeSettingChange("pushDhtToFirebase", oldPushDhtToFirebase ? "true" : "false", pushDhtToFirebase ? "true" : "false");
   }
   if (oldShowFirebasePushLogs != showFirebasePushLogs) {
     printRuntimeSettingChange("showFirebasePushLogs", oldShowFirebasePushLogs ? "true" : "false", showFirebasePushLogs ? "true" : "false");
@@ -1177,9 +1374,6 @@ static bool syncRuntimeSettingsFromCloud(const char *source) {
   }
   if (oldNtfyLogUrl != String(runtimeConfig.ntfyLogUrl)) {
     printRuntimeSettingChange("ntfyLogUrl", oldNtfyLogUrl, String(runtimeConfig.ntfyLogUrl));
-  }
-  if (oldNtfyMuteUrl != String(runtimeConfig.ntfyMuteUrl)) {
-    printRuntimeSettingChange("ntfyMuteUrl", oldNtfyMuteUrl, String(runtimeConfig.ntfyMuteUrl));
   }
 
   refreshBlockLists();
@@ -1279,6 +1473,11 @@ static void handleSerialCommand(String command) {
   if (command == "show sms") {
     Serial.println("[SMS] listing SIM messages");
     Serial.println(smsManager.listMessages());
+    return;
+  }
+  if (command == "drain sms") {
+    Serial.println("[SMS] draining SIM inbox now");
+    drainSimInbox();
     return;
   }
   if (command == "delete all sms" || command == "delete sms all") {
@@ -1418,7 +1617,6 @@ void setup() {
   randomSeed(esp_random());
   ntfyManager.begin(runtimeConfig.ntfyUrl);
   logNtfy.begin(runtimeConfig.ntfyLogUrl);
-  muteNtfy.begin(runtimeConfig.ntfyMuteUrl);
 
   initializeModemHardware();
   Logger::info("MODEM", "Hardware initialized");
@@ -1473,19 +1671,12 @@ void setup() {
                              " firebase=" + (firebaseManager.isReady() ? "ready" : "down"));
 
   if (firebaseManager.isReady()) {
-    if (firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), startupIp, true)) {
-      Logger::info("FIREBASE", "Startup status pushed");
-    } else {
-      Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
-    }
+    pushStatusIfChanged();
     firebaseManager.pushDeviceHeartbeat(
-        runtimeConfig.deviceName,
         queryBatteryPercent(),
         querySignalStrength(),
         queryNetworkOperator(),
-        currentEpochSeconds(),
-        runtimeConfig.pollingIntervalSeconds,
-        missedCallMode);
+        currentEpochSeconds());
   }
 }
 
@@ -1517,7 +1708,9 @@ static void ensureCloudServices() {
       firebaseManager.bootstrapGateway(runtimeConfig.deviceName, runtimeConfig.pollingIntervalSeconds, missedCallMode);
       syncCountersFromCloud();
       syncRuntimeSettingsFromCloud("ensure_cloud");
-      firebaseManager.pushStartupStatus(startupBootTime, wifiManager.modeName(), wifiManager.localIp().toString(), true);
+      // Firebase is new to this status node again — force one write.
+      lastStatusFingerprint = String();
+      pushStatusIfChanged();
       pendingPollStartMs = millis();
     } else {
       Serial.print("[FIREBASE] ensure: still failing: ");
@@ -1576,16 +1769,18 @@ void loop() {
     }
   }
 
+  if (firebaseManager.isReady() && !rateLimitManager.isRestored() &&
+      millis() - lastCounterRestoreTry >= counterRestoreRetryMs) {
+    syncCountersFromCloud();
+  }
+
   if (firebaseManager.isReady() && millis() - lastHeartbeatPush >= heartbeatIntervalMs) {
     lastHeartbeatPush = millis();
     if (!firebaseManager.pushDeviceHeartbeat(
-            runtimeConfig.deviceName,
             queryBatteryPercent(),
             querySignalStrength(),
             queryNetworkOperator(),
-            currentEpochSeconds(),
-            runtimeConfig.pollingIntervalSeconds,
-            missedCallMode)) {
+            currentEpochSeconds())) {
       Logger::warn("FIRESTORE", firebaseManager.lastError().c_str());
     }
   }
@@ -1608,6 +1803,11 @@ void loop() {
 
   callManager.loop();
   handleModemEvents();
+  // Clear the SIM backlog once the modem is idle. Skipped mid-receive and mid-batch
+  // so the listing never collides with another AT exchange.
+  if (millis() >= nextSimDrainAtMs && !awaitingSmsBody && smsBatchCount == 0) {
+    drainSimInbox();
+  }
   packageManager.loop(currentEpochSeconds());
   // Web server runs on its own FreeRTOS task (started in webDashboard.begin());
   // only the runtime-sync request flag is consumed from this loop.
@@ -1622,15 +1822,24 @@ void loop() {
 
   if (millis() - lastUiRefresh > 3000) {
     lastUiRefresh = millis();
+    // Midnight / Monday / 1st-of-month resets happen here, off the calendar
+    // rather than off uptime, and the reset is mirrored to Firebase at once.
+    if (rateLimitManager.rollover(wallClockEpochSeconds())) {
+      Logger::info("RATE_LIMIT", "Quota window rolled over; counters reset");
+      pushCounterSnapshot();
+    }
     float temperature = dhtManager.readTemperature();
     float humidity = dhtManager.readHumidity();
 
-    String telemetryState = lastTelemetryPushOk ? "ok" : "fail";
+    const char *cloudState = "LOCAL";
+    if (firebaseManager.isReady()) {
+      cloudState = (!pushDhtToFirebase || lastTelemetryPushOk) ? "ok" : "fail";
+    }
     displayManager.update(
         temperature,
         humidity,
         wifiManager.modeName().c_str(),
-        firebaseManager.isReady() ? telemetryState.c_str() : "LOCAL",
+        cloudState,
         rateLimitManager.dailyCount(),
         rateLimitManager.weeklyCount(),
         rateLimitManager.monthlyCount());
@@ -1638,22 +1847,23 @@ void loop() {
     // Before pushing, make sure both cloud services are live (inits them if the
     // uplink came up late). Rate-limited, so this is cheap when already ready.
     ensureCloudServices();
+    pushStatusIfChanged();
 
     if (firebaseManager.isReady() && millis() - lastTelemetryPush > telemetryIntervalMs) {
       lastTelemetryPush = millis();
-      time_t now = time(nullptr);
-      unsigned long epochSeconds = (now > 1000) ? (unsigned long)now : (millis() / 1000UL);
-      lastTelemetryPushOk = firebaseManager.pushTelemetry(
-          temperature,
-          humidity,
-          epochSeconds);
-      lastTelemetryPushMessage = lastTelemetryPushOk ? "Telemetry pushed" : firebaseManager.lastError();
-      if (lastTelemetryPushOk) {
-        if (showFirebasePushLogs) {
-          Logger::info("FIREBASE", lastTelemetryPushMessage.c_str());
+
+      // The Realtime Database copy of the reading is opt-in. ThingSpeak, the OLED
+      // and the local dashboard always get it; Firebase only when asked.
+      if (pushDhtToFirebase) {
+        lastTelemetryPushOk = firebaseManager.pushTelemetry(temperature, humidity, currentEpochSeconds());
+        lastTelemetryPushMessage = lastTelemetryPushOk ? "Telemetry pushed" : firebaseManager.lastError();
+        if (lastTelemetryPushOk) {
+          if (showFirebasePushLogs) {
+            Logger::info("FIREBASE", lastTelemetryPushMessage.c_str());
+          }
+        } else {
+          Logger::warn("FIREBASE", lastTelemetryPushMessage.c_str());
         }
-      } else {
-        Logger::warn("FIREBASE", lastTelemetryPushMessage.c_str());
       }
 
       if (thingSpeakManager.isReady() && millis() - lastThingSpeakPush > thingSpeakIntervalMs) {
@@ -1666,26 +1876,6 @@ void loop() {
         } else {
           Logger::warn("THINGSPEAK", thingSpeakManager.lastError().c_str());
         }
-      }
-
-      bool landingOk = firebaseManager.pushLandingSnapshot(
-          temperature,
-          humidity,
-          rateLimitManager.dailyCount(),
-          rateLimitManager.weeklyCount(),
-          rateLimitManager.monthlyCount(),
-          wifiManager.modeName(),
-          startupIp,
-          firebaseManager.isReady(),
-          lastTelemetryPushOk,
-          lastTelemetryPushMessage,
-          epochSeconds);
-      if (landingOk) {
-        if (showFirebasePushLogs) {
-          Logger::info("FIREBASE", "Landing snapshot pushed");
-        }
-      } else {
-        Logger::warn("FIREBASE", firebaseManager.lastError().c_str());
       }
     }
   }

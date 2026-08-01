@@ -172,9 +172,9 @@ h1,h2{margin-top:24px}
 <h2>Realtime Database path layout</h2>
 <ul>
 <li><code>/ttgo_tcall/settings/runtime</code> - runtime flags such as <code>jobLogs</code>, push logs, DHT interval, and SMS limits</li>
-<li><code>/ttgo_tcall/counters</code> - daily/weekly/monthly SMS counters</li>
-<li><code>/ttgo_tcall/status</code> - device status snapshot</li>
-<li><code>/ttgo_tcall/telemetry</code> - temperature/humidity and counters with timestamp</li>
+<li><code>/ttgo_tcall/counters</code> - daily/weekly/monthly SMS counters with their window keys, written on each send and on rollover</li>
+<li><code>/ttgo_tcall/status</code> - device status, written on boot and whenever wifi mode or IP changes</li>
+<li><code>/ttgo_tcall/telemetry</code> - temperature/humidity with timestamp, written only while <code>pushDhtToFirebase</code> is true (default false)</li>
 </ul>
 
 <h2>Firestore gateway path layout</h2>
@@ -224,7 +224,7 @@ h1,h2{margin-top:24px}
 <li>The device first restores counters from Firebase.</li>
 <li>The dashboard can request a runtime settings sync with the Sync Device Settings button.</li>
 <li>The main loop uses one polling cycle for SMS and call queues.</li>
-<li>Telemetry includes temperature, humidity, counts, and timestamp.</li>
+<li>The DHT reading always goes to the OLED, this dashboard and ThingSpeak. Set <code>pushDhtToFirebase</code> to <code>true</code> to mirror it into the Realtime Database as well.</li>
 </ul>
 </body></html>
 )rawliteral";

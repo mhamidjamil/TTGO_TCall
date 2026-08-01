@@ -160,13 +160,16 @@ async function renderDevice() {
   const runtime = await fetchRuntime();
   const now = Math.floor(Date.now() / 1000);
   const lastSeen = device.last_seen_epoch || 0;
-  const online = lastSeen && now - lastSeen < 120;
+  // The heartbeat runs every 5 minutes, so allow one missed beat before calling
+  // the device offline.
+  const online = lastSeen && now - lastSeen < 660;
 
   $('#deviceForm').active.checked = device.active !== false;
   $('#deviceForm').name.value = text(device.name, 'TTGO T-Call');
   $('#runtimeForm').jobLogs.checked = runtime.jobLogs !== false;
   $('#runtimeForm').showFirebasePushLogs.checked = runtime.showFirebasePushLogs === true;
   $('#runtimeForm').showThingSpeakPushLogs.checked = runtime.showThingSpeakPushLogs === true;
+  $('#runtimeForm').pushDhtToFirebase.checked = runtime.pushDhtToFirebase === true;
   $('#runtimeForm').intervalOfDhtSeconds.value = text(runtime.intervalOfDhtSeconds, '');
   $('#runtimeForm').dailySmsLimit.value = text(runtime.dailySmsLimit, '');
 
@@ -303,6 +306,7 @@ async function saveRuntime(form) {
     jobLogs: form.get('jobLogs') === 'on',
     showFirebasePushLogs: form.get('showFirebasePushLogs') === 'on',
     showThingSpeakPushLogs: form.get('showThingSpeakPushLogs') === 'on',
+    pushDhtToFirebase: form.get('pushDhtToFirebase') === 'on',
     intervalOfDhtSeconds: Number(form.get('intervalOfDhtSeconds')) || 30,
     dailySmsLimit: Number(form.get('dailySmsLimit')) || 200,
     updatedAtMs: Date.now()

@@ -13,6 +13,13 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Guardrail: clamp or heal invalid values to safe default. A hard **60 s floor**
     is enforced in firmware (`kMinTelemetryIntervalMs`) — telemetry/ThingSpeak are
     never pushed more often than once per minute, regardless of a lower value here.
+- `pushDhtToFirebase` (boolean)
+  - Meaning: mirror the DHT reading into RTDB `/ttgo_tcall/telemetry`. When false
+    the device writes nothing to that node; the reading still goes to the OLED,
+    the local dashboard and ThingSpeak.
+  - Default: `false`. It is off by default because a per-minute write of a value
+    that is already published elsewhere was the largest single source of Realtime
+    Database traffic. See [05-FIREBASE-DESIGN.md](05-FIREBASE-DESIGN.md).
 - `connectedSsid` (string, device-written)
   - Meaning: the SSID the device is currently connected to (STA). Written by the
     device on each sync; empty/absent when in AP/OFFLINE mode. Read-only for operators.
@@ -35,15 +42,15 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   - Meaning: ntfy topic URL for user-facing notifications (incoming SMS/calls, package events).
   - Default: from `secrets.h` `NTFY_URL_DEFAULT`. Real topic URL lives only in the gitignored `secrets.h` — never commit it, since an ntfy topic name is a bearer credential (anyone who knows it can publish to or subscribe to the channel), and this channel carries WiFi passwords on save.
 - `ntfyLogUrl` (string)
-  - Meaning: ntfy topic URL for the operational log/error channel (job lifecycle, rate-limit/rescue alerts, boot). Chatty — subscribe + mute.
+  - Meaning: ntfy topic URL for the operational log/error channel (job lifecycle, rate-limit/rescue alerts, boot) **and** for incoming SMS from a sender on `blockedIncomingSms`. Ignore-listed senders are routed here instead of `ntfyUrl`, never silenced: the message is still decoded, parsed for a package subscription, archived to Firestore and deleted from the SIM. Chatty - subscribe + mute.
   - Default: from `secrets.h` `NTFY_LOG_URL_DEFAULT`. Real topic URL lives only in `secrets.h`.
-- `ntfyMuteUrl` (string)
-  - Meaning: ntfy topic URL for incoming SMS from a sender on `blockedIncomingSms`. Fires instead of `ntfyUrl` so blocked/muted traffic stays visible on its own channel rather than being silently dropped. The SMS is still archived to Firestore and deleted from the SIM as usual.
-  - Default: from `secrets.h` `NTFY_MUTE_URL_DEFAULT`. Real topic URL lives only in `secrets.h`.
 
 ## Firestore Block Lists
 - Stored on `sim_module/device`: `blockedIncomingCallers`, `blockedIncomingSms`, `blockedOutgoingCallers`, `blockedOutgoingSms`.
 - Refreshed on startup, on every settings `sync`, and automatically about once a minute, so changes apply without a reboot.
+- The same read also caches the `active` switch. Job processing uses that cached
+  value instead of re-reading the device document once per job, so switching the
+  gateway off applies within about a minute rather than instantly.
 
 ## Package State
 - Stored at `/ttgo_tcall/package` (separate node). Holds subscription expiry plus
@@ -65,9 +72,11 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
 ## Acceptance Criteria
 - Existing runtime variables are never overwritten by startup defaults.
 - Missing runtime variables are auto-created.
+- `pushDhtToFirebase` is created as `false` when absent, and no telemetry is
+  written while it is false.
 - Invalid runtime variables are auto-healed.
 - `ntfyUrl` can be changed without reflashing.
 - Firestore block lists sync on startup, periodically, and through `sync`.
 - Startup and periodic sync both work.
 - Manual `sync` command applies changes immediately.
-- `help` command documents all available serial commands, including `show sms`, `delete sms <index>`, and `delete all sms`.
+- `help` command documents all available serial commands, including `show sms`, `drain sms`, `delete sms <index>`, and `delete all sms`.

@@ -46,6 +46,11 @@ struct BlockLists {
 
 struct FirebaseRuntimeSettings {
   uint32_t intervalOfDhtSeconds = 15;
+  // Uploading the DHT reading to the Realtime Database is opt-in and off by
+  // default. The reading already goes to ThingSpeak, the OLED and the local
+  // dashboard, and writing it every minute was the largest single source of
+  // Realtime Database traffic.
+  bool pushDhtToFirebase = false;
   bool showFirebasePushLogs = true;
   bool showThingSpeakPushLogs = true;
   bool jobLogs = true;
@@ -54,7 +59,6 @@ struct FirebaseRuntimeSettings {
   int monthlySmsLimit = 4900;
   String ntfyUrl;
   String ntfyLogUrl;
-  String ntfyMuteUrl;
   // Desired WiFi pairs, managed from the dashboard via the RTDB runtime node.
   // The device persists them to LittleFS on sync; they apply on next reboot.
   String wifiSsid1;
@@ -62,6 +66,7 @@ struct FirebaseRuntimeSettings {
   String wifiSsid2;
   String wifiPass2;
   bool createdIntervalOfDht = false;
+  bool createdPushDhtToFirebase = false;
   bool createdShowFirebasePushLogs = false;
   bool createdShowThingSpeakPushLogs = false;
   bool createdJobLogs = false;
@@ -70,7 +75,6 @@ struct FirebaseRuntimeSettings {
   bool createdMonthlySmsLimit = false;
   bool createdNtfyUrl = false;
   bool createdNtfyLogUrl = false;
-  bool createdNtfyMuteUrl = false;
 };
 
 // SIM package/subscription state, persisted at RTDB /ttgo_tcall/package and
@@ -96,21 +100,22 @@ public:
   bool pollCommands();
   bool fetchNextCommand(FirebaseCommand &outCommand);
   bool updateCommandStatus(const FirebaseCommand &command, const String &status, const String &errorReason = String());
-  bool updateCounterSnapshot(int dailyCount, int weeklyCount, int monthlyCount);
-  bool fetchCounterSnapshot(int &dailyCount, int &weeklyCount, int &monthlyCount);
+  // Counters are stored with the calendar window they belong to, so a reboot can
+  // tell a current total apart from one left over from yesterday or last month.
+  bool updateCounterSnapshot(int dailyCount,
+                             int weeklyCount,
+                             int monthlyCount,
+                             const String &dayKey,
+                             const String &weekKey,
+                             const String &monthKey);
+  bool fetchCounterSnapshot(int &dailyCount,
+                            int &weeklyCount,
+                            int &monthlyCount,
+                            String &dayKey,
+                            String &weekKey,
+                            String &monthKey);
   bool pushTelemetry(float temperature, float humidity, unsigned long epochSeconds);
   bool pushStartupStatus(const String &bootTime, const String &wifiMode, const String &ipAddress, bool firebaseReady);
-  bool pushLandingSnapshot(float temperature,
-                           float humidity,
-                           int sentToday,
-                           int sentWeek,
-                           int sentMonth,
-                           const String &wifiMode,
-                           const String &ipAddress,
-                           bool firebaseReady,
-                           bool telemetryPushOk,
-                           const String &telemetryMessage,
-                           unsigned long epochSeconds);
   bool fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
                             uint32_t defaultIntervalOfDhtSeconds,
                             bool defaultShowFirebasePushLogs,
@@ -130,7 +135,6 @@ public:
   bool claimSmsJob(const FirestoreJob &job);
   // Fetch + claim the next pending call job (server-side query, limit 1).
   bool fetchNextCallJob(FirestoreJob &outJob);
-  bool fetchGatewayActive(bool &outActive);
   bool updateSmsJobStatus(const FirestoreJob &job, const String &status, const String &errorReason = String());
   bool updateCallJobStatus(const FirestoreJob &job,
                            const String &status,
@@ -152,15 +156,17 @@ public:
                         const String &pakistanTimestamp);
   // Atomically increment a counter integer field on sim_module/device.
   bool incrementDeviceCounter(const char *field);
-  bool pushDeviceHeartbeat(const String &deviceName,
-                           int batteryPercent,
+  // Only the values that actually move. Identity and configuration fields are
+  // written once by bootstrapGateway; repeating them every heartbeat was pure
+  // write volume, and re-asserting `active` overrode the operator's off switch.
+  bool pushDeviceHeartbeat(int batteryPercent,
                            int signalStrength,
                            const String &networkOperator,
-                           unsigned long epochSeconds,
-                           int pollIntervalSeconds,
-                           bool missedCallMode);
+                           unsigned long epochSeconds);
   bool recoverStuckJobs(unsigned long cutoffEpochSeconds);
-  bool fetchBlockLists(BlockLists &out);
+  // Reads sim_module/device once for both the block lists and the active flag,
+  // so job processing no longer re-reads the same document per job.
+  bool fetchBlockLists(BlockLists &out, bool &outActive);
   // Write connectedSsid to /ttgo_tcall/settings/runtime in RTDB.
   bool pushConnectedSsid(const String &ssid);
   // Package/subscription state at RTDB /ttgo_tcall/package. fetch heals defaults

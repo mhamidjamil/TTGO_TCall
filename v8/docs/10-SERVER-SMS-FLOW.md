@@ -98,18 +98,27 @@ Jobs stuck in `in_progress` for more than 5 minutes are reset to `pending` autom
 
 Incoming SMS bodies are normalized before storage/notification — see [SMS normalization](#sms-normalization).
 
+## Incoming SMS: two paths in
+
+1. **Live.** The modem raises `+CMTI`/`+CMT` for a message that lands while the device is listening, and it is handled immediately.
+2. **Drain.** Everything else. A message delivered while the device was powered off, rebooting, or busy inside a blocking AT exchange just sits in SIM storage; nothing in the modem replays it. Once a minute the device lists the SIM, takes the oldest entry, runs it through the same handler, and deletes it. The next tick takes the next one until the inbox is empty. `drain sms` forces a pass immediately.
+
+Without the drain, backlogged messages accumulate unread and a package subscription confirmation that arrived at the wrong moment is never seen. A message that cannot be cleared (Firestore write or SIM delete failed) stays put and the drain backs off to 5 minutes so it is not re-notified every tick.
+
 ## Block lists (on `sim_module/device`)
 
 Four string arrays, editable from the dashboard or directly in Firestore:
 
-- `blockedIncomingCallers` / `blockedIncomingSms` — incoming events from these are still archived to `*_received` (and the SMS is still deleted from the SIM once archived) but do **not** trigger the user-facing `ntfyUrl` notification (`notified: false`). Blocked/muted incoming SMS instead fire a separate notification on the `ntfyMuteUrl` channel (see [11-RUNTIME-SETTINGS-SYNC](11-RUNTIME-SETTINGS-SYNC.md)), so muted senders stay visible without mixing into the main channel.
+- `blockedIncomingCallers` / `blockedIncomingSms` — incoming events from these are still archived to `*_received` (and the SMS is still deleted from the SIM once archived) but do **not** trigger the user-facing `ntfyUrl` notification (`notified: false`). A blocked sender's SMS is routed to the operational `ntfyLogUrl` channel instead (see [11-RUNTIME-SETTINGS-SYNC](11-RUNTIME-SETTINGS-SYNC.md)), so muted senders stay visible without mixing into the main channel. Being on the ignore list never skips processing: the message is still decoded and parsed for a package subscription.
 - `blockedOutgoingCallers` / `blockedOutgoingSms` — jobs to these are marked `blocked` and never sent/dialed.
 
 Entries may be phone numbers or alphanumeric sender ids (e.g. `JAZZ`). On first boot each empty list is seeded with `["JAZZ","000"]` as an editable template. The device refreshes these about once a minute and instantly when **Sync** is pressed.
 
 ## SMS normalization
 
-Incoming SMS that arrive as UCS2/UTF-16BE hex are decoded before storing/notifying. Detection: length divisible by 4, all hex, starts `00xx`, and decodes to mostly-printable text. On success the decoded text becomes `normalized_message` (`was_decoded: true`) and is what Firebase + ntfy receive; the raw payload is kept in `original_message`. On failure the original is kept unchanged. Example: `00310020005000610069007300650020006D006100690020003800470042` → `1 Paise mai 8GB`.
+Incoming SMS that arrive as UCS2/UTF-16BE hex are decoded before storing/notifying. Detection: all hex, starts `00xx`, and decodes to mostly-printable text. A trailing partial code unit (a body truncated in transit) is dropped rather than failing the whole message, so a readable prefix still reaches the operator instead of raw hex. On success the decoded text becomes `normalized_message` (`was_decoded: true`) and is what Firebase + ntfy receive; the raw payload is kept in `original_message`. On failure the original is kept unchanged. Example: `00310020005000610069007300650020006D006100690020003800470042` → `1 Paise mai 8GB`.
+
+Every notification for a decoded body carries a trailing `(converted-to-english)` line, on any channel, so the operator can tell reconstructed text from text that arrived readable.
 
 ## What lives where (no duplication)
 
