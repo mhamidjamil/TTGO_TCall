@@ -1,5 +1,5 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js';
-import { getAuth, onAuthStateChanged, signInAnonymously } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
+import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js';
 import {
   collection,
   doc,
@@ -129,7 +129,14 @@ async function loadFirebase() {
   onAuthStateChanged(auth, (user) => {
     $('#connectionState').textContent = user ? 'Online' : 'Authenticating';
   });
-  await signInAnonymously(auth);
+  // Sign in as the gateway account the device itself uses. The security rules
+  // trust that one uid; an anonymous browser session is rejected everywhere, so
+  // the fallback below only helps a board whose secrets have no device account.
+  if (config.authEmail && config.authPassword) {
+    await signInWithEmailAndPassword(auth, config.authEmail, config.authPassword);
+  } else {
+    await signInAnonymously(auth);
+  }
 }
 
 async function fetchDevice() {

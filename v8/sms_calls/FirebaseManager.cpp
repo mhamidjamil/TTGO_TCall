@@ -657,6 +657,14 @@ bool FirebaseManager::authenticate() {
   idToken = token;
   tokenExpiresAtMs = millis() + (unsigned long)(expiresIn - 60) * 1000UL;
   error = String();
+
+  // Print the uid every time. An anonymous sign-in mints a NEW uid on every
+  // renewal, so a changing uid here is the symptom of the device filling the
+  // project's user list, and it is invisible without this line.
+  Serial.print("[FIREBASE] signed in as ");
+  Serial.print(config.firebaseUseAnonymous ? "anonymous" : config.firebaseUserEmail);
+  Serial.print(" uid=");
+  Serial.println((const char *)(tokenDoc["localId"] | "unknown"));
   return true;
 }
 

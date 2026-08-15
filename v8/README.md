@@ -74,33 +74,60 @@ Upload `v8/sms_calls/data` to LittleFS with the sketch. The local web UI is serv
 http://<device-ip>:<webServerPort>/dashboard.html
 ```
 
-The dashboard uses Firebase anonymous auth from the browser and manages:
+The dashboard signs in to Firebase as the gateway account, fetching the credentials from the device's own `/api/firebase-web-config` endpoint, and manages:
 
 - `sim_module/device` (active/name, block lists, counters)
 - `sim_module/sms/sms_jobs` and `sim_module/sms/sms_received`
 - `sim_module/calls/call_jobs` and `sim_module/calls/call_received`
 - RTDB `/ttgo_tcall/settings/runtime` for runtime flags such as `jobLogs`, SMS limits, and WiFi
 
-If anonymous auth is disabled, use a separate hosted admin dashboard or adapt `dashboard.js` to your preferred sign-in method. Device email/password is intentionally not exposed to the browser.
+That endpoint has no password on it, so anyone who can reach the device on the local network can read the gateway credentials. That is a deliberate trade: the dashboard writes the same documents the firmware does, so it needs the same identity, and the anonymous sign-in it used to rely on let anyone on the internet holding the (public) API key do the same thing from anywhere. Keep the device on a trusted network, and do not expose its web port to the internet.
 
 ### LittleFS Upload Rule
 - Every time anything under `v8/sms_calls/data` changes, bump `v8/sms_calls/data/version.txt` with a new version and date.
 - The dashboard reads that file and shows it in the header and About tab.
-- For the default ESP32 4 MB partition in this repo, the data partition starts at `0x290000`.
-- Build the image with `mklittlefs` and flash it with `esptool` when you want to verify the upload from the console.
+- Build the image with `mklittlefs` and flash it with `esptool`.
+
+**Never hardcode the offset.** It moves with the partition scheme: `0x290000` on the
+default 4 MB scheme, `0x310000` on Huge APP, `0x3D0000` on Minimal SPIFFS. Writing
+the image at the wrong offset overwrites the firmware. Ask the board what it is
+actually running, every time:
 
 ```sh
-IMG=/tmp/ttgo_littlefs.bin
+PORT=/dev/ttyACM0
 ROOT=/path/to/v8/sms_calls/data
-# Find the exact version with: ls ~/.arduino15/packages/esp32/tools/mklittlefs/
-MKLITTLEFS=~/.arduino15/packages/esp32/tools/mklittlefs/<version>/mklittlefs
+IMG=/tmp/ttgo_littlefs.bin
+CORE=~/.arduino15/packages/esp32/hardware/esp32/3.3.8
 ESPTOOL=~/.arduino15/packages/esp32/tools/esptool_py/5.2.0/esptool
-$MKLITTLEFS -c "$ROOT" -b 4096 -p 256 -s 0x160000 "$IMG"
-$ESPTOOL --chip esp32 --port /dev/ttyACM0 --baud 921600 write-flash 0x290000 "$IMG"
+MKLITTLEFS=~/.arduino15/packages/esp32/tools/mklittlefs/4.0.2-db0513a/mklittlefs
+
+# 1. Read the real partition table off the board and note the spiffs row.
+$ESPTOOL --port $PORT read-flash 0x8000 0xc00 /tmp/parttable.bin
+python3 $CORE/tools/gen_esp32part.py /tmp/parttable.bin
+
+# 2. Back the partition up first — it also holds /v8_config.json and
+#    /wifi_nets.json, and writing the image erases them.
+$ESPTOOL --port $PORT --baud 921600 read-flash <offset> <size> /tmp/fs-backup.bin
+$MKLITTLEFS -u /tmp/old-fs /tmp/fs-backup.bin   # keep these files if you want them
+
+# 3. Build at exactly the partition size and write at exactly its offset.
+$MKLITTLEFS -c "$ROOT" -b 4096 -p 256 -s <size> "$IMG"
+$ESPTOOL --port $PORT --baud 921600 write-flash <offset> "$IMG"
+
+# 4. Prove it landed, rather than trusting "Wrote ... bytes".
+$ESPTOOL --port $PORT --baud 921600 read-flash <offset> <size> /tmp/readback.bin
+$MKLITTLEFS -l /tmp/readback.bin
 ```
 
-If the board uses a different partition scheme, check `arduino-cli board details -b esp32:esp32:esp32` before flashing.
-If you see `Wrong boot mode detected (0x13)`, the board is not in download mode. Hold `BOOT` while tapping `EN/RESET`, then rerun the upload.
+To keep the device's saved settings, copy `v8_config.json` and `wifi_nets.json`
+out of `/tmp/old-fs` into a copy of the data folder before step 3, and build the
+image from that copy.
+
+Close the Arduino IDE Serial Monitor first; it holds the port and `esptool`
+cannot open it. If you see `Wrong boot mode detected (0x13)`, the board is not in
+download mode: hold `BOOT` while tapping `EN/RESET`, then rerun the upload.
+Confirm the upload worked by watching the boot log for the LittleFS version and
+`[FIREBASE] signed in as ... uid=`.
 
 ## Reduced 8-Commit Delivery Plan
 1. `feat(firestore): add gateway schema and device identity`

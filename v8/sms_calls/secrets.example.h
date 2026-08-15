@@ -43,7 +43,10 @@
 #define FIREBASE_PROJECT_ID_DEFAULT "YOUR_FIREBASE_PROJECT_ID"
 #define FIREBASE_DATABASE_URL_DEFAULT "https://YOUR_PROJECT-default-rtdb.firebaseio.com"
 #define FIREBASE_API_KEY_DEFAULT "YOUR_FIREBASE_API_KEY"
-#define FIREBASE_USE_ANONYMOUS_DEFAULT 1
+// Leave anonymous off. Anonymous sign-in creates a brand-new account every time
+// the hour-long token expires, so a device left running fills the project's user
+// list with hundreds of throwaway accounts. Give the gateway its own account.
+#define FIREBASE_USE_ANONYMOUS_DEFAULT 0
 #define FIREBASE_USER_EMAIL_DEFAULT "YOUR_DEVICE_EMAIL"
 #define FIREBASE_USER_PASSWORD_DEFAULT "YOUR_DEVICE_PASSWORD"
 #define FIREBASE_COMMAND_PATH_DEFAULT "/ttgo_tcall/commands/pending"

@@ -2,6 +2,45 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+<!-- CLAUDE-KNOWLEDGE-BLOCK:START (managed by ~/.claude/knowledge - do not edit by hand) -->
+## Central knowledge (read this first)
+
+This project does not hold its own copy of the working rules or the lessons
+learned elsewhere. Those live in one place, shared by every project:
+
+**`~/.claude/knowledge/`** (private repository `hamidjamil0420/claude-knowledge`)
+
+Read before starting work here:
+
+1. `~/.claude/knowledge/rules/portable-working-rules.md` - how to work with
+   Hamid: communication, git and commits, code quality, testing, database.
+2. `~/.claude/knowledge/learnings/cross-project.md` - dated lessons from every
+   project, each with the reason it matters.
+3. `~/.claude/knowledge/playbooks/firmware-device.md` - what is already known about
+   building this kind of project.
+4. `~/.claude/knowledge/projects/index.md` - what this project shares with the
+   others, and therefore what a change here can break somewhere else.
+
+Before publishing or releasing anything, walk
+`~/.claude/knowledge/checklists/ship-readiness.md`. It is short, and skipping it
+is how a real credential reached a published application once already.
+
+**Write back the moment something is learned.** Do not leave it in this
+conversation and do not batch it for the end. Decide where by asking whether it
+would have helped a different project:
+
+- Useful to any project: `~/.claude/knowledge/learnings/cross-project.md` and
+  the Obsidian note `Claude - Learnings`.
+- Useful to projects of this kind: the playbook above.
+- Only true here: this file, below this block.
+
+Announce it with the up arrow emoji when recording and the down arrow emoji when
+applying, so the learning is visible and not just the result.
+
+If `~/.claude/knowledge/` is missing on this machine, clone it:
+`git clone https://github.com/hamidjamil0420/claude-knowledge.git ~/.claude/knowledge`
+<!-- CLAUDE-KNOWLEDGE-BLOCK:END -->
+
 ## What This Is
 
 Firmware for the **TTGO T-Call ESP32** (SIM800 GSM modem + DHT sensor + SSD1306 OLED) that runs as a two-way SMS/call gateway with a cloud control plane. **`v8/` is the one active, self-contained Arduino sketch.** All older versions and supporting material were moved to `archive/` (see `archive/README.md`).
