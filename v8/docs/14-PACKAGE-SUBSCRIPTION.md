@@ -55,7 +55,7 @@ Package detected. validity=30d sms=10000 confidence=100% (3/3 tokens) daysLeft=2
 ## Expiry math
 
 ```
-expiryEpoch = subscribeTime + (validityDays − safetyMarginDays) × 1 day
+expiresAt = subscribeTime + (validityDays − safetyMarginDays) × 1 day
 ```
 
 - **`safetyMarginDays`** (default **1**) accounts for operators expiring the bundle
@@ -74,9 +74,8 @@ blocked by expiry ends as **`failed`, reason `package_expired`** (so it can be
 retried automatically once you re-subscribe — stuck jobs reset after 5 min).
 
 **Fail-open** by design — sending is allowed when:
-- the package state is **unknown** (never saw a subscription SMS), or
-- the clock isn't NTP-synced yet, or
-- no expiry has been computed.
+- `expiresAt` is empty or unreadable (never saw a subscription SMS), or
+- the clock isn't NTP-synced yet.
 
 This prevents a missed subscription SMS from bricking sending (the v5 lockout
 problem). Calls are never gated by the package.
@@ -95,15 +94,16 @@ problem). Calls are never gated by the package.
 
 ## Firebase storage (RTDB, first source of truth)
 
+**One field per fact.** Every value below is stored exactly once, in a form a
+human can read and type. There is no separate machine copy and no separate
+display copy, so a hand edit can never land on the half the device ignores.
+
 `/ttgo_tcall/package`:
 
 ```json
 {
-  "known": true,
-  "subscribedEpoch": 1719792000,
-  "subscribedHuman": "2024-07-01 05:00 PKT",
-  "expiryEpoch": 1722297600,
-  "expiryHuman": "2024-07-30 05:00 PKT",
+  "expiresAt": "2026-09-28 01:44 PKT",
+  "subscribedAt": "2026-08-30 01:44 PKT",
   "validityDays": 30,
   "smsAllowance": 10000,
   "safetyMarginDays": 1,
@@ -116,16 +116,18 @@ problem). Calls are never gated by the package.
 
 | Field | Meaning | Editable? |
 |---|---|---|
-| `known` | `true` once a subscription has been recorded. `false` = unknown → sending **allowed** (fail-open) | yes |
-| `subscribedEpoch` | When the subscription SMS was detected (epoch **seconds**, UTC) | informational |
-| `subscribedHuman` | Human-readable mirror of `subscribedEpoch` (PKT). Display only — device never reads it | no (auto-written) |
-| `expiryEpoch` | **The blocking deadline** (epoch seconds, UTC). Sending stops once `now > expiryEpoch` | **yes — edit this to set expiry manually** |
-| `expiryHuman` | Human-readable mirror of `expiryEpoch` (PKT). Display only | no (auto-written) |
+| `expiresAt` | **The blocking deadline**, Pakistan time. Sending stops once now is past it. **Empty = no package known → sending allowed** (fail-open) | **yes — this is the one field to edit** |
+| `subscribedAt` | When the subscription SMS was detected, Pakistan time | informational |
 | `validityDays` | Days extracted from the subscription SMS (e.g. 30) | informational |
 | `smsAllowance` | SMS count extracted from the SMS (e.g. 10000) | informational |
-| `safetyMarginDays` | Subtracted from validity when computing expiry (default 1) | yes |
+| `safetyMarginDays` | Subtracted from validity when computing the expiry (default 1) | yes |
 | `matchTokens` | Comma-separated tokens that must ALL appear for an SMS to count as a subscription | yes |
 | `lastMessage` | First 160 chars of the last matched subscription SMS | informational |
+
+Timestamp format: `YYYY-MM-DD HH:MM PKT`. Seconds (`:SS`) are accepted and the
+trailing `PKT` is optional — the time is always read as Pakistan time (UTC+5).
+If the text cannot be read, the device logs it on serial, leaves it alone, and
+treats the package as unknown (sending stays allowed) rather than guessing.
 
 On boot the device reads this node; if missing it is **created/healed** with the
 compile-time defaults and a serial log is printed. The device also **re-reads the
@@ -137,16 +139,23 @@ and it confirms a changed expiry with an ntfy notification.
 Two ways:
 
 1. **Edit RTDB directly** (applies within ≤5 min, confirmed via ntfy):
-   - `/ttgo_tcall/package/expiryEpoch` → `1785351599` (= 2026-07-29 23:59:59 PKT)
-   - `/ttgo_tcall/package/known` → `true`
-   - The device rewrites `expiryHuman` on its next push so you can double-check the date.
-   - To compute an epoch for any PKT date: epoch = UTC seconds; PKT = UTC+5, so
-     use any epoch converter with the UTC time 5 hours *earlier* than your PKT target.
+   set `/ttgo_tcall/package/expiresAt` to `2026-07-29 23:59 PKT`. That is the
+   whole job — there is no second field to keep in step. To turn the gate off
+   entirely, blank the field (or run `package clear`).
 2. **Serial command**: `package set <days>` — sets validity `<days>` from *now*
    (margin subtracted). E.g. on 3 July, `package set 27` → expires 29 July.
 
 When the next subscription SMS arrives and the `matchTokens` match, the device
-**auto-renews**: recomputes `expiryEpoch`/`expiryHuman` and pushes the fresh state.
+**auto-renews**: recomputes `expiresAt` and pushes the fresh state.
+
+### Migrating from the old layout
+
+Before 31 August 2026 this node stored each instant twice (`expiryEpoch` +
+`expiryHuman`, `subscribedEpoch` + `subscribedHuman`) plus a separate `known`
+flag. Only the epoch and the flag were read, so editing the readable half, or
+editing the epoch without also setting `known`, did nothing. On its first read
+after the update the device adopts the old epochs, writes them as `expiresAt` /
+`subscribedAt`, and **deletes all five legacy keys**. No manual step is needed.
 
 ---
 

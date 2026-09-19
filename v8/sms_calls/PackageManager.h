@@ -24,8 +24,11 @@ struct PackageParseResult {
 // when the operator changes wording. The validity-day count and SMS count are
 // extracted separately and robustly ("30day", "30 day", "30days" all work).
 //
-// Expiry = subscribe date + (validityDays - safetyMarginDays). Sending is allowed
-// while the package is valid OR while the state is unknown (fail-open) so a missed
+// Expiry = subscribe date + (validityDays - safetyMarginDays), stored in Firebase
+// as the single plain-text field `expiresAt` ("2026-09-28 01:44 PKT"). That one
+// field is both what the operator edits and what the device reads back, so there
+// is no second copy to fall out of step. Sending is allowed while the package is
+// valid OR while expiresAt is empty/unreadable (fail-open) so a missed
 // subscription SMS never bricks sending.
 class PackageManager {
 public:
@@ -36,13 +39,15 @@ public:
   void begin(FirebaseManager *firebaseManager, NtfyManager *ntfyManager);
   // True when sending should be permitted (valid package OR unknown state).
   bool isSmsAllowed(unsigned long nowEpoch) const;
-  bool isKnown() const { return state.known; }
+  // A recorded expiry is the only thing that makes the package "known" - there is
+  // no separate flag to keep in step with it.
+  bool isKnown() const { return state.expiryEpoch != 0; }
   int daysRemaining(unsigned long nowEpoch) const;
   // Inspect an incoming SMS; if it is a subscription confirmation, update state,
   // persist to Firebase, and ntfy the operator. Returns true if handled.
   bool handleIncomingSms(const String &text, unsigned long nowEpoch);
-  // Re-read /ttgo_tcall/package from RTDB so manual cloud edits (e.g. setting
-  // expiryEpoch by hand) apply without a reboot. Call on the periodic sync.
+  // Re-read /ttgo_tcall/package from RTDB so manual cloud edits (e.g. typing a new
+  // expiresAt by hand) apply without a reboot. Call on the periodic sync.
   bool refreshFromCloud(unsigned long nowEpoch);
   // Periodic tick: sends a one-time ntfy reminder ~reminderDays before expiry.
   void loop(unsigned long nowEpoch);

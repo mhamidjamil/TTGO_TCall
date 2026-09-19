@@ -104,7 +104,10 @@ bool parseLimitVariant(const JsonVariantConst &variant, int &outValue) {
   return true;
 }
 
-bool parseStringVariant(const JsonVariantConst &variant, String &outValue) {
+// URL-only reader: rejects anything that is not http(s), so a half-typed ntfy
+// topic in the console cannot replace a working one. Do NOT use it for ordinary
+// text fields (tokens, SSIDs, message bodies) - it rejects every one of them.
+bool parseUrlVariant(const JsonVariantConst &variant, String &outValue) {
   if (!variant.is<const char *>()) {
     return false;
   }
@@ -114,6 +117,15 @@ bool parseStringVariant(const JsonVariantConst &variant, String &outValue) {
     return false;
   }
   outValue = parsed;
+  return true;
+}
+
+bool parseTextVariant(const JsonVariantConst &variant, String &outValue) {
+  if (!variant.is<const char *>()) {
+    return false;
+  }
+  outValue = String(variant.as<const char *>());
+  outValue.trim();
   return true;
 }
 
@@ -194,9 +206,10 @@ String safeFirestoreDocumentId(const String &value) {
   return id;
 }
 
-// Render an epoch as a human-readable Pakistan-time string, or "" for 0.
-// Written next to the *Epoch fields in RTDB so the operator can read them.
-String formatPktHuman(unsigned long epochSeconds) {
+// Render an epoch as a Pakistan-time string, or "" for 0. This is the format the
+// package node is STORED in (not a mirror of some other field): what the operator
+// reads is what the device parses back, so there is nothing to drift.
+String formatPktTimestamp(unsigned long epochSeconds) {
   if (epochSeconds < 1000000000UL) {
     return String("");
   }
@@ -208,6 +221,44 @@ String formatPktHuman(unsigned long epochSeconds) {
   char buffer[28];
   strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M PKT", &timeInfo);
   return String(buffer);
+}
+
+// Days since 1970-01-01 for a civil date. Done by hand because mktime() applies
+// the device's local timezone, which on the ESP32 is whatever NTP setup left it.
+long daysFromCivil(int year, int month, int day) {
+  year -= month <= 2;
+  int era = (year >= 0 ? year : year - 399) / 400;
+  unsigned yearOfEra = (unsigned)(year - era * 400);
+  unsigned dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+  unsigned dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+  return (long)era * 146097 + (long)dayOfEra - 719468;
+}
+
+// Parse "YYYY-MM-DD HH:MM" with an optional ":SS" and an optional trailing zone
+// word back to epoch seconds. Pakistan time (UTC+5) is assumed, matching what
+// formatPktTimestamp writes. Returns 0 for empty or unreadable text, which the
+// callers treat as "unknown" rather than "expired".
+unsigned long parsePktTimestamp(const String &text) {
+  String value = text;
+  value.trim();
+  if (value.length() < 16) {
+    return 0;
+  }
+  if (value.charAt(4) != '-' || value.charAt(7) != '-' || value.charAt(13) != ':') {
+    return 0;
+  }
+  int year = value.substring(0, 4).toInt();
+  int month = value.substring(5, 7).toInt();
+  int day = value.substring(8, 10).toInt();
+  int hour = value.substring(11, 13).toInt();
+  int minute = value.substring(14, 16).toInt();
+  int second = (value.length() >= 19 && value.charAt(16) == ':') ? value.substring(17, 19).toInt() : 0;
+  if (year < 2020 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31 ||
+      hour > 23 || minute > 59 || second > 59) {
+    return 0;
+  }
+  long epochDays = daysFromCivil(year, month, day);
+  return (unsigned long)(epochDays * 86400L + hour * 3600L + minute * 60L + second - 5 * 3600L);
 }
 
 // Percent-encode a document ID for use as a URL path segment. Google's HTTP
@@ -765,24 +816,60 @@ bool FirebaseManager::fetchPackageState(PackageState &outState, const String &de
 
   if (statusCode == 404 || response == "null") {
     // No node yet — seed it with detection defaults so the operator can edit
-    // the tokens/margin in Firebase. "known" stays false (allow-when-unknown).
+    // the tokens/margin in Firebase. expiresAt stays empty (allow-when-unknown).
     outState.createdNode = true;
   } else if (statusCode < 200 || statusCode >= 300) {
     setHttpStatusError(error, "package state fetch", statusCode, response);
     return false;
   } else {
-    DynamicJsonDocument readDoc(1024);
+    DynamicJsonDocument readDoc(1536);
     if (deserializeJson(readDoc, response)) {
       error = String("package state parse failed body=") + response;
       return false;
     }
     JsonObject root = readDoc.as<JsonObject>();
-    bool knownValue = false;
-    if (parseBoolVariant(root["known"], knownValue)) {
-      outState.known = knownValue;
+
+    bool haveExpiresAt = false;
+    String expiresText;
+    if (parseTextVariant(root["expiresAt"], expiresText) && expiresText.length() > 0) {
+      haveExpiresAt = true;
+      outState.expiryEpoch = parsePktTimestamp(expiresText);
+      if (outState.expiryEpoch == 0) {
+        // Typed by hand and unreadable. Treat as unknown (sending stays allowed)
+        // and say so loudly rather than silently ignoring the operator's edit.
+        Serial.print("[PACKAGE] expiresAt not understood, ignoring it: \"");
+        Serial.print(expiresText);
+        Serial.println("\" (expected \"YYYY-MM-DD HH:MM PKT\")");
+        outState.createdNode = true;
+      }
     }
-    outState.subscribedEpoch = root["subscribedEpoch"] | 0UL;
-    outState.expiryEpoch = root["expiryEpoch"] | 0UL;
+    String subscribedText;
+    if (parseTextVariant(root["subscribedAt"], subscribedText) && subscribedText.length() > 0) {
+      outState.subscribedEpoch = parsePktTimestamp(subscribedText);
+    }
+
+    // One-time migration off the old expiryEpoch/expiryHuman/subscribedEpoch/
+    // subscribedHuman/known layout: two fields per instant meant a hand edit to
+    // one of them was silently ignored. Adopt the old epochs, then delete them.
+    if (!root["expiryEpoch"].isNull() || !root["expiryHuman"].isNull() ||
+        !root["subscribedEpoch"].isNull() || !root["subscribedHuman"].isNull() ||
+        !root["known"].isNull()) {
+      outState.legacyFieldsPresent = true;
+      outState.createdNode = true;
+      if (outState.expiryEpoch == 0) {
+        outState.expiryEpoch = root["expiryEpoch"] | 0UL;
+      }
+      if (outState.subscribedEpoch == 0) {
+        outState.subscribedEpoch = root["subscribedEpoch"] | 0UL;
+      }
+      bool knownValue = true;
+      // An explicit known=false used to mean "no package"; honour it once, but
+      // never let the stale flag override an expiresAt that is already there.
+      if (!haveExpiresAt && parseBoolVariant(root["known"], knownValue) && !knownValue) {
+        outState.expiryEpoch = 0;
+      }
+    }
+
     outState.validityDays = root["validityDays"] | 0;
     outState.smsAllowance = root["smsAllowance"] | 0L;
     int marginParsed = 0;
@@ -792,15 +879,12 @@ bool FirebaseManager::fetchPackageState(PackageState &outState, const String &de
       outState.createdNode = true;  // heal the margin key
     }
     String tokensParsed;
-    if (parseStringVariant(root["matchTokens"], tokensParsed) && tokensParsed.length() > 0) {
+    if (parseTextVariant(root["matchTokens"], tokensParsed) && tokensParsed.length() > 0) {
       outState.matchTokens = tokensParsed;
     } else {
       outState.createdNode = true;  // heal the tokens key
     }
-    String lastMsgParsed;
-    if (parseStringVariant(root["lastMessage"], lastMsgParsed)) {
-      outState.lastMessage = lastMsgParsed;
-    }
+    parseTextVariant(root["lastMessage"], outState.lastMessage);
   }
 
   if (outState.createdNode) {
@@ -819,19 +903,26 @@ bool FirebaseManager::pushPackageState(const PackageState &state) {
     return false;
   }
 
-  DynamicJsonDocument doc(1024);
-  doc["known"] = state.known;
-  doc["subscribedEpoch"] = state.subscribedEpoch;
-  doc["expiryEpoch"] = state.expiryEpoch;
+  DynamicJsonDocument doc(1536);
+  // expiresAt is the whole truth about the deadline: the operator edits this one
+  // field in plain PKT text and the device parses that same field back. Empty
+  // means "no package known", which allows sending.
+  doc["expiresAt"] = formatPktTimestamp(state.expiryEpoch);
+  doc["subscribedAt"] = formatPktTimestamp(state.subscribedEpoch);
   doc["validityDays"] = state.validityDays;
   doc["smsAllowance"] = state.smsAllowance;
   doc["safetyMarginDays"] = state.safetyMarginDays;
   doc["matchTokens"] = state.matchTokens;
   doc["lastMessage"] = state.lastMessage;
-  // Human-readable mirrors of the *Epoch fields (PKT) — display only, the device
-  // reads back only the epochs. Edit expiryEpoch (seconds) to change the expiry.
-  doc["subscribedHuman"] = formatPktHuman(state.subscribedEpoch);
-  doc["expiryHuman"] = formatPktHuman(state.expiryEpoch);
+  if (state.legacyFieldsPresent) {
+    // RTDB deletes a key when a PATCH sets it to null: clear the old duplicated
+    // pairs so only one field per fact is left in the console.
+    doc["known"] = serialized("null");
+    doc["subscribedEpoch"] = serialized("null");
+    doc["subscribedHuman"] = serialized("null");
+    doc["expiryEpoch"] = serialized("null");
+    doc["expiryHuman"] = serialized("null");
+  }
 
   String payload;
   serializeJson(doc, payload);
@@ -968,7 +1059,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     }
 
     String parsedNtfyUrl;
-    if (parseStringVariant(root["ntfyUrl"], parsedNtfyUrl)) {
+    if (parseUrlVariant(root["ntfyUrl"], parsedNtfyUrl)) {
       outSettings.ntfyUrl = parsedNtfyUrl;
     } else {
       outSettings.createdNtfyUrl = true;
@@ -976,7 +1067,7 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     }
 
     String parsedNtfyLogUrl;
-    if (parseStringVariant(root["ntfyLogUrl"], parsedNtfyLogUrl)) {
+    if (parseUrlVariant(root["ntfyLogUrl"], parsedNtfyLogUrl)) {
       outSettings.ntfyLogUrl = parsedNtfyLogUrl;
     } else {
       outSettings.createdNtfyLogUrl = true;
@@ -987,10 +1078,10 @@ bool FirebaseManager::fetchRuntimeSettings(FirebaseRuntimeSettings &outSettings,
     // present; absence just means "no dashboard override set" (we do not heal
     // these keys so the runtime node stays clean until the operator sets them).
     String parsedWifi;
-    if (parseStringVariant(root["wifiSsid1"], parsedWifi)) outSettings.wifiSsid1 = parsedWifi;
-    if (parseStringVariant(root["wifiPass1"], parsedWifi)) outSettings.wifiPass1 = parsedWifi;
-    if (parseStringVariant(root["wifiSsid2"], parsedWifi)) outSettings.wifiSsid2 = parsedWifi;
-    if (parseStringVariant(root["wifiPass2"], parsedWifi)) outSettings.wifiPass2 = parsedWifi;
+    if (parseTextVariant(root["wifiSsid1"], parsedWifi)) outSettings.wifiSsid1 = parsedWifi;
+    if (parseTextVariant(root["wifiPass1"], parsedWifi)) outSettings.wifiPass1 = parsedWifi;
+    if (parseTextVariant(root["wifiSsid2"], parsedWifi)) outSettings.wifiSsid2 = parsedWifi;
+    if (parseTextVariant(root["wifiPass2"], parsedWifi)) outSettings.wifiPass2 = parsedWifi;
   }
 
   if (shouldWriteBack) {

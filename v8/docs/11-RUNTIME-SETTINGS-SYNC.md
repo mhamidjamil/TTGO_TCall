@@ -53,8 +53,9 @@ Allow selected runtime behavior to be controlled from Firebase Realtime Database
   gateway off applies within about a minute rather than instantly.
 
 ## Package State
-- Stored at `/ttgo_tcall/package` (separate node). Holds subscription expiry plus
-  the detection `matchTokens` and `safetyMarginDays`, both cloud-tunable.
+- Stored at `/ttgo_tcall/package` (separate node). Holds the subscription expiry
+  as a single plain-text `expiresAt` ("2026-09-28 01:44 PKT") plus the detection
+  `matchTokens` and `safetyMarginDays`, all cloud-tunable.
 - See `v8/docs/14-PACKAGE-SUBSCRIPTION.md` for the full contract.
 
 ## Sync Strategy

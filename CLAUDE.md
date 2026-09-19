@@ -3,6 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 <!-- CLAUDE-KNOWLEDGE-BLOCK:START (managed by ~/.claude/knowledge - do not edit by hand) -->
+
 ## Central knowledge (read this first)
 
 This project does not hold its own copy of the working rules or the lessons
@@ -39,6 +40,7 @@ applying, so the learning is visible and not just the result.
 
 If `~/.claude/knowledge/` is missing on this machine, clone it:
 `git clone https://github.com/hamidjamil0420/claude-knowledge.git ~/.claude/knowledge`
+
 <!-- CLAUDE-KNOWLEDGE-BLOCK:END -->
 
 ## What This Is
@@ -74,6 +76,10 @@ arduino-cli lib install ArduinoJson Firebase_Arduino_Client_Library_for_ESP8266_
 arduino-cli compile --fqbn esp32:esp32:esp32 v8/sms_calls
 arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 v8/sms_calls   # use the port from `arduino-cli board list`
 ```
+
+The production TTGO T-Call at USB serial id `54F4012031` requires `FlashMode=dio`.
+Forcing QIO makes its bootloader read corrupt segment addresses and reset through
+the watchdog. Keep Huge APP, 4 MB, 80 MHz flash frequency, and DIO flash mode.
 
 **LittleFS web assets** (`v8/sms_calls/data/`) are flashed separately as the filesystem image so `/dashboard.html`, `/dashboard.css`, `/dashboard.js` are served by the device. Build with `mklittlefs`, flash with `esptool` (data partition at `0x290000` for this repo's 4 MB partition — see `v8/README.md` for the exact commands). If upload reports `Wrong boot mode detected (0x13)`, hold `BOOT` while tapping `EN/RESET`, then retry.
 

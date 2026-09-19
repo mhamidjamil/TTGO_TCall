@@ -77,20 +77,25 @@ struct FirebaseRuntimeSettings {
   bool createdNtfyLogUrl = false;
 };
 
-// SIM package/subscription state, persisted at RTDB /ttgo_tcall/package and
-// mirrored to LittleFS. Detection tokens and the safety margin live here too so
-// they can be tuned from the cloud without reflashing (e.g. when the operator
-// changes the SMS count or the message wording).
+// SIM package/subscription state, persisted at RTDB /ttgo_tcall/package.
+// Detection tokens and the safety margin live here too so they can be tuned from
+// the cloud without reflashing (e.g. when the operator changes the SMS count or
+// the message wording).
+//
+// One cloud field per fact, and the field the operator reads is the field the
+// device reads. The node stores "expiresAt" as a plain PKT timestamp string
+// ("YYYY-MM-DD HH:MM PKT"); the epochs below are the parsed in-memory form only.
+// An empty/unreadable expiresAt means "unknown package" (sending allowed).
 struct PackageState {
-  bool known = false;              // have we ever recorded a subscription?
   unsigned long subscribedEpoch = 0;
-  unsigned long expiryEpoch = 0;
+  unsigned long expiryEpoch = 0;   // 0 = unknown; this alone decides "do we know the package?"
   int validityDays = 0;
   long smsAllowance = 0;
   int safetyMarginDays = 1;        // subtract from validity to be safe (Jazz expires early)
   String matchTokens;              // comma-separated: ALL must appear to count as a subscription SMS
   String lastMessage;
   bool createdNode = false;        // set true when we had to create/heal the node
+  bool legacyFieldsPresent = false;  // pre-2026-08 epoch/human key pairs seen; delete them on the next write
 };
 
 class FirebaseManager {
