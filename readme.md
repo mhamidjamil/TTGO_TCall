@@ -23,15 +23,21 @@ Full map: [`v8/docs/02-PIN-MAP.md`](v8/docs/02-PIN-MAP.md). Diagram: `archive/TT
 # 1. Toolchain + libraries
 arduino-cli core update-index
 arduino-cli core install esp32:esp32
-arduino-cli lib install ArduinoJson Firebase_Arduino_Client_Library_for_ESP8266_and_ESP32 DHT_sensor_library Adafruit_SSD1306
+arduino-cli lib install ArduinoJson
+arduino-cli lib install "Firebase Arduino Client Library for ESP8266 and ESP32"
+arduino-cli lib install "DHT sensor library"
+arduino-cli lib install "Adafruit SSD1306"
 
 # 2. Secrets — copy the template and fill in WiFi / Firebase / ntfy / ThingSpeak
 cp v8/sms_calls/secrets.example.h v8/sms_calls/secrets.h
 
 # 3. Compile + upload (use the port from `arduino-cli board list`)
-arduino-cli compile --fqbn esp32:esp32:esp32 v8/sms_calls
-arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 v8/sms_calls
+OPTIONS="PartitionScheme=huge_app,FlashMode=dio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,DebugLevel=none,EraseFlash=none"
+arduino-cli compile --fqbn esp32:esp32:esp32 --board-options "$OPTIONS" v8/sms_calls
+arduino-cli upload -p /dev/ttyACM0 --fqbn esp32:esp32:esp32 --board-options "$OPTIONS" v8/sms_calls
 ```
+
+The verified laptop setup is documented in `v8/docs/15-LAPTOP-SETUP.md`.
 
 The web UI assets in `v8/sms_calls/data/` are flashed **separately** as the SPIFFS image (see [`v8/README.md`](v8/README.md) for the `mkspiffs`/`esptool` commands). Then open `http://<device-ip>:<port>/dashboard.html`.
 

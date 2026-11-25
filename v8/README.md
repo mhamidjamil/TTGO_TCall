@@ -146,14 +146,20 @@ Confirm the upload worked by watching the boot log for the LittleFS version and
 - Incoming SMS uses the stored-message flow: receive index, read with `AT+CMGR=<index>`, upload to Firestore, then delete that index only after upload succeeds.
 
 ## Arduino CLI Setup
-Install Arduino CLI, add the ESP32 core, then compile or upload from this folder:
+Install Arduino CLI, add the ESP32 core, then compile or upload from this folder.
+For the exact setup verified on this laptop, see `docs/15-LAPTOP-SETUP.md`.
 
 ```sh
 arduino-cli core update-index
-arduino-cli core install esp32:esp32
-arduino-cli lib install ArduinoJson Firebase_Arduino_Client_Library_for_ESP8266_and_ESP32 DHT_sensor_library Adafruit_SSD1306
-arduino-cli compile --fqbn esp32:esp32:esp32 v8/sms_calls
-arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 v8/sms_calls
+arduino-cli core install esp32:esp32@3.3.8
+arduino-cli lib install ArduinoJson
+arduino-cli lib install "Firebase Arduino Client Library for ESP8266 and ESP32"
+arduino-cli lib install "DHT sensor library"
+arduino-cli lib install "Adafruit SSD1306"
+PORT=/dev/ttyACM0
+OPTIONS="PartitionScheme=huge_app,FlashMode=dio,FlashFreq=80,FlashSize=4M,UploadSpeed=921600,DebugLevel=none,EraseFlash=none"
+arduino-cli compile --fqbn esp32:esp32:esp32 --board-options "$OPTIONS" v8/sms_calls
+arduino-cli compile --fqbn esp32:esp32:esp32 --board-options "$OPTIONS" --upload --port "$PORT" v8/sms_calls
 ```
 
-Use the actual serial port shown by `arduino-cli board list`. Upload `v8/sms_calls/data` as the LittleFS data folder with your ESP32 filesystem upload tool so `/dashboard.html`, `/dashboard.css`, and `/dashboard.js` are available on the device.
+Use the actual serial port shown by `arduino-cli board list`. Upload `v8/sms_calls/data` as the LittleFS data folder with `mklittlefs` and `esptool` so `/dashboard.html`, `/dashboard.css`, and `/dashboard.js` are available on the device.

@@ -70,7 +70,10 @@ Each sketch folder (e.g. `v8/sms_calls/`) is compiled as an Arduino sketch. The 
 # One-time core + library setup
 arduino-cli core update-index
 arduino-cli core install esp32:esp32
-arduino-cli lib install ArduinoJson Firebase_Arduino_Client_Library_for_ESP8266_and_ESP32 DHT_sensor_library Adafruit_SSD1306
+arduino-cli lib install ArduinoJson
+arduino-cli lib install "Firebase Arduino Client Library for ESP8266 and ESP32"
+arduino-cli lib install "DHT sensor library"
+arduino-cli lib install "Adafruit SSD1306"
 
 # Compile / upload (run from repo root)
 arduino-cli compile --fqbn esp32:esp32:esp32 v8/sms_calls
@@ -81,7 +84,7 @@ The production TTGO T-Call at USB serial id `54F4012031` requires `FlashMode=dio
 Forcing QIO makes its bootloader read corrupt segment addresses and reset through
 the watchdog. Keep Huge APP, 4 MB, 80 MHz flash frequency, and DIO flash mode.
 
-**LittleFS web assets** (`v8/sms_calls/data/`) are flashed separately as the filesystem image so `/dashboard.html`, `/dashboard.css`, `/dashboard.js` are served by the device. Build with `mklittlefs`, flash with `esptool` (data partition at `0x290000` for this repo's 4 MB partition — see `v8/README.md` for the exact commands). If upload reports `Wrong boot mode detected (0x13)`, hold `BOOT` while tapping `EN/RESET`, then retry.
+**LittleFS web assets** (`v8/sms_calls/data/`) are flashed separately as the filesystem image so `/dashboard.html`, `/dashboard.css`, `/dashboard.js` are served by the device. Build with `mklittlefs`, flash with `esptool` (Huge APP data partition at `0x310000` on the verified board, but read the partition table every time; see `v8/docs/15-LAPTOP-SETUP.md`). If upload reports `Wrong boot mode detected (0x13)`, hold `BOOT` while tapping `EN/RESET`, then retry.
 
 There is **no automated test suite** — verification is on-device via the serial monitor (115200 baud) and the web dashboard.
 
