@@ -24,10 +24,11 @@ struct PackageParseResult {
 // when the operator changes wording. The validity-day count and SMS count are
 // extracted separately and robustly ("30day", "30 day", "30days" all work).
 //
-// Expiry = subscribe date + (validityDays - safetyMarginDays), stored in Firebase
-// as the single plain-text field `expiresAt` ("2026-09-28 01:44 PKT"). That one
-// field is both what the operator edits and what the device reads back, so there
-// is no second copy to fall out of step. Sending is allowed while the package is
+// Expiry = subscribe date + (validityDays - safetyMarginDays), with the time set
+// to 23:59 PKT on that date, stored in Firebase as the single plain-text field
+// `expiresAt` ("2026-09-28 23:59 PKT"). That one field is both what the operator
+// edits and what the device reads back, so there is no second copy to fall out
+// of step. Sending is allowed while the package is
 // valid OR while expiresAt is empty/unreadable (fail-open) so a missed
 // subscription SMS never bricks sending.
 class PackageManager {

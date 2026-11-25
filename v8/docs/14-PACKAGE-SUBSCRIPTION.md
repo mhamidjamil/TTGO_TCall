@@ -55,9 +55,13 @@ Package detected. validity=30d sms=10000 confidence=100% (3/3 tokens) daysLeft=2
 ## Expiry math
 
 ```
-expiresAt = subscribeTime + (validityDays − safetyMarginDays) × 1 day
+expiryDate = subscribeDate + (validityDays − safetyMarginDays) × 1 day
+expiresAt  = expiryDate at 23:59 PKT
 ```
 
+- The month and date come from the calculation above. The time of day in the
+  subscription SMS is discarded, so a final date of **25 Dec** is stored as
+  `2026-12-25 23:59 PKT` even when the subscription arrived at 1:02 PM.
 - **`safetyMarginDays`** (default **1**) accounts for operators expiring the bundle
   early / inclusive counting. So a 30-day pack subscribed on **1 Jul** expires
   **30 Jul** (`1 Jul + 29 days`), matching Jazz's "valid till 30 Jul 11:59pm".
@@ -102,7 +106,7 @@ display copy, so a hand edit can never land on the half the device ignores.
 
 ```json
 {
-  "expiresAt": "2026-09-28 01:44 PKT",
+  "expiresAt": "2026-09-28 23:59 PKT",
   "subscribedAt": "2026-08-30 01:44 PKT",
   "validityDays": 30,
   "smsAllowance": 10000,
@@ -116,7 +120,7 @@ display copy, so a hand edit can never land on the half the device ignores.
 
 | Field | Meaning | Editable? |
 |---|---|---|
-| `expiresAt` | **The blocking deadline**, Pakistan time. Sending stops once now is past it. **Empty = no package known → sending allowed** (fail-open) | **yes — this is the one field to edit** |
+| `expiresAt` | **The blocking deadline**, Pakistan time, normally 23:59 on the final day. Sending stops once now is past it. **Empty = no package known → sending allowed** (fail-open) | **yes — this is the one field to edit** |
 | `subscribedAt` | When the subscription SMS was detected, Pakistan time | informational |
 | `validityDays` | Days extracted from the subscription SMS (e.g. 30) | informational |
 | `smsAllowance` | SMS count extracted from the SMS (e.g. 10000) | informational |
@@ -143,7 +147,8 @@ Two ways:
    whole job — there is no second field to keep in step. To turn the gate off
    entirely, blank the field (or run `package clear`).
 2. **Serial command**: `package set <days>` — sets validity `<days>` from *now*
-   (margin subtracted). E.g. on 3 July, `package set 27` → expires 29 July.
+   (margin subtracted). E.g. on 3 July, `package set 27` → expires 29 July at
+   23:59 PKT.
 
 When the next subscription SMS arrives and the `matchTokens` match, the device
 **auto-renews**: recomputes `expiresAt` and pushes the fresh state.

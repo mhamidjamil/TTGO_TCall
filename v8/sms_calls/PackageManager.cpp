@@ -12,6 +12,17 @@ bool hasRealTime(unsigned long nowEpoch) {
   return nowEpoch > kRealTimeThreshold;
 }
 
+unsigned long endOfPktDay(unsigned long epochSeconds) {
+  time_t pkt = (time_t)epochSeconds + 5 * 60 * 60;
+  struct tm timeInfo;
+  if (!gmtime_r(&pkt, &timeInfo)) {
+    return 0;
+  }
+  long long epochDays = (long long)daysFromCivil(timeInfo.tm_year + 1900, timeInfo.tm_mon + 1, timeInfo.tm_mday);
+  long long endOfDayEpoch = epochDays * 86400LL + 23LL * 3600 + 59LL * 60 - 5LL * 3600;
+  return endOfDayEpoch > 0 ? (unsigned long)endOfDayEpoch : 0;
+}
+
 // Epoch → "YYYY-MM-DD HH:MM PKT" (or "unset" when 0/invalid) for status output.
 String pktDate(unsigned long epochSeconds) {
   if (epochSeconds < kRealTimeThreshold) {
@@ -190,9 +201,10 @@ void PackageManager::applySubscription(int validityDays, long smsAllowance, cons
   }
   // Only compute a real expiry epoch when the clock is trustworthy; otherwise
   // leave it 0 and rely on fail-open until a sync with valid time refreshes it.
-  state.expiryEpoch = hasRealTime(nowEpoch)
-                          ? nowEpoch + (unsigned long)effectiveDays * kSecondsPerDay
-                          : 0;
+  unsigned long expiryDay = hasRealTime(nowEpoch)
+                                ? nowEpoch + (unsigned long)effectiveDays * kSecondsPerDay
+                                : 0;
+  state.expiryEpoch = expiryDay == 0 ? 0 : endOfPktDay(expiryDay);
   // Keep lastMessage short so the RTDB node stays lean.
   state.lastMessage = text.length() > 160 ? text.substring(0, 160) : text;
   reminderSentForExpiry = 0;

@@ -4,6 +4,8 @@
 #include <Arduino.h>
 #include "ConfigManager.h"
 
+long daysFromCivil(int year, int month, int day);
+
 struct FirebaseCommand {
   String id;
   String type;

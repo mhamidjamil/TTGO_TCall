@@ -223,17 +223,6 @@ String formatPktTimestamp(unsigned long epochSeconds) {
   return String(buffer);
 }
 
-// Days since 1970-01-01 for a civil date. Done by hand because mktime() applies
-// the device's local timezone, which on the ESP32 is whatever NTP setup left it.
-long daysFromCivil(int year, int month, int day) {
-  year -= month <= 2;
-  int era = (year >= 0 ? year : year - 399) / 400;
-  unsigned yearOfEra = (unsigned)(year - era * 400);
-  unsigned dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
-  unsigned dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
-  return (long)era * 146097 + (long)dayOfEra - 719468;
-}
-
 // Parse "YYYY-MM-DD HH:MM" with an optional ":SS" and an optional trailing zone
 // word back to epoch seconds. Pakistan time (UTC+5) is assumed, matching what
 // formatPktTimestamp writes. Returns 0 for empty or unreadable text, which the
@@ -371,6 +360,17 @@ void parseFirestoreJob(const JsonObjectConst &document, FirestoreJob &outJob) {
   outJob.durationSeconds = firestoreIntField(fields, "duration_seconds", 0);
   outJob.processingStartedEpoch = firestoreEpochField(fields, "processing_started_epoch", 0);
 }
+}
+
+// Days since 1970-01-01 for a civil date. Done by hand because mktime() applies
+// the device's local timezone, which on the ESP32 is whatever NTP setup left it.
+long daysFromCivil(int year, int month, int day) {
+  year -= month <= 2;
+  int era = (year >= 0 ? year : year - 399) / 400;
+  unsigned yearOfEra = (unsigned)(year - era * 400);
+  unsigned dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+  unsigned dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+  return (long)era * 146097 + (long)dayOfEra - 719468;
 }
 
 bool FirebaseManager::begin(const V8Config &incomingConfig) {
