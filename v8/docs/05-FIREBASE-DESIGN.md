@@ -195,9 +195,11 @@ If runtime keys are missing or invalid, device firmware should create/heal them 
 See [Firestore Gateway Data Model](#firestore-gateway-data-model) above for the current `device` / `sms` / `calls` schema. Firestore paths must alternate collection/document, which is why jobs live under the `sms`/`calls` container docs (`sim_module/sms/sms_jobs/{number}`) rather than directly under `sim_module`.
 
 ## Device Auth Direction
-- Realtime Database access should use Firebase Authentication from the device.
-- Default device mode in v8 is anonymous auth for quick bootstrapping.
-- If anonymous auth is disabled or you need tighter control, switch to email/password in `secrets.h` and set `FIREBASE_USE_ANONYMOUS_DEFAULT` to `0`.
+- Realtime Database and Firestore access both use Firebase Authentication from the device.
+- The gateway signs in with its own email and password. `FIREBASE_USE_ANONYMOUS_DEFAULT` is `0` and must stay there.
+- **Never turn anonymous auth back on.** The firmware keeps no refresh token, so it authenticates again every time the hour-long token expires. With anonymous auth that call is `accounts:signUp`, which mints a brand-new account each time: one board running for a day left several hundred throwaway accounts in the project, and while it was failing to bootstrap it was retrying every 90 seconds. With a device account the same call is `signInWithPassword` and the uid never changes.
+- The three settings `firebaseUseAnonymous`, `firebaseUserEmail` and `firebaseUserPassword` come from `secrets.h` only. `ConfigManager` deliberately does not read them from, or write them to, the saved `/config.json`, because a board flashed before this change still has the old anonymous flag in that file and honouring it would undo the fix.
+- The device's uid is the only identity the Firestore and Realtime Database rules trust as the gateway. Replacing the device account means updating `deviceUids()` in `firestore.rules` and the uid in `database.rules.json` in the app repository, then redeploying both.
 - Service account JSON stays server-side only and must never move onto the ESP32.
 
 ## Firebase Console Checklist
@@ -205,31 +207,19 @@ See [Firestore Gateway Data Model](#firestore-gateway-data-model) above for the 
 2. Enable Realtime Database.
 3. Choose a region and create the database.
 4. Enable Authentication.
-5. Enable Anonymous sign-in if you want the current device default to work immediately.
-6. If you prefer email/password auth, create a dedicated device user and set it in `secrets.h`.
+5. Enable Email/Password sign-in. Leave Anonymous sign-in disabled.
+6. Create a dedicated device user, set it in `secrets.h`, and put its uid into the rules in the app repository.
 7. Add the RTDB rules you want for testing.
 8. Verify the device can read and write the `ttgo_tcall` subtree.
 
-## Recommended Test Rules
+## Rules
 
-### Realtime Database (development only)
-```json
-{
-	"rules": {
-		".read": "auth != null",
-		".write": "auth != null"
-	}
-}
-```
+Both rule files live in the app repository (`ttgo-sms-app`) and are deployed from there, because the phone application and the gateway share one database.
 
-### Firestore
-```text
-Allow authenticated device users to read/write the sim_module collection during development.
-Tighten this rule for production device accounts.
-```
+`auth != null` is not good enough for either of them. The Firebase API key is public, it is served by this device's own `/api/firebase-web-config` endpoint, and anyone holding it can create an account. The rules therefore name the gateway's uid explicitly: `deviceUids()` in `firestore.rules`, and the uid comparison in `database.rules.json`.
 
 ## What `auth failed code=400` Usually Means
-- Anonymous auth is disabled in Firebase Authentication.
+- Email/password sign-in is disabled in Firebase Authentication, or the device account was deleted.
 - The API key is restricted or invalid for this project.
 - The database URL does not match the active Firebase project.
 - Email/password auth was selected but the credentials are empty or incorrect.
@@ -242,7 +232,7 @@ Tighten this rule for production device accounts.
 ## Debug Checklist
 1. Confirm the ESP32 can reach the internet from the selected WiFi network.
 2. Confirm Firebase Authentication is enabled.
-3. Confirm anonymous sign-in is enabled, or provide device email/password.
+3. Confirm the device email/password in `secrets.h` still signs in, and that its uid is the one named in the rules.
 4. Confirm the RTDB URL is exactly the project database URL.
 5. Confirm the API key belongs to the same Firebase project.
 6. Confirm the device can write a simple test node under `/ttgo_tcall/test`.

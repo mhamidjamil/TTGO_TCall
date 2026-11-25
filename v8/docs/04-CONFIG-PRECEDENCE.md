@@ -11,7 +11,7 @@
 ## WiFi Credentials (v8.3.1)
 - Managed from the dashboard WiFi tab like any other runtime setting: the four fields `wifiSsid1`/`wifiPass1`/`wifiSsid2`/`wifiPass2` are written to RTDB `/ttgo_tcall/settings/runtime`. There is no device-side WiFi API.
 - On sync the device reads them and, when they differ from what is stored, persists them to LittleFS (`userWifiSsid1/2`, `userWifiPass1/2`). Empty cloud values are ignored so they never wipe locally stored networks.
-- Boot connect order: saved pair 1, then saved pair 2, then the `secrets.h` networks (`wifiSsid`/`wifiSsidBackup`), then AP fallback. The `secrets.h` networks are a pristine final fallback and are never overwritten.
+- Boot connect order: saved dynamic networks from `/wifi_nets.json`, then saved legacy pairs 1 and 2, then the `secrets.h` networks (`wifiSsid`/`wifiSsidBackup`), then AP fallback. The `secrets.h` networks are a pristine final fallback and are never overwritten.
 - Set the new network while the device is still online, then reboot (dashboard Reboot Device button or power-cycle) to connect. Serial prints which network it connected through.
 
 ## ThingSpeak Credentials

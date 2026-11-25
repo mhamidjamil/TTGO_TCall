@@ -2,6 +2,47 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+<!-- CLAUDE-KNOWLEDGE-BLOCK:START (managed by ~/.claude/knowledge - do not edit by hand) -->
+
+## Central knowledge (read this first)
+
+This project does not hold its own copy of the working rules or the lessons
+learned elsewhere. Those live in one place, shared by every project:
+
+**`~/.claude/knowledge/`** (private repository `hamidjamil0420/claude-knowledge`)
+
+Read before starting work here:
+
+1. `~/.claude/knowledge/rules/portable-working-rules.md` - how to work with
+   Hamid: communication, git and commits, code quality, testing, database.
+2. `~/.claude/knowledge/learnings/cross-project.md` - dated lessons from every
+   project, each with the reason it matters.
+3. `~/.claude/knowledge/playbooks/firmware-device.md` - what is already known about
+   building this kind of project.
+4. `~/.claude/knowledge/projects/index.md` - what this project shares with the
+   others, and therefore what a change here can break somewhere else.
+
+Before publishing or releasing anything, walk
+`~/.claude/knowledge/checklists/ship-readiness.md`. It is short, and skipping it
+is how a real credential reached a published application once already.
+
+**Write back the moment something is learned.** Do not leave it in this
+conversation and do not batch it for the end. Decide where by asking whether it
+would have helped a different project:
+
+- Useful to any project: `~/.claude/knowledge/learnings/cross-project.md` and
+  the Obsidian note `Claude - Learnings`.
+- Useful to projects of this kind: the playbook above.
+- Only true here: this file, below this block.
+
+Announce it with the up arrow emoji when recording and the down arrow emoji when
+applying, so the learning is visible and not just the result.
+
+If `~/.claude/knowledge/` is missing on this machine, clone it:
+`git clone https://github.com/hamidjamil0420/claude-knowledge.git ~/.claude/knowledge`
+
+<!-- CLAUDE-KNOWLEDGE-BLOCK:END -->
+
 ## What This Is
 
 Firmware for the **TTGO T-Call ESP32** (SIM800 GSM modem + DHT sensor + SSD1306 OLED) that runs as a two-way SMS/call gateway with a cloud control plane. **`v8/` is the one active, self-contained Arduino sketch.** All older versions and supporting material were moved to `archive/` (see `archive/README.md`).
@@ -29,14 +70,21 @@ Each sketch folder (e.g. `v8/sms_calls/`) is compiled as an Arduino sketch. The 
 # One-time core + library setup
 arduino-cli core update-index
 arduino-cli core install esp32:esp32
-arduino-cli lib install ArduinoJson Firebase_Arduino_Client_Library_for_ESP8266_and_ESP32 DHT_sensor_library Adafruit_SSD1306
+arduino-cli lib install ArduinoJson
+arduino-cli lib install "Firebase Arduino Client Library for ESP8266 and ESP32"
+arduino-cli lib install "DHT sensor library"
+arduino-cli lib install "Adafruit SSD1306"
 
 # Compile / upload (run from repo root)
 arduino-cli compile --fqbn esp32:esp32:esp32 v8/sms_calls
 arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 v8/sms_calls   # use the port from `arduino-cli board list`
 ```
 
-**LittleFS web assets** (`v8/sms_calls/data/`) are flashed separately as the filesystem image so `/dashboard.html`, `/dashboard.css`, `/dashboard.js` are served by the device. Build with `mklittlefs`, flash with `esptool` (data partition at `0x290000` for this repo's 4 MB partition — see `v8/README.md` for the exact commands). If upload reports `Wrong boot mode detected (0x13)`, hold `BOOT` while tapping `EN/RESET`, then retry.
+The production TTGO T-Call at USB serial id `54F4012031` requires `FlashMode=dio`.
+Forcing QIO makes its bootloader read corrupt segment addresses and reset through
+the watchdog. Keep Huge APP, 4 MB, 80 MHz flash frequency, and DIO flash mode.
+
+**LittleFS web assets** (`v8/sms_calls/data/`) are flashed separately as the filesystem image so `/dashboard.html`, `/dashboard.css`, `/dashboard.js` are served by the device. Build with `mklittlefs`, flash with `esptool` (Huge APP data partition at `0x310000` on the verified board, but read the partition table every time; see `v8/docs/15-LAPTOP-SETUP.md`). Before setting up the graphical Arduino IDE on a new laptop, read `v8/docs/15-LAPTOP-SETUP.md` and follow its launcher section. If upload reports `Wrong boot mode detected (0x13)`, hold `BOOT` while tapping `EN/RESET`, then retry.
 
 There is **no automated test suite** — verification is on-device via the serial monitor (115200 baud) and the web dashboard.
 

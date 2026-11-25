@@ -12,6 +12,17 @@ bool hasRealTime(unsigned long nowEpoch) {
   return nowEpoch > kRealTimeThreshold;
 }
 
+unsigned long endOfPktDay(unsigned long epochSeconds) {
+  time_t pkt = (time_t)epochSeconds + 5 * 60 * 60;
+  struct tm timeInfo;
+  if (!gmtime_r(&pkt, &timeInfo)) {
+    return 0;
+  }
+  long long epochDays = (long long)daysFromCivil(timeInfo.tm_year + 1900, timeInfo.tm_mon + 1, timeInfo.tm_mday);
+  long long endOfDayEpoch = epochDays * 86400LL + 23LL * 3600 + 59LL * 60 - 5LL * 3600;
+  return endOfDayEpoch > 0 ? (unsigned long)endOfDayEpoch : 0;
+}
+
 // Epoch → "YYYY-MM-DD HH:MM PKT" (or "unset" when 0/invalid) for status output.
 String pktDate(unsigned long epochSeconds) {
   if (epochSeconds < kRealTimeThreshold) {
@@ -58,8 +69,8 @@ void PackageManager::begin(FirebaseManager *fb, NtfyManager *ntfy) {
   if (firebaseManager != nullptr && firebaseManager->isReady()) {
     if (firebaseManager->fetchPackageState(state, PackageManager::kDefaultTokens, PackageManager::kDefaultSafetyMarginDays)) {
       loaded = true;
-      Serial.print("[PACKAGE] state loaded known=");
-      Serial.print(state.known ? "yes" : "no");
+      Serial.print("[PACKAGE] state loaded expiresAt=");
+      Serial.print(state.expiryEpoch == 0 ? String("(unknown)") : pktDate(state.expiryEpoch));
       Serial.print(" validityDays=");
       Serial.print(state.validityDays);
       Serial.print(" tokens=");
@@ -139,10 +150,11 @@ bool PackageManager::refreshFromCloud(unsigned long nowEpoch) {
     // A different expiry (manual RTDB edit or another writer) — re-arm the
     // reminder and confirm to the operator that the device picked it up.
     reminderSentForExpiry = 0;
-    String detail = state.known
-                        ? (String("expiry updated; daysLeft=") + String(daysRemaining(nowEpoch)) +
+    String detail = isKnown()
+                        ? (String("expiresAt now ") + pktDate(state.expiryEpoch) +
+                           "; daysLeft=" + String(daysRemaining(nowEpoch)) +
                            " allowed=" + (isSmsAllowed(nowEpoch) ? "yes" : "no"))
-                        : String("package state cleared (unknown; sending allowed)");
+                        : String("expiresAt cleared (unknown package; sending allowed)");
     Serial.print("[PACKAGE] ");
     Serial.println(detail);
     if (ntfyManager != nullptr) {
@@ -180,7 +192,6 @@ bool PackageManager::handleIncomingSms(const String &text, unsigned long nowEpoc
 }
 
 void PackageManager::applySubscription(int validityDays, long smsAllowance, const String &text, unsigned long nowEpoch) {
-  state.known = true;
   state.subscribedEpoch = nowEpoch;
   state.validityDays = validityDays;
   state.smsAllowance = smsAllowance;
@@ -190,9 +201,10 @@ void PackageManager::applySubscription(int validityDays, long smsAllowance, cons
   }
   // Only compute a real expiry epoch when the clock is trustworthy; otherwise
   // leave it 0 and rely on fail-open until a sync with valid time refreshes it.
-  state.expiryEpoch = hasRealTime(nowEpoch)
-                          ? nowEpoch + (unsigned long)effectiveDays * kSecondsPerDay
-                          : 0;
+  unsigned long expiryDay = hasRealTime(nowEpoch)
+                                ? nowEpoch + (unsigned long)effectiveDays * kSecondsPerDay
+                                : 0;
+  state.expiryEpoch = expiryDay == 0 ? 0 : endOfPktDay(expiryDay);
   // Keep lastMessage short so the RTDB node stays lean.
   state.lastMessage = text.length() > 160 ? text.substring(0, 160) : text;
   reminderSentForExpiry = 0;
@@ -206,15 +218,15 @@ void PackageManager::applySubscription(int validityDays, long smsAllowance, cons
 }
 
 bool PackageManager::isSmsAllowed(unsigned long nowEpoch) const {
-  // Fail-open: unknown package, or clock not yet trustworthy, or expiry unset.
-  if (!state.known || !hasRealTime(nowEpoch) || state.expiryEpoch == 0) {
+  // Fail-open: no expiry recorded, or the clock is not yet trustworthy.
+  if (state.expiryEpoch == 0 || !hasRealTime(nowEpoch)) {
     return true;
   }
   return nowEpoch <= state.expiryEpoch;
 }
 
 int PackageManager::daysRemaining(unsigned long nowEpoch) const {
-  if (!state.known || !hasRealTime(nowEpoch) || state.expiryEpoch == 0) {
+  if (state.expiryEpoch == 0 || !hasRealTime(nowEpoch)) {
     return -1;
   }
   if (nowEpoch >= state.expiryEpoch) {
@@ -224,7 +236,7 @@ int PackageManager::daysRemaining(unsigned long nowEpoch) const {
 }
 
 void PackageManager::loop(unsigned long nowEpoch) {
-  if (!state.known || !hasRealTime(nowEpoch) || state.expiryEpoch == 0) {
+  if (state.expiryEpoch == 0 || !hasRealTime(nowEpoch)) {
     return;
   }
   if (reminderSentForExpiry == state.expiryEpoch) {
@@ -254,9 +266,11 @@ bool PackageManager::setManual(int validityDays, unsigned long nowEpoch) {
 void PackageManager::clear() {
   String tokens = state.matchTokens;
   int margin = state.safetyMarginDays;
+  bool legacy = state.legacyFieldsPresent;
   state = PackageState();
   state.matchTokens = tokens;
   state.safetyMarginDays = margin;
+  state.legacyFieldsPresent = legacy;
   reminderSentForExpiry = 0;
   if (firebaseManager != nullptr && firebaseManager->isReady()) {
     firebaseManager->pushPackageState(state);
@@ -264,7 +278,7 @@ void PackageManager::clear() {
 }
 
 String PackageManager::statusLine(unsigned long nowEpoch) const {
-  if (!state.known) {
+  if (!isKnown()) {
     return String("package: UNKNOWN (sending allowed) tokens=") + state.matchTokens;
   }
   int left = daysRemaining(nowEpoch);

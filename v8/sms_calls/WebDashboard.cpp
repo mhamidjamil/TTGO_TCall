@@ -46,6 +46,16 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
 
   server->on("/api/firebase-web-config", [this]() {
     String authDomain = String(config->firebaseProjectId) + ".firebaseapp.com";
+    // The dashboard writes the same Firestore documents the firmware does, so it
+    // signs in as the same gateway account. The rules trust that one uid and
+    // reject anonymous sign-in, which used to be how this page got in. Handing
+    // the password out here is a local-network exposure; the anonymous route it
+    // replaces was open to anyone on the internet holding the (public) API key
+    // this endpoint already serves.
+    String authEmail = String(config->firebaseUserEmail);
+    String authPassword = String(config->firebaseUserPassword);
+    authEmail.replace("\"", "\\\"");
+    authPassword.replace("\"", "\\\"");
     String payload = String("{\"projectId\":\"") + config->firebaseProjectId +
                      String("\",\"apiKey\":\"") + config->firebaseApiKey +
                      String("\",\"authDomain\":\"") + authDomain +
@@ -53,7 +63,9 @@ bool WebDashboard::begin(const V8Config &incomingConfig, WiFiManager &incomingWi
                      String("\",\"deviceId\":\"") + config->deviceId +
                      String("\",\"defaultCountryCode\":\"") + config->defaultCountryCode +
                      String("\",\"useAnonymous\":") + (config->firebaseUseAnonymous ? "true" : "false") +
-                     String("}");
+                     String(",\"authEmail\":\"") + authEmail +
+                     String("\",\"authPassword\":\"") + authPassword +
+                     String("\"}");
     server->send(200, "application/json", payload);
   });
 

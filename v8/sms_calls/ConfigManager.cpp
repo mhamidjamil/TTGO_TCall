@@ -167,7 +167,10 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   config.wifiEnabled = doc["wifiEnabled"] | config.wifiEnabled;
   config.apFallbackEnabled = doc["apFallbackEnabled"] | config.apFallbackEnabled;
   config.logVerbose = doc["logVerbose"] | config.logVerbose;
-  config.firebaseUseAnonymous = doc["firebaseUseAnonymous"] | config.firebaseUseAnonymous;
+  // firebaseUseAnonymous, firebaseUserEmail and firebaseUserPassword are read
+  // from secrets.h only. A board flashed before the gateway got its own account
+  // still has "firebaseUseAnonymous": true saved here, and honouring that would
+  // put the device straight back to creating a new account every hour.
   strlcpy(config.wifiSsid, doc["wifiSsid"] | config.wifiSsid, sizeof(config.wifiSsid));
   strlcpy(config.wifiPass, doc["wifiPass"] | config.wifiPass, sizeof(config.wifiPass));
   strlcpy(config.wifiSsidBackup, doc["wifiSsidBackup"] | config.wifiSsidBackup, sizeof(config.wifiSsidBackup));
@@ -195,8 +198,6 @@ void ConfigManager::readJsonConfig(const String &jsonText) {
   strlcpy(config.firebaseProjectId, doc["firebaseProjectId"] | config.firebaseProjectId, sizeof(config.firebaseProjectId));
   strlcpy(config.firebaseDatabaseUrl, doc["firebaseDatabaseUrl"] | config.firebaseDatabaseUrl, sizeof(config.firebaseDatabaseUrl));
   strlcpy(config.firebaseApiKey, doc["firebaseApiKey"] | config.firebaseApiKey, sizeof(config.firebaseApiKey));
-  strlcpy(config.firebaseUserEmail, doc["firebaseUserEmail"] | config.firebaseUserEmail, sizeof(config.firebaseUserEmail));
-  strlcpy(config.firebaseUserPassword, doc["firebaseUserPassword"] | config.firebaseUserPassword, sizeof(config.firebaseUserPassword));
   strlcpy(config.firebaseCommandPath, doc["firebaseCommandPath"] | config.firebaseCommandPath, sizeof(config.firebaseCommandPath));
   strlcpy(config.firebaseHistoryPath, doc["firebaseHistoryPath"] | config.firebaseHistoryPath, sizeof(config.firebaseHistoryPath));
   strlcpy(config.firebaseCounterPath, doc["firebaseCounterPath"] | config.firebaseCounterPath, sizeof(config.firebaseCounterPath));
@@ -213,7 +214,6 @@ String ConfigManager::writeJsonConfig() const {
   doc["wifiEnabled"] = config.wifiEnabled;
   doc["apFallbackEnabled"] = config.apFallbackEnabled;
   doc["logVerbose"] = config.logVerbose;
-  doc["firebaseUseAnonymous"] = config.firebaseUseAnonymous;
   doc["wifiSsid"] = config.wifiSsid;
   doc["wifiPass"] = config.wifiPass;
   doc["wifiSsidBackup"] = config.wifiSsidBackup;
@@ -241,8 +241,6 @@ String ConfigManager::writeJsonConfig() const {
   doc["firebaseProjectId"] = config.firebaseProjectId;
   doc["firebaseDatabaseUrl"] = config.firebaseDatabaseUrl;
   doc["firebaseApiKey"] = config.firebaseApiKey;
-  doc["firebaseUserEmail"] = config.firebaseUserEmail;
-  doc["firebaseUserPassword"] = config.firebaseUserPassword;
   doc["firebaseCommandPath"] = config.firebaseCommandPath;
   doc["firebaseHistoryPath"] = config.firebaseHistoryPath;
   doc["firebaseCounterPath"] = config.firebaseCounterPath;

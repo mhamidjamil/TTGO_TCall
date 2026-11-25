@@ -9,3 +9,4 @@ server/.env
 *pycache*
 server/messages.csv
 server/ip-config.txt
+v8/sms_calls/build/
