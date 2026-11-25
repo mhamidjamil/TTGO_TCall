@@ -37,7 +37,7 @@ arduino-cli compile --fqbn esp32:esp32:esp32 --board-options "$OPTIONS" v8/sms_c
 arduino-cli upload -p /dev/ttyACM0 --fqbn esp32:esp32:esp32 --board-options "$OPTIONS" v8/sms_calls
 ```
 
-The verified laptop setup is documented in `v8/docs/15-LAPTOP-SETUP.md`.
+The verified laptop setup is documented in `v8/docs/15-LAPTOP-SETUP.md`. Read its launcher section before installing the graphical Arduino IDE.
 
 The web UI assets in `v8/sms_calls/data/` are flashed **separately** as the SPIFFS image (see [`v8/README.md`](v8/README.md) for the `mkspiffs`/`esptool` commands). Then open `http://<device-ip>:<port>/dashboard.html`.
 

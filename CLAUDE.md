@@ -84,7 +84,7 @@ The production TTGO T-Call at USB serial id `54F4012031` requires `FlashMode=dio
 Forcing QIO makes its bootloader read corrupt segment addresses and reset through
 the watchdog. Keep Huge APP, 4 MB, 80 MHz flash frequency, and DIO flash mode.
 
-**LittleFS web assets** (`v8/sms_calls/data/`) are flashed separately as the filesystem image so `/dashboard.html`, `/dashboard.css`, `/dashboard.js` are served by the device. Build with `mklittlefs`, flash with `esptool` (Huge APP data partition at `0x310000` on the verified board, but read the partition table every time; see `v8/docs/15-LAPTOP-SETUP.md`). If upload reports `Wrong boot mode detected (0x13)`, hold `BOOT` while tapping `EN/RESET`, then retry.
+**LittleFS web assets** (`v8/sms_calls/data/`) are flashed separately as the filesystem image so `/dashboard.html`, `/dashboard.css`, `/dashboard.js` are served by the device. Build with `mklittlefs`, flash with `esptool` (Huge APP data partition at `0x310000` on the verified board, but read the partition table every time; see `v8/docs/15-LAPTOP-SETUP.md`). Before setting up the graphical Arduino IDE on a new laptop, read `v8/docs/15-LAPTOP-SETUP.md` and follow its launcher section. If upload reports `Wrong boot mode detected (0x13)`, hold `BOOT` while tapping `EN/RESET`, then retry.
 
 There is **no automated test suite** — verification is on-device via the serial monitor (115200 baud) and the web dashboard.
 

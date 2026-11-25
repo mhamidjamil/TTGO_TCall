@@ -24,6 +24,47 @@ Real credentials belong only in the gitignored `v8/sms_calls/secrets.h`.
   - Adafruit BusIO 1.17.4
   - Adafruit Unified Sensor 1.1.15
 
+## Graphical Arduino IDE launcher
+
+Read this section before installing or finalizing the Arduino IDE on another
+laptop. The desktop search result must actually open the application. A working
+`arduino-cli` install does not prove that the graphical IDE works.
+
+On 2026-11-25 clicking the Arduino IDE desktop entry did nothing. Running the
+binary directly showed exit code 133 and this error:
+
+```text
+[FATAL:setuid_sandbox_host.cc(158)] The SUID sandbox helper binary was found, but is not configured correctly. Rather than run without sandboxing I'm aborting now. You need to make sure that /home/megatron/.local/share/arduino-ide_2.3.11_Linux_64bit/chrome-sandbox is owned by root and has mode 4755.
+```
+
+The extracted application lives under the home directory, so its
+`chrome-sandbox` helper is owned by the user with mode 755. Passwordless `sudo`
+is not available, so setting root ownership and mode 4755 is not an option here.
+Use `--no-sandbox` in both launch paths instead:
+
+```text
+/home/megatron/.local/share/applications/arduino-ide.desktop
+  Exec=/home/megatron/.local/share/arduino-ide_2.3.11_Linux_64bit/arduino-ide --no-sandbox %F
+
+/home/megatron/.local/bin/arduino-ide
+  #!/bin/sh
+  exec /home/megatron/.local/share/arduino-ide_2.3.11_Linux_64bit/arduino-ide --no-sandbox "$@"
+```
+
+The launcher file must be executable. The icon path in the desktop entry is
+valid.
+
+Verify the desktop entry, not only the terminal command:
+
+```sh
+gtk-launch arduino-ide.desktop
+pgrep -a -f '^/home/megatron/.local/share/arduino-ide_2.3.11_Linux_64bit/arduino-ide --no-sandbox$'
+```
+
+A single main process with that exact command line means the desktop search
+entry now starts the IDE. The backend and renderer processes it spawns are
+normal.
+
 The board appears as `/dev/ttyACM0`. The stable device path is:
 
 ```text
